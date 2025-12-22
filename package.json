@@ -1,0 +1,67 @@
+{
+  "name": "netra-sdk",
+  "version": "1.0.0",
+  "description": "A comprehensive TypeScript/JavaScript SDK for AI application observability built on top of OpenTelemetry and Traceloop",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "start:dev": "tsup --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "netra",
+    "tracing",
+    "observability",
+    "sdk",
+    "ai",
+    "llm",
+    "opentelemetry",
+    "traceloop",
+    "typescript",
+    "javascript"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.0.1",
+    "@opentelemetry/resources": "^2.0.1",
+    "@opentelemetry/sdk-trace-base": "^2.0.1",
+    "@traceloop/node-server-sdk": "^0.22.5"
+  },
+  "peerDependencies": {
+    "@opentelemetry/instrumentation-http": "^0.52.0",
+    "@opentelemetry/instrumentation-express": "^0.40.0",
+    "@prisma/instrumentation": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/instrumentation-http": {
+      "optional": true
+    },
+    "@opentelemetry/instrumentation-express": {
+      "optional": true
+    },
+    "@prisma/instrumentation": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "ts-node": "^10.9.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}
