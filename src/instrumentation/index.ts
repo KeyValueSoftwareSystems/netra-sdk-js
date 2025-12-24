@@ -4,6 +4,7 @@
 
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { NetraInstruments, Config } from "../config";
+import { openAIInstrumentor } from "./openai";
 
 export function initInstrumentations(
   config: Config,
@@ -13,9 +14,13 @@ export function initInstrumentations(
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
+  // Track whether to use custom OpenAI instrumentor
+  let useCustomOpenAI = false;
+
   if (!instruments || instruments.size === 0) {
     // Enable all by default
-    instrumentModules.openAI = true;
+    // Don't set openAI - we use our custom instrumentor instead
+    useCustomOpenAI = true;
     instrumentModules.google_vertexai = true;
     instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
@@ -26,7 +31,7 @@ export function initInstrumentations(
   } else {
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {
-      instrumentModules.openAI = true;
+      useCustomOpenAI = true;
     }
     if (instruments.has(NetraInstruments.GOOGLE_GENAI) || instruments.has(NetraInstruments.VERTEX_AI)) {
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
@@ -66,6 +71,20 @@ export function initInstrumentations(
   };
 
   initialize(traceloopOptions);
+
+  // Initialize custom OpenAI instrumentation
+  if (useCustomOpenAI && !blockInstruments?.has(NetraInstruments.OPENAI)) {
+    try {
+      openAIInstrumentor.instrument();
+      if (config.debugMode) {
+        console.debug("Custom OpenAI instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug("Failed to initialize custom OpenAI instrumentation:", e);
+      }
+    }
+  }
 
   // Initialize additional OpenTelemetry instrumentations
   initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
