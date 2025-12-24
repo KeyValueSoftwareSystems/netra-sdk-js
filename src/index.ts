@@ -15,7 +15,9 @@ import { initInstrumentations } from "./instrumentation";
 export { workflow, agent, task, span } from "./decorators";
 
 // Re-export types
-export { SpanType, ConversationType, UsageModel, ActionModel } from "./types";
+export { SpanType } from "./types";
+export type { UsageModel, ActionModel } from "./types";
+export { ConversationType } from "./session-manager";
 export { NetraInstruments } from "./config";
 
 let _initialized = false;

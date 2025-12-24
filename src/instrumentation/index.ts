@@ -5,6 +5,7 @@
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { NetraInstruments, Config } from "../config";
 import { openAIInstrumentor } from "./openai";
+import { typeORMInstrumentor } from "./typeorm";
 
 export function initInstrumentations(
   config: Config,
@@ -126,14 +127,26 @@ function initOpenTelemetryInstrumentations(
     }
   }
 
-  // TypeORM instrumentation
   if (
     !blockInstruments?.has(NetraInstruments.TYPEORM) &&
     (!instruments || instruments.has(NetraInstruments.TYPEORM))
   ) {
     try {
-      // TypeORM instrumentation would be handled via OpenTelemetry
+      typeORMInstrumentor.instrument().then(() => {
+        if (config.debugMode) {
+          console.debug("TypeORM instrumentation successfully initialized");
+        }
+      }).catch((e) => {
+        console.error("TypeORM instrumentation error:", e);
+        if (config.debugMode) {
+          console.debug("TypeORM instrumentation error details:", e);
+        }
+      });
+      if (config.debugMode) {
+        console.debug("TypeORM instrumentation initialization started");
+      }
     } catch (e) {
+      console.error("TypeORM instrumentation failed to start:", e);
       if (config.debugMode) {
         console.debug("TypeORM instrumentation not available:", e);
       }
