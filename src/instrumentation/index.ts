@@ -18,8 +18,7 @@ export function initInstrumentations(
   // Track whether to use custom OpenAI instrumentor
   let useCustomOpenAI = false;
 
-  if (!instruments || instruments.size === 0) {
-    // Enable all by default
+  if (instruments === undefined || instruments === null) {
     // Don't set openAI - we use our custom instrumentor instead
     useCustomOpenAI = true;
     instrumentModules.google_vertexai = true;
@@ -29,7 +28,7 @@ export function initInstrumentations(
     instrumentModules.qdrant = true;
     instrumentModules.chromadb = true;
     instrumentModules.together = true;
-  } else {
+  } else if (instruments.size) {
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {
       useCustomOpenAI = true;
