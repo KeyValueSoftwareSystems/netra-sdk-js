@@ -10,6 +10,7 @@ import { SessionManager, ConversationType } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType, UsageModel, ActionModel } from "./types";
 import { initInstrumentations } from "./instrumentation";
+import { typeORMInstrumentor } from "./instrumentation/typeorm";
 
 // Re-export decorators
 export { workflow, agent, task, span } from "./decorators";
@@ -100,10 +101,15 @@ export class Netra {
       try {
         _rootSpan.end();
       } catch (e) {
-        // Ignore
       } finally {
         _rootSpan = undefined;
       }
+    }
+    try {
+      if (typeORMInstrumentor.isInstrumented()) {
+        typeORMInstrumentor.uninstrument();
+      }
+    } catch (e) {
     }
 
     // Try to flush and shutdown the tracer provider
