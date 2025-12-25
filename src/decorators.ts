@@ -104,7 +104,7 @@ function createFunctionWrapper<T extends AnyFunction>(
   const isAsync = func.constructor.name === "AsyncFunction";
 
   if (isAsync) {
-    return (async (...args: any[]) => {
+    return (async function (this: any, ...args: any[]) {
       SessionManager.pushEntity(entityType, spanName);
 
       const tracer = trace.getTracer(moduleName);
@@ -118,7 +118,8 @@ function createFunctionWrapper<T extends AnyFunction>(
         const kwargs: Record<string, any> = {};
         addSpanAttributes(span, func, args, kwargs, entityType);
 
-        const result = await (func as AsyncFunction)(...args);
+        const result = await (func as AsyncFunction).call(this, ...args);
+        console.log("result-----------", result);
         addOutputAttributes(span, result);
         span.end();
         SessionManager.unregisterSpan(spanName, span);
@@ -137,7 +138,7 @@ function createFunctionWrapper<T extends AnyFunction>(
       }
     }) as T;
   } else {
-    return ((...args: any[]) => {
+    return (function (this: any, ...args: any[]) {
       SessionManager.pushEntity(entityType, spanName);
 
       const tracer = trace.getTracer(moduleName);
@@ -151,7 +152,7 @@ function createFunctionWrapper<T extends AnyFunction>(
         const kwargs: Record<string, any> = {};
         addSpanAttributes(span, func, args, kwargs, entityType);
 
-        const result = (func as AnyFunction)(...args);
+        const result = (func as AnyFunction).call(this, ...args);
         addOutputAttributes(span, result);
         span.end();
         SessionManager.unregisterSpan(spanName, span);
