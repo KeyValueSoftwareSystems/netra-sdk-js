@@ -3,8 +3,10 @@
  */
 
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
+import { trace } from "@opentelemetry/api";
 import { NetraInstruments, Config } from "../config";
 import { openAIInstrumentor } from "./openai";
+import { groqInstrumentor } from "./groq";
 import { typeORMInstrumentor } from "./typeorm";
 
 export function initInstrumentations(
@@ -15,12 +17,14 @@ export function initInstrumentations(
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
-  // Track whether to use custom OpenAI instrumentor
+  // Track whether to use custom instrumentors
   let useCustomOpenAI = false;
+  let useCustomGroq = false;
 
   if (instruments === undefined || instruments === null) {
     // Don't set openAI - we use our custom instrumentor instead
     useCustomOpenAI = true;
+    useCustomGroq = true;
     instrumentModules.google_vertexai = true;
     instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
@@ -32,6 +36,9 @@ export function initInstrumentations(
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {
       useCustomOpenAI = true;
+    }
+    if (instruments.has(NetraInstruments.GROQ)) {
+      useCustomGroq = true;
     }
     if (instruments.has(NetraInstruments.GOOGLE_GENAI) || instruments.has(NetraInstruments.VERTEX_AI)) {
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
@@ -72,16 +79,31 @@ export function initInstrumentations(
 
   initialize(traceloopOptions);
 
+  const tracerProvider = trace.getTracerProvider();
+
   // Initialize custom OpenAI instrumentation
   if (useCustomOpenAI && !blockInstruments?.has(NetraInstruments.OPENAI)) {
     try {
-      openAIInstrumentor.instrument();
+      openAIInstrumentor.instrument({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom OpenAI instrumentation enabled");
       }
     } catch (e) {
       if (config.debugMode) {
         console.debug("Failed to initialize custom OpenAI instrumentation:", e);
+      }
+    }
+  }
+
+  if (useCustomGroq && !blockInstruments?.has(NetraInstruments.GROQ)) {
+    try {
+      groqInstrumentor.instrument({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom Groq instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug("Failed to initialize custom Groq instrumentation:", e);
       }
     }
   }
