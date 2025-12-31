@@ -2,13 +2,20 @@
  * Custom OpenAI instrumentor for Netra SDK
  */
 
+import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { __version__ } from "./version";
 import {
   chatWrapper,
+  achatWrapper,
   embeddingsWrapper,
+  aembeddingsWrapper,
   responsesWrapper,
+  aresponsesWrapper,
 } from "./wrappers";
+
+// Create require function for ESM compatibility
+const require = createRequire(import.meta.url);
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.openai";
 const INSTRUMENTS = ["openai >= 1.0.0"];
@@ -112,9 +119,6 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const openai = require("openai");
-
       try {
         const chatModule = require("openai/resources/chat/completions");
         const CompletionsClass = chatModule.Completions;
@@ -124,7 +128,9 @@ export class NetraOpenAIInstrumentor {
           originalMethods.set("chat.completions.create", originalCreate);
 
           const tracer = this.tracer;
-          const wrapper = chatWrapper(tracer);
+          // Create both sync and async wrappers for flexibility
+          const syncWrapper = chatWrapper(tracer);
+          const asyncWrapper = achatWrapper(tracer);
 
           CompletionsClass.prototype.create = function (
             this: unknown,
@@ -132,8 +138,19 @@ export class NetraOpenAIInstrumentor {
           ): unknown {
             const original = originalCreate.bind(this);
             const kwargs = (args[0] || {}) as Record<string, unknown>;
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return wrapper(wrappedFunction, this, args, kwargs);
+            
+            // Check if the original function is an async function
+            const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
+            
+            if (isAsyncFunction) {
+              // Use async wrapper for async functions
+              const wrappedFunction = async (...a: unknown[]) => original(...a);
+              return asyncWrapper(wrappedFunction, this, args, kwargs);
+            } else {
+              // Use sync wrapper for sync functions
+              const wrappedFunction = (...a: unknown[]) => original(...a);
+              return syncWrapper(wrappedFunction, this, args, kwargs);
+            }
           };
         }
       } catch {
@@ -148,17 +165,18 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      let EmbeddingsClass: any;
-
       try {
         const embeddingsModule = require("openai/resources/embeddings");
-        EmbeddingsClass = embeddingsModule.Embeddings;
+        const EmbeddingsClass = embeddingsModule.Embeddings;
+        
         if (EmbeddingsClass?.prototype?.create) {
           const originalCreate = EmbeddingsClass.prototype.create;
           originalMethods.set("embeddings.create", originalCreate);
 
           const tracer = this.tracer;
-          const wrapper = embeddingsWrapper(tracer);
+          // Create both sync and async wrappers for flexibility
+          const syncWrapper = embeddingsWrapper(tracer);
+          const asyncWrapper = aembeddingsWrapper(tracer);
 
           EmbeddingsClass.prototype.create = function (
             this: unknown,
@@ -166,8 +184,19 @@ export class NetraOpenAIInstrumentor {
           ): unknown {
             const original = originalCreate.bind(this);
             const kwargs = (args[0] || {}) as Record<string, unknown>;
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return wrapper(wrappedFunction, this, args, kwargs);
+            
+            // Check if the original function is an async function
+            const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
+            
+            if (isAsyncFunction) {
+              // Use async wrapper for async functions
+              const wrappedFunction = async (...a: unknown[]) => original(...a);
+              return asyncWrapper(wrappedFunction, this, args, kwargs);
+            } else {
+              // Use sync wrapper for sync functions
+              const wrappedFunction = (...a: unknown[]) => original(...a);
+              return syncWrapper(wrappedFunction, this, args, kwargs);
+            }
           };
         }
       } catch (error) {
@@ -182,21 +211,37 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-        const responsesModule = require("openai/resources/responses");
-        const ResponsesClass = responsesModule.Responses;
+      const responsesModule = require("openai/resources/responses");
+      const ResponsesClass = responsesModule.Responses;
 
-        if (ResponsesClass?.prototype?.create) {
-          const originalCreate = ResponsesClass.prototype.create;
-          originalMethods.set("responses.create", originalCreate);
+      if (ResponsesClass?.prototype?.create) {
+        const originalCreate = ResponsesClass.prototype.create;
+        originalMethods.set("responses.create", originalCreate);
 
-          const tracer = this.tracer;
-          const wrapper = responsesWrapper(tracer);
+        const tracer = this.tracer;
+        // Create both sync and async wrappers for flexibility
+        const syncWrapper = responsesWrapper(tracer);
+        const asyncWrapper = aresponsesWrapper(tracer);
 
-        ResponsesClass.prototype.create = function (this: unknown, ...args: unknown[]): unknown {
+        ResponsesClass.prototype.create = function (
+          this: unknown,
+          ...args: unknown[]
+        ): unknown {
           const original = originalCreate.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-          const wrappedFunction = (...a: unknown[]) => original(...a);
-          return wrapper(wrappedFunction, this, args, kwargs);
+          
+          // Check if the original function is an async function
+          const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
+          
+          if (isAsyncFunction) {
+            // Use async wrapper for async functions
+            const wrappedFunction = async (...a: unknown[]) => original(...a);
+            return asyncWrapper(wrappedFunction, this, args, kwargs);
+          } else {
+            // Use sync wrapper for sync functions
+            const wrappedFunction = (...a: unknown[]) => original(...a);
+            return syncWrapper(wrappedFunction, this, args, kwargs);
+          }
         };
       }
     } catch (error) {
@@ -253,9 +298,13 @@ export const openAIInstrumentor = new NetraOpenAIInstrumentor();
 // Re-export wrappers for advanced usage
 export {
   chatWrapper,
+  achatWrapper,
   embeddingsWrapper,
+  aembeddingsWrapper,
   responsesWrapper,
+  aresponsesWrapper,
   StreamingWrapper,
+  AsyncStreamingWrapper,
 } from "./wrappers";
 
 // Re-export utilities
