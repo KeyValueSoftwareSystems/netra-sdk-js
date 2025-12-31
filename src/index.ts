@@ -9,7 +9,7 @@ import { Config, NetraConfig, NetraInstruments } from "./config";
 import { SessionManager, ConversationType } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
-import { initInstrumentations } from "./instrumentation";
+import { initInstrumentations, uninstrumentAll } from "./instrumentation";
 
 // Re-export decorators
 export { workflow, agent, task, span } from "./decorators";
@@ -91,9 +91,16 @@ export class Netra {
   }
 
   /**
-   * Optional cleanup to end the root span
+   * Optional cleanup to end the root span and uninstrument all
    */
   static shutdown(): void {
+    // Uninstrument all active instrumentations
+    try {
+      uninstrumentAll();
+    } catch (e) {
+      // Ignore
+    }
+
     if (_rootSpan) {
       try {
         _rootSpan.end();
@@ -116,6 +123,8 @@ export class Netra {
     } catch (e) {
       // Ignore
     }
+
+    this._initialized = false;
   }
 
   /**
