@@ -8,14 +8,14 @@ import { trace, SpanKind, Span } from "@opentelemetry/api";
 import { Config, NetraConfig, NetraInstruments } from "./config";
 import { SessionManager, ConversationType } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
-import { SpanType, UsageModel, ActionModel } from "./types";
+import { SpanType } from "./types";
 import { initInstrumentations } from "./instrumentation";
 
 // Re-export decorators
 export { workflow, agent, task, span } from "./decorators";
 
 // Re-export types
-export { SpanType, ConversationType, UsageModel, ActionModel } from "./types";
+export { SpanType, ConversationType } from "./types";
 export { NetraInstruments } from "./config";
 
 let _initialized = false;
