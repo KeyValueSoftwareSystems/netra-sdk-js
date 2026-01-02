@@ -169,10 +169,7 @@ export function setRequestAttributes(
   // Frequency penalty (handle both snake_case and camelCase)
   const frequencyPenalty = kwargs.frequency_penalty ?? kwargs.frequencyPenalty;
   if (frequencyPenalty !== undefined) {
-    span.setAttribute(
-      "llm.request.frequency_penalty",
-      Number(frequencyPenalty)
-    );
+    span.setAttribute("llm.request.frequency_penalty", Number(frequencyPenalty));
   }
 
   // Presence penalty (handle both snake_case and camelCase)
@@ -279,14 +276,8 @@ export function setResponseAttributes(
     // Completion tokens (snake_case or camelCase)
     const completionTokens = usage.completion_tokens ?? usage.completionTokens;
     if (completionTokens !== undefined) {
-      span.setAttribute(
-        "gen_ai.usage.completion_tokens",
-        Number(completionTokens)
-      );
-      span.setAttribute(
-        "llm.usage.completion_tokens",
-        Number(completionTokens)
-      );
+      span.setAttribute("gen_ai.usage.completion_tokens", Number(completionTokens));
+      span.setAttribute("llm.usage.completion_tokens", Number(completionTokens));
     }
 
     // Total tokens (snake_case or camelCase)
@@ -298,25 +289,17 @@ export function setResponseAttributes(
 
     // Input/output tokens (for responses API)
     if (usage.input_tokens !== undefined) {
-      span.setAttribute(
-        "gen_ai.usage.input_tokens",
-        Number(usage.input_tokens)
-      );
+      span.setAttribute("gen_ai.usage.input_tokens", Number(usage.input_tokens));
       span.setAttribute("llm.usage.input_tokens", Number(usage.input_tokens));
     }
     if (usage.output_tokens !== undefined) {
-      span.setAttribute(
-        "gen_ai.usage.output_tokens",
-        Number(usage.output_tokens)
-      );
+      span.setAttribute("gen_ai.usage.output_tokens", Number(usage.output_tokens));
       span.setAttribute("llm.usage.output_tokens", Number(usage.output_tokens));
     }
   }
 
   // Handle choices - support both snake_case and camelCase finish reason
-  const choices = response.choices as
-    | Array<Record<string, unknown>>
-    | undefined;
+  const choices = response.choices as Array<Record<string, unknown>> | undefined;
   if (choices && choices.length > 0) {
     const firstChoice = choices[0];
     const finishReason = firstChoice.finish_reason ?? firstChoice.finishReason;
@@ -346,10 +329,7 @@ export function setResponseAttributes(
       const firstItem = data[0] as Record<string, unknown>;
       const embedding = firstItem.embedding as number[] | undefined;
       if (embedding && Array.isArray(embedding)) {
-        span.setAttribute(
-          "llm.response.embedding_dimensions",
-          embedding.length
-        );
+        span.setAttribute("llm.response.embedding_dimensions", embedding.length);
       }
     }
   }
