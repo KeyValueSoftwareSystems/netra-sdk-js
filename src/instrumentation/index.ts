@@ -4,6 +4,11 @@
 
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { NetraInstruments, Config } from "../config";
+import { mistralAIInstrumentor } from "./mistralai";
+
+// Track which instrumentations are active for cleanup
+let openAIInstrumentationActive = false;
+let mistralAIInstrumentationActive = false;
 
 export function initInstrumentations(
   config: Config,
@@ -13,9 +18,15 @@ export function initInstrumentations(
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
+
+  let useCustomOpenAI = false;
+  let useCustomMistralAI = false;
+
   if (!instruments || instruments.size === 0) {
     // Enable all by default
-    instrumentModules.openAI = true;
+    // Don't set openAI - we use our custom instrumentor instead
+    useCustomOpenAI = true;
+    useCustomMistralAI = true;
     instrumentModules.google_vertexai = true;
     instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
@@ -26,7 +37,10 @@ export function initInstrumentations(
   } else {
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {
-      instrumentModules.openAI = true;
+      useCustomOpenAI = true;
+    }
+    if (instruments.has(NetraInstruments.MISTRAL)) {
+      useCustomMistralAI = true;
     }
     if (instruments.has(NetraInstruments.GOOGLE_GENAI) || instruments.has(NetraInstruments.VERTEX_AI)) {
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
@@ -66,6 +80,21 @@ export function initInstrumentations(
   };
 
   initialize(traceloopOptions);
+
+  // Initialize custom MistralAI instrumentation
+  if (useCustomMistralAI && !blockInstruments?.has(NetraInstruments.MISTRAL)) {
+    try {
+      mistralAIInstrumentor.instrument();
+      mistralAIInstrumentationActive = true;
+      if (config.debugMode) {
+        console.debug("Custom MistralAI instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug("Failed to initialize custom MistralAI instrumentation:", e);
+      }
+    }
+  }
 
   // Initialize additional OpenTelemetry instrumentations
   initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
@@ -137,3 +166,19 @@ function initOpenTelemetryInstrumentations(
   }
 }
 
+/**
+ * Uninstrument all active instrumentations
+ * Should be called during shutdown
+ */
+export function uninstrumentAll(): void {
+  // Uninstrument MistralAI if it was active
+  if (mistralAIInstrumentationActive) {
+    try {
+      mistralAIInstrumentor.uninstrument();
+      mistralAIInstrumentationActive = false;
+      console.debug("Custom MistralAI instrumentation disabled");
+    } catch (e) {
+      console.debug("Failed to uninstrument MistralAI:", e);
+    }
+  }
+}
