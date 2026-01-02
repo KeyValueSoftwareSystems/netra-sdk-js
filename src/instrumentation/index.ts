@@ -7,6 +7,7 @@ import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { createRequire } from "module";
 import { Config, NetraInstruments } from "../config";
 import { groqInstrumentor } from "./groq";
+import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
 
@@ -23,11 +24,13 @@ export function initInstrumentations(
   // Track whether to use custom instrumentors
   let useCustomOpenAI = false;
   let useCustomGroq = false;
+  let useCustomMistralAI = false;
 
   if (instruments === undefined || instruments === null) {
     // Don't set openAI - we use our custom instrumentor instead
     useCustomOpenAI = true;
     useCustomGroq = true;
+    useCustomMistralAI = true;
     instrumentModules.google_vertexai = true;
     instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
@@ -39,6 +42,9 @@ export function initInstrumentations(
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {
       useCustomOpenAI = true;
+    }
+    if (instruments.has(NetraInstruments.MISTRAL)) {
+      useCustomMistralAI = true;
     }
     if (instruments.has(NetraInstruments.GROQ)) {
       useCustomGroq = true;
@@ -87,6 +93,23 @@ export function initInstrumentations(
   };
 
   initialize(traceloopOptions);
+
+  // Initialize custom MistralAI instrumentation
+  if (useCustomMistralAI && !blockInstruments?.has(NetraInstruments.MISTRAL)) {
+    try {
+      mistralAIInstrumentor.instrument();
+      if (config.debugMode) {
+        console.debug("Custom MistralAI instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug(
+          "Failed to initialize custom MistralAI instrumentation:",
+          e
+        );
+      }
+    }
+  }
 
   const tracerProvider = trace.getTracerProvider();
 
@@ -219,6 +242,16 @@ export function uninstrumentAll(): void {
     }
   } catch (e) {
     console.debug("Failed to uninstrument OpenAI:", e);
+  }
+
+  // Uninstrument custom MistralAI instrumentation
+  try {
+    if (mistralAIInstrumentor.isInstrumented()) {
+      mistralAIInstrumentor.uninstrument();
+      console.debug("Custom MistralAI instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument MistralAI:", e);
   }
 
   // Uninstrument custom Groq instrumentation
