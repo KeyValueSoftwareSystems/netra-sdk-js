@@ -11,6 +11,14 @@ import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
 
+// Re-export shared utilities for use across instrumentations
+export {
+  modelAsDict,
+  setRequestAttributes,
+  setResponseAttributes,
+  shouldSuppressInstrumentation,
+} from "./utils";
+
 const require = createRequire(import.meta.url);
 
 export function initInstrumentations(
