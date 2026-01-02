@@ -1,32 +1,30 @@
 /**
- * MistralAI-specific utility functions for instrumentation
- * Extends the shared utilities with MistralAI-specific logic
+ * MistralAI-specific utility functions for instrumentation.
+ *
+ * This file extends the shared instrumentation utilities with Mistral-only
+ * fields while keeping attribute naming consistent across providers.
  */
 
 import { Span } from "@opentelemetry/api";
 import {
-  shouldSuppressInstrumentation,
   modelAsDict,
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
+  shouldSuppressInstrumentation,
 } from "../utils";
 
 // Re-export common utilities for convenience
-export { shouldSuppressInstrumentation, modelAsDict };
+export { modelAsDict, shouldSuppressInstrumentation };
 
-/**
- * Set request attributes on span for MistralAI
- * Includes MistralAI-specific attributes
- */
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
   requestType: string
 ): void {
-  // Set common attributes first
+  // Set shared/common attributes first
   setBaseRequestAttributes(span, kwargs, requestType, "mistralai");
 
-  // MistralAI-specific: Agent ID
+  // MistralAI-specific: Agent ID (agents API)
   if (kwargs.agentId) {
     span.setAttribute("gen_ai.agent.id", String(kwargs.agentId));
     span.setAttribute("llm.agent.id", String(kwargs.agentId));
@@ -42,23 +40,15 @@ export function setRequestAttributes(
     span.setAttribute("gen_ai.mistral.random_seed", Number(kwargs.randomSeed));
   }
 
-  // MistralAI FIM-specific: prompt and suffix
-  if (kwargs.prompt !== undefined) {
-    span.setAttribute("llm.request.has_prompt", true);
-  }
-  if (kwargs.suffix !== undefined && kwargs.suffix !== null) {
-    span.setAttribute("llm.request.has_suffix", true);
-  }
 }
 
 /**
  * Set response attributes on span for MistralAI
- * Uses common response attributes
+ * Uses the shared response attributes (supports snake_case + camelCase).
  */
 export function setResponseAttributes(
   span: Span,
   response: Record<string, unknown>
 ): void {
-  // Use common response attributes - handles both snake_case and camelCase
   setBaseResponseAttributes(span, response);
 }

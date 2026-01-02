@@ -2,12 +2,7 @@
  * Wrapper functions for MistralAI instrumentation
  */
 
-import {
-  Tracer,
-  Span,
-  SpanKind,
-  SpanStatusCode,
-} from "@opentelemetry/api";
+import { Span, SpanKind, SpanStatusCode, Tracer } from "@opentelemetry/api";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -52,7 +47,10 @@ export function chatWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -96,7 +94,10 @@ export function achatWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -205,7 +206,10 @@ export function embeddingsWrapper(tracer: Tracer) {
 
     return tracer.startActiveSpan(
       EMBEDDING_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "embedding" } },
+      {
+        kind: SpanKind.CLIENT,
+        attributes: { "llm.request.type": "embedding" },
+      },
       (span: Span) => {
         try {
           setRequestAttributes(span, kwargs, "embedding");
@@ -214,7 +218,10 @@ export function embeddingsWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -249,7 +256,10 @@ export function aembeddingsWrapper(tracer: Tracer) {
 
     return tracer.startActiveSpan(
       EMBEDDING_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "embedding" } },
+      {
+        kind: SpanKind.CLIENT,
+        attributes: { "llm.request.type": "embedding" },
+      },
       async (span: Span) => {
         try {
           setRequestAttributes(span, kwargs, "embedding");
@@ -258,7 +268,10 @@ export function aembeddingsWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -302,7 +315,10 @@ export function fimWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -346,7 +362,10 @@ export function afimWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -464,7 +483,10 @@ export function agentsWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -508,7 +530,10 @@ export function aagentsWrapper(tracer: Tracer) {
           const endTime = Date.now();
           const responseDict = modelAsDict(response);
           setResponseAttributes(span, responseDict);
-          span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+          span.setAttribute(
+            "llm.response.duration",
+            (endTime - startTime) / 1000
+          );
           span.setStatus({ code: SpanStatusCode.OK });
           return response;
         } catch (error) {
@@ -604,7 +629,9 @@ export function aagentsStreamWrapper(tracer: Tracer) {
 /**
  * Wrapper for streaming responses (handles AsyncIterable from MistralAI SDK)
  */
-export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<unknown> {
+export class StreamingWrapper
+  implements AsyncIterable<unknown>, AsyncIterator<unknown>
+{
   private span: Span;
   private response: unknown;
   private resolvedResponse: AsyncIterable<unknown> | null = null;
@@ -635,7 +662,9 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
   }
 
   private ensureChoice(index: number): void {
-    const choices = this.completeResponse.choices as Array<Record<string, unknown>>;
+    const choices = this.completeResponse.choices as Array<
+      Record<string, unknown>
+    >;
     while (choices.length <= index) {
       if (this.isChat()) {
         choices.push({ message: { role: "assistant", content: "" } });
@@ -663,21 +692,26 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
       if (!this.iterator) {
         // If response is a Promise, await it first to get the actual stream
         if (this.isPromise(this.response)) {
-          this.resolvedResponse = await this.response as AsyncIterable<unknown>;
+          this.resolvedResponse = (await this
+            .response) as AsyncIterable<unknown>;
         } else {
           this.resolvedResponse = this.response as AsyncIterable<unknown>;
         }
 
         // Now check if the resolved response is iterable
         if (Symbol.asyncIterator in this.resolvedResponse) {
-          this.iterator = (this.resolvedResponse as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+          this.iterator = (this.resolvedResponse as AsyncIterable<unknown>)[
+            Symbol.asyncIterator
+          ]();
         } else if (Symbol.iterator in (this.resolvedResponse as any)) {
           // Handle sync iterables wrapped as async
-          const syncIterator = (this.resolvedResponse as Iterable<unknown>)[Symbol.iterator]();
+          const syncIterator = (this.resolvedResponse as Iterable<unknown>)[
+            Symbol.iterator
+          ]();
           this.iterator = {
             async next() {
               return syncIterator.next();
-            }
+            },
           };
         } else {
           throw new Error("Response is not iterable");
@@ -699,7 +733,9 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
 
   private processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
-    const choices = this.completeResponse.choices as Array<Record<string, unknown>>;
+    const choices = this.completeResponse.choices as Array<
+      Record<string, unknown>
+    >;
 
     if (chunkDict.model) {
       this.completeResponse.model = chunkDict.model;
@@ -711,8 +747,10 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
       if (data.model) {
         this.completeResponse.model = data.model;
       }
-      
-      const dataChoices = (data.choices || []) as Array<Record<string, unknown>>;
+
+      const dataChoices = (data.choices || []) as Array<
+        Record<string, unknown>
+      >;
       if (Array.isArray(dataChoices)) {
         for (const choice of dataChoices) {
           const index = Number(choice.index || 0);
@@ -745,7 +783,9 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
     }
 
     // Also handle direct choices (for backwards compatibility)
-    const chunkChoices = (chunkDict.choices || []) as Array<Record<string, unknown>>;
+    const chunkChoices = (chunkDict.choices || []) as Array<
+      Record<string, unknown>
+    >;
     if (Array.isArray(chunkChoices) && chunkChoices.length > 0) {
       for (const choice of chunkChoices) {
         const index = Number(choice.index || 0);
@@ -804,7 +844,9 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
 /**
  * Async wrapper for streaming responses
  */
-export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<unknown> {
+export class AsyncStreamingWrapper
+  implements AsyncIterable<unknown>, AsyncIterator<unknown>
+{
   private span: Span;
   private response: unknown;
   private iterator: AsyncIterator<unknown> | null = null;
@@ -834,7 +876,9 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
   }
 
   private ensureChoice(index: number): void {
-    const choices = this.completeResponse.choices as Array<Record<string, unknown>>;
+    const choices = this.completeResponse.choices as Array<
+      Record<string, unknown>
+    >;
     while (choices.length <= index) {
       if (this.isChat()) {
         choices.push({ message: { role: "assistant", content: "" } });
@@ -853,17 +897,33 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
       // Initialize the iterator on first call
       if (!this.iterator) {
         // Check if response is an AsyncIterable and get the iterator
-        if (this.response && typeof this.response === "object" && Symbol.asyncIterator in this.response) {
-          this.iterator = (this.response as AsyncIterable<unknown>)[Symbol.asyncIterator]();
-        } else if (this.response && typeof this.response === "object" && Symbol.iterator in (this.response as any)) {
+        if (
+          this.response &&
+          typeof this.response === "object" &&
+          Symbol.asyncIterator in this.response
+        ) {
+          this.iterator = (this.response as AsyncIterable<unknown>)[
+            Symbol.asyncIterator
+          ]();
+        } else if (
+          this.response &&
+          typeof this.response === "object" &&
+          Symbol.iterator in (this.response as any)
+        ) {
           // Handle sync iterables
-          const syncIterator = (this.response as Iterable<unknown>)[Symbol.iterator]();
+          const syncIterator = (this.response as Iterable<unknown>)[
+            Symbol.iterator
+          ]();
           this.iterator = {
             async next() {
               return syncIterator.next();
-            }
+            },
           };
-        } else if (this.response && typeof this.response === "object" && typeof (this.response as AsyncIterator<unknown>).next === "function") {
+        } else if (
+          this.response &&
+          typeof this.response === "object" &&
+          typeof (this.response as AsyncIterator<unknown>).next === "function"
+        ) {
           // Already an iterator
           this.iterator = this.response as AsyncIterator<unknown>;
         } else {
@@ -886,7 +946,9 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
 
   private processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
-    const choices = this.completeResponse.choices as Array<Record<string, unknown>>;
+    const choices = this.completeResponse.choices as Array<
+      Record<string, unknown>
+    >;
 
     if (chunkDict.model) {
       this.completeResponse.model = chunkDict.model;
@@ -898,8 +960,10 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
       if (data.model) {
         this.completeResponse.model = data.model;
       }
-      
-      const dataChoices = (data.choices || []) as Array<Record<string, unknown>>;
+
+      const dataChoices = (data.choices || []) as Array<
+        Record<string, unknown>
+      >;
       if (Array.isArray(dataChoices)) {
         for (const choice of dataChoices) {
           const index = Number(choice.index || 0);
@@ -932,7 +996,9 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
     }
 
     // Also handle direct choices (for backwards compatibility)
-    const chunkChoices = (chunkDict.choices || []) as Array<Record<string, unknown>>;
+    const chunkChoices = (chunkDict.choices || []) as Array<
+      Record<string, unknown>
+    >;
     if (Array.isArray(chunkChoices) && chunkChoices.length > 0) {
       for (const choice of chunkChoices) {
         const index = Number(choice.index || 0);
@@ -987,4 +1053,3 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
     this.span.end();
   }
 }
-

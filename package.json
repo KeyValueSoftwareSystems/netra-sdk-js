@@ -46,7 +46,6 @@
     "@opentelemetry/sdk-trace-base": "^2.0.1",
     "@traceloop/node-server-sdk": "^0.22.5",
     "dotenv": "^17.2.3",
-    "@mistralai/mistralai": "^1.11.0",
     "groq-sdk": "^0.37.0",
     "openai": "^6.15.0"
   },

@@ -34,8 +34,9 @@ export function initInstrumentations(
   let useCustomGroq = false;
   let useCustomMistralAI = false;
 
-  if (instruments === undefined || instruments === null) {
-    // Don't set openAI - we use our custom instrumentor instead
+  if (!instruments || instruments.size === 0) {
+    // Enable all by default
+    // Don't set OpenAI/Groq/Mistral modules - we use custom instrumentors instead
     useCustomOpenAI = true;
     useCustomGroq = true;
     useCustomMistralAI = true;
@@ -48,6 +49,9 @@ export function initInstrumentations(
     instrumentModules.together = true;
   } else if (instruments.size) {
     // Enable specific instruments
+    if (instruments.has(NetraInstruments.OPENAI)) {
+      useCustomOpenAI = true;
+    }
     if (instruments.has(NetraInstruments.MISTRAL)) {
       useCustomMistralAI = true;
     }
@@ -132,6 +136,7 @@ export function initInstrumentations(
     }
   }
 
+  // Initialize custom Groq instrumentation
   if (useCustomGroq && !blockInstruments?.has(NetraInstruments.GROQ)) {
     try {
       groqInstrumentor.instrument({ tracerProvider });
