@@ -6,6 +6,14 @@ import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { NetraInstruments, Config } from "../config";
 import { mistralAIInstrumentor } from "./mistralai";
 
+// Re-export shared utilities for use across instrumentations
+export {
+  shouldSuppressInstrumentation,
+  modelAsDict,
+  setRequestAttributes,
+  setResponseAttributes,
+} from "./utils";
+
 // Track which instrumentations are active for cleanup
 let openAIInstrumentationActive = false;
 let mistralAIInstrumentationActive = false;
