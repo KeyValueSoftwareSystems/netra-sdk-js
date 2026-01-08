@@ -7,7 +7,6 @@
 import { Span, SpanKind, trace } from "@opentelemetry/api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, uninstrumentAll } from "./instrumentation";
-import { groqInstrumentor } from "./instrumentation/groq";
 import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
@@ -87,7 +86,7 @@ export class Netra {
    * Optional cleanup to end the root span and uninstrument all
    */
   static shutdown(): void {
-    // Uninstrument all active instrumentations
+    // Unpatch any monkey-patched instrumentations first
     try {
       uninstrumentAll();
     } catch (e) {
@@ -101,10 +100,6 @@ export class Netra {
       } finally {
         _rootSpan = undefined;
       }
-    }
-
-    if (groqInstrumentor.isInstrumented()) {
-      groqInstrumentor.uninstrument();
     }
 
     try {
