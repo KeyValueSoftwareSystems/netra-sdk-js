@@ -8,6 +8,9 @@ import { NetraInstruments, Config } from "../config";
 import { openAIInstrumentor } from "./openai";
 import { groqInstrumentor } from "./groq";
 import { typeORMInstrumentor } from "./typeorm";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url)
 
 export function initInstrumentations(
   config: Config,
