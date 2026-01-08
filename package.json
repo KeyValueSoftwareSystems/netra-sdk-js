@@ -50,11 +50,15 @@
     "openai": "^6.15.0"
   },
   "peerDependencies": {
+    "@mistralai/mistralai": ">=1.0.0",
     "@opentelemetry/instrumentation-express": "^0.40.0",
     "@opentelemetry/instrumentation-http": "^0.52.1",
     "@prisma/instrumentation": "^5.0.0"
   },
   "peerDependenciesMeta": {
+    "@mistralai/mistralai": {
+      "optional": true
+    },
     "@opentelemetry/instrumentation-http": {
       "optional": true
     },

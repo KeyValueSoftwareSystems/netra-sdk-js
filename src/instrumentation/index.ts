@@ -48,9 +48,6 @@ export function initInstrumentations(
     instrumentModules.together = true;
   } else if (instruments.size) {
     // Enable specific instruments
-    if (instruments.has(NetraInstruments.OPENAI)) {
-      useCustomOpenAI = true;
-    }
     if (instruments.has(NetraInstruments.MISTRAL)) {
       useCustomMistralAI = true;
     }
