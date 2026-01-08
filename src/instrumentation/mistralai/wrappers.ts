@@ -692,7 +692,7 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
       this.processChunk(result.value);
       return result;
     } catch (error) {
-      this.finalizeSpan();
+      this.finalizeSpan(error);
       throw error;
     }
   }
@@ -722,11 +722,15 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
           if (typeof delta === "object" && delta.content) {
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
-            if (!choiceEntry.message) {
-              choiceEntry.message = { role: "assistant", content: "" };
+            if (this.isChat()) {
+              if (!choiceEntry.message) {
+                choiceEntry.message = { role: "assistant", content: "" };
+              }
+              const message = choiceEntry.message as Record<string, unknown>;
+              message.content = String(message.content || "") + contentPiece;
+            } else {
+              choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
             }
-            const message = choiceEntry.message as Record<string, unknown>;
-            message.content = String(message.content || "") + contentPiece;
           }
 
           if (choice.finishReason) {
@@ -751,11 +755,15 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
         if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
-          if (!choiceEntry.message) {
-            choiceEntry.message = { role: "assistant", content: "" };
+          if (this.isChat()) {
+            if (!choiceEntry.message) {
+              choiceEntry.message = { role: "assistant", content: "" };
+            }
+            const message = choiceEntry.message as Record<string, unknown>;
+            message.content = String(message.content || "") + contentPiece;
+          } else {
+            choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
           }
-          const message = choiceEntry.message as Record<string, unknown>;
-          message.content = String(message.content || "") + contentPiece;
         }
 
         if (choice.finishReason) {
@@ -771,12 +779,24 @@ export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<u
     this.span.addEvent("llm.content.completion.chunk");
   }
 
-  private finalizeSpan(): void {
+  private finalizeSpan(error?: unknown): void {
     const endTime = Date.now();
     const duration = (endTime - this.startTime) / 1000;
     setResponseAttributes(this.span, this.completeResponse);
     this.span.setAttribute("llm.response.duration", duration);
-    this.span.setStatus({ code: SpanStatusCode.OK });
+    if (error) {
+      this.span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        this.span.recordException(error as Error);
+      } catch {
+        // Ignore
+      }
+    } else {
+      this.span.setStatus({ code: SpanStatusCode.OK });
+    }
     this.span.end();
   }
 }
@@ -859,7 +879,7 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
       this.processChunk(result.value);
       return result;
     } catch (error) {
-      this.finalizeSpan();
+      this.finalizeSpan(error);
       throw error;
     }
   }
@@ -889,11 +909,15 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
           if (typeof delta === "object" && delta.content) {
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
-            if (!choiceEntry.message) {
-              choiceEntry.message = { role: "assistant", content: "" };
+            if (this.isChat()) {
+              if (!choiceEntry.message) {
+                choiceEntry.message = { role: "assistant", content: "" };
+              }
+              const message = choiceEntry.message as Record<string, unknown>;
+              message.content = String(message.content || "") + contentPiece;
+            } else {
+              choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
             }
-            const message = choiceEntry.message as Record<string, unknown>;
-            message.content = String(message.content || "") + contentPiece;
           }
 
           if (choice.finishReason) {
@@ -918,11 +942,15 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
         if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
-          if (!choiceEntry.message) {
-            choiceEntry.message = { role: "assistant", content: "" };
+          if (this.isChat()) {
+            if (!choiceEntry.message) {
+              choiceEntry.message = { role: "assistant", content: "" };
+            }
+            const message = choiceEntry.message as Record<string, unknown>;
+            message.content = String(message.content || "") + contentPiece;
+          } else {
+            choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
           }
-          const message = choiceEntry.message as Record<string, unknown>;
-          message.content = String(message.content || "") + contentPiece;
         }
 
         if (choice.finishReason) {
@@ -938,12 +966,24 @@ export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncItera
     this.span.addEvent("llm.content.completion.chunk");
   }
 
-  private finalizeSpan(): void {
+  private finalizeSpan(error?: unknown): void {
     const endTime = Date.now();
     const duration = (endTime - this.startTime) / 1000;
     setResponseAttributes(this.span, this.completeResponse);
     this.span.setAttribute("llm.response.duration", duration);
-    this.span.setStatus({ code: SpanStatusCode.OK });
+    if (error) {
+      this.span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        this.span.recordException(error as Error);
+      } catch {
+        // Ignore
+      }
+    } else {
+      this.span.setStatus({ code: SpanStatusCode.OK });
+    }
     this.span.end();
   }
 }
