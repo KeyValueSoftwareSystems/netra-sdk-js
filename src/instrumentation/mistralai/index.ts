@@ -81,17 +81,19 @@ export class NetraMistralAIInstrumentor {
       return this;
     }
 
-    // Instrument chat completions
-    this._instrumentChat();
+    // Instrument client methods. Mark instrumented only if we actually patched anything.
+    const didPatch =
+      this._instrumentChat() ||
+      this._instrumentEmbeddings() ||
+      this._instrumentFIM() ||
+      this._instrumentAgents();
 
-    // Instrument embeddings
-    this._instrumentEmbeddings();
-
-    // Instrument FIM
-    this._instrumentFIM();
-
-    // Instrument agents
-    this._instrumentAgents();
+    if (!didPatch) {
+      console.warn(
+        "MistralAI instrumentation initialized but no methods were patched. Is '@mistralai/mistralai' installed and compatible?"
+      );
+      return this;
+    }
 
     isInstrumented = true;
     return this;
@@ -129,12 +131,13 @@ export class NetraMistralAIInstrumentor {
     return isInstrumented;
   }
 
-  private _instrumentChat(): void {
-    if (!this.tracer) return;
+  private _instrumentChat(): boolean {
+    if (!this.tracer) return false;
 
     try {
       const chatModule = require("@mistralai/mistralai/sdk/chat");
       const ChatClass = chatModule.Chat;
+      let didPatch = false;
 
       if (ChatClass?.prototype?.complete) {
         const originalComplete = ChatClass.prototype.complete;
@@ -162,6 +165,7 @@ export class NetraMistralAIInstrumentor {
             return syncWrapper(wrappedFunction, this, args, kwargs);
           }
         };
+        didPatch = true;
       }
 
       if (ChatClass?.prototype?.stream) {
@@ -190,18 +194,23 @@ export class NetraMistralAIInstrumentor {
             return syncWrapper(wrappedFunction, this, args, kwargs);
           }
         };
+        didPatch = true;
       }
+
+      return didPatch;
     } catch (error) {
       console.error("Failed to instrument MistralAI chat:", error);
+      return false;
     }
   }
 
-  private _instrumentEmbeddings(): void {
-    if (!this.tracer) return;
+  private _instrumentEmbeddings(): boolean {
+    if (!this.tracer) return false;
 
     try {
       const embeddingsModule = require("@mistralai/mistralai/sdk/embeddings");
       const EmbeddingsClass = embeddingsModule.Embeddings;
+      let didPatch = false;
 
       if (EmbeddingsClass?.prototype?.create) {
         const originalCreate = EmbeddingsClass.prototype.create;
@@ -229,18 +238,23 @@ export class NetraMistralAIInstrumentor {
             return syncWrapper(wrappedFunction, this, args, kwargs);
           }
         };
+        didPatch = true;
       }
+
+      return didPatch;
     } catch (error) {
       console.error("Failed to instrument MistralAI embeddings:", error);
+      return false;
     }
   }
 
-  private _instrumentFIM(): void {
-    if (!this.tracer) return;
+  private _instrumentFIM(): boolean {
+    if (!this.tracer) return false;
 
     try {
       const fimModule = require("@mistralai/mistralai/sdk/fim");
       const FimClass = fimModule.Fim;
+      let didPatch = false;
 
       if (FimClass?.prototype?.complete) {
         const originalComplete = FimClass.prototype.complete;
@@ -268,6 +282,7 @@ export class NetraMistralAIInstrumentor {
             return syncWrapper(wrappedFunction, this, args, kwargs);
           }
         };
+        didPatch = true;
       }
 
       if (FimClass?.prototype?.stream) {
@@ -296,18 +311,23 @@ export class NetraMistralAIInstrumentor {
             return syncWrapper(wrappedFunction, this, args, kwargs);
           }
         };
+        didPatch = true;
       }
+
+      return didPatch;
     } catch (error) {
       console.error("Failed to instrument MistralAI FIM:", error);
+      return false;
     }
   }
 
-  private _instrumentAgents(): void {
-    if (!this.tracer) return;
+  private _instrumentAgents(): boolean {
+    if (!this.tracer) return false;
 
     try {
       const agentsModule = require("@mistralai/mistralai/sdk/agents");
       const AgentsClass = agentsModule.Agents;
+      let didPatch = false;
 
       if (AgentsClass?.prototype?.complete) {
         const originalComplete = AgentsClass.prototype.complete;
@@ -335,6 +355,7 @@ export class NetraMistralAIInstrumentor {
             return syncWrapper(wrappedFunction, this, args, kwargs);
           }
         };
+        didPatch = true;
       }
 
       if (AgentsClass?.prototype?.stream) {
@@ -363,9 +384,13 @@ export class NetraMistralAIInstrumentor {
             return syncWrapper(wrappedFunction, this, args, kwargs);
           }
         };
+        didPatch = true;
       }
+
+      return didPatch;
     } catch (error) {
       console.error("Failed to instrument MistralAI agents:", error);
+      return false;
     }
   }
 

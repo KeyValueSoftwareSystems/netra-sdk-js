@@ -3,19 +3,18 @@
  */
 
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
-import { NetraInstruments, Config } from "../config";
+import { Config, NetraInstruments } from "../config";
 import { mistralAIInstrumentor } from "./mistralai";
 
 // Re-export shared utilities for use across instrumentations
 export {
-  shouldSuppressInstrumentation,
   modelAsDict,
   setRequestAttributes,
   setResponseAttributes,
+  shouldSuppressInstrumentation,
 } from "./utils";
 
 // Track which instrumentations are active for cleanup
-let openAIInstrumentationActive = false;
 let mistralAIInstrumentationActive = false;
 
 export function initInstrumentations(
@@ -26,14 +25,10 @@ export function initInstrumentations(
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
-
-  let useCustomOpenAI = false;
   let useCustomMistralAI = false;
 
   if (!instruments || instruments.size === 0) {
     // Enable all by default
-    // Don't set openAI - we use our custom instrumentor instead
-    useCustomOpenAI = true;
     useCustomMistralAI = true;
     instrumentModules.google_vertexai = true;
     instrumentModules.langchain = true;
@@ -44,17 +39,20 @@ export function initInstrumentations(
     instrumentModules.together = true;
   } else {
     // Enable specific instruments
-    if (instruments.has(NetraInstruments.OPENAI)) {
-      useCustomOpenAI = true;
-    }
     if (instruments.has(NetraInstruments.MISTRAL)) {
       useCustomMistralAI = true;
     }
-    if (instruments.has(NetraInstruments.GOOGLE_GENAI) || instruments.has(NetraInstruments.VERTEX_AI)) {
+    if (
+      instruments.has(NetraInstruments.GOOGLE_GENAI) ||
+      instruments.has(NetraInstruments.VERTEX_AI)
+    ) {
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
       instrumentModules.google_vertexai = true;
     }
-    if (instruments.has(NetraInstruments.LANGCHAIN) || instruments.has(NetraInstruments.LANGGRAPH)) {
+    if (
+      instruments.has(NetraInstruments.LANGCHAIN) ||
+      instruments.has(NetraInstruments.LANGGRAPH)
+    ) {
       // LangGraph is supported via LangChain instrumentation
       instrumentModules.langchain = true;
     }
@@ -93,13 +91,16 @@ export function initInstrumentations(
   if (useCustomMistralAI && !blockInstruments?.has(NetraInstruments.MISTRAL)) {
     try {
       mistralAIInstrumentor.instrument();
-      mistralAIInstrumentationActive = true;
+      mistralAIInstrumentationActive = mistralAIInstrumentor.isInstrumented();
       if (config.debugMode) {
         console.debug("Custom MistralAI instrumentation enabled");
       }
     } catch (e) {
       if (config.debugMode) {
-        console.debug("Failed to initialize custom MistralAI instrumentation:", e);
+        console.debug(
+          "Failed to initialize custom MistralAI instrumentation:",
+          e
+        );
       }
     }
   }
@@ -119,7 +120,9 @@ function initOpenTelemetryInstrumentations(
     (!instruments || instruments.has(NetraInstruments.HTTP))
   ) {
     try {
-      const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
+      const {
+        HttpInstrumentation,
+      } = require("@opentelemetry/instrumentation-http");
       const httpInstrumentation = new HttpInstrumentation();
       // Note: This would need to be registered with the SDK
     } catch (e) {
@@ -164,7 +167,9 @@ function initOpenTelemetryInstrumentations(
     (!instruments || instruments.has(NetraInstruments.EXPRESS))
   ) {
     try {
-      const { ExpressInstrumentation } = require("@opentelemetry/instrumentation-express");
+      const {
+        ExpressInstrumentation,
+      } = require("@opentelemetry/instrumentation-express");
       // Note: This would need to be registered with the SDK
     } catch (e) {
       if (config.debugMode) {

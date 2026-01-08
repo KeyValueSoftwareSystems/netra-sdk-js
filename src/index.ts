@@ -4,19 +4,19 @@
  * Built on top of OpenTelemetry and Traceloop
  */
 
-import { trace, SpanKind, Span } from "@opentelemetry/api";
-import { Config, NetraConfig, NetraInstruments } from "./config";
-import { SessionManager, ConversationType } from "./session-manager";
+import { Span, SpanKind, trace } from "@opentelemetry/api";
+import { Config, NetraConfig } from "./config";
+import { initInstrumentations, uninstrumentAll } from "./instrumentation";
+import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
-import { SpanType, UsageModel, ActionModel } from "./types";
-import { initInstrumentations } from "./instrumentation";
+import { SpanType } from "./types";
 
 // Re-export decorators
-export { workflow, agent, task, span } from "./decorators";
+export { agent, span, task, workflow } from "./decorators";
 
 // Re-export types
-export { SpanType, ConversationType, UsageModel, ActionModel } from "./types";
 export { NetraInstruments } from "./config";
+export { ActionModel, ConversationType, SpanType, UsageModel } from "./types";
 
 let _initialized = false;
 let _rootSpan: Span | undefined;
@@ -49,14 +49,15 @@ export class Netra {
     this._config = cfg;
 
     // Initialize instrumentations
-    initInstrumentations(
-      cfg,
-      config.instruments,
-      config.blockInstruments
-    );
+    initInstrumentations(cfg, config.instruments, config.blockInstruments);
 
     this._initialized = true;
     console.info("Netra successfully initialized.");
+
+    // Ensure cleanup at process exit (even if root span is disabled)
+    process.on("exit", () => {
+      this.shutdown();
+    });
 
     // Create root span if enabled
     if (cfg.enableRootSpan) {
@@ -70,10 +71,7 @@ export class Netra {
         _rootSpan.setAttribute("service.name", cfg.appName);
       }
       _rootSpan.setAttribute("netra.environment", cfg.environment);
-      _rootSpan.setAttribute(
-        "netra.library.version",
-        Config.LIBRARY_VERSION
-      );
+      _rootSpan.setAttribute("netra.library.version", Config.LIBRARY_VERSION);
 
       try {
         SessionManager.setCurrentSpan(_rootSpan);
@@ -82,11 +80,6 @@ export class Netra {
       }
 
       console.info("Netra root span created and attached to context.");
-
-      // Ensure cleanup at process exit
-      process.on("exit", () => {
-        this.shutdown();
-      });
     }
   }
 
@@ -94,6 +87,13 @@ export class Netra {
    * Optional cleanup to end the root span
    */
   static shutdown(): void {
+    // Unpatch any monkey-patched instrumentations first
+    try {
+      uninstrumentAll();
+    } catch (e) {
+      // Ignore
+    }
+
     if (_rootSpan) {
       try {
         _rootSpan.end();
@@ -107,7 +107,10 @@ export class Netra {
     // Try to flush and shutdown the tracer provider
     try {
       const provider = trace.getTracerProvider();
-      if ("forceFlush" in provider && typeof provider.forceFlush === "function") {
+      if (
+        "forceFlush" in provider &&
+        typeof provider.forceFlush === "function"
+      ) {
         provider.forceFlush();
       }
       if ("shutdown" in provider && typeof provider.shutdown === "function") {
@@ -148,9 +151,7 @@ export class Netra {
     if (userId) {
       SessionManager.setSessionContext("user_id", userId);
     } else {
-      console.warn(
-        "setUserId: User ID must be provided for setting user_id."
-      );
+      console.warn("setUserId: User ID must be provided for setting user_id.");
     }
   }
 
