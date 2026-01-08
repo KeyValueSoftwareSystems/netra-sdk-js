@@ -12,11 +12,17 @@ import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
+export { NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export { ConversationType } from "./session-manager";
-export { SpanType } from "./types";
+export {
+  ActionModel,
+  ConversationType,
+  SpanType,
+  SpanType,
+  UsageModel,
+} from "./types";
 export type { ActionModel, UsageModel } from "./types";
-export { NetraInstruments } from "./config";
 
 let _initialized = false;
 let _rootSpan: Span | undefined;
@@ -54,6 +60,11 @@ export class Netra {
     this._initialized = true;
     console.info("Netra successfully initialized.");
 
+    // Ensure cleanup at process exit (even if root span is disabled)
+    process.on("exit", () => {
+      this.shutdown();
+    });
+
     // Create root span if enabled
     if (cfg.enableRootSpan) {
       const tracer = trace.getTracer("netra.root.span");
@@ -75,11 +86,6 @@ export class Netra {
       }
 
       console.info("Netra root span created and attached to context.");
-
-      // Ensure cleanup at process exit
-      process.on("exit", () => {
-        this.shutdown();
-      });
     }
   }
 

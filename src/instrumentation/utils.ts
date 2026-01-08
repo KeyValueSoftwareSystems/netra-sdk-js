@@ -4,6 +4,7 @@
  */
 
 import { Span, context } from "@opentelemetry/api";
+import { Config } from "../config";
 
 // Suppression key for instrumentation
 const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
@@ -43,6 +44,66 @@ export function modelAsDict(obj: unknown): Record<string, unknown> {
   }
 }
 
+function isTraceContentEnabled(): boolean {
+  const raw =
+    process.env.TRACELOOP_TRACE_CONTENT ??
+    process.env.NETRA_TRACE_CONTENT ??
+    "";
+  return ["1", "true"].includes(String(raw).toLowerCase());
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    if (typeof value === "string") return value;
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateAttribute(value: string, maxLen: number): string {
+  if (!value) return value;
+  if (value.length <= maxLen) return value;
+  return value.slice(0, maxLen) + "...(truncated)";
+}
+
+function extractFirstCompletionText(
+  response: Record<string, unknown>
+): string | undefined {
+  // Common: choices[0].message.content (chat) or choices[0].text (completion)
+  const choices = response.choices as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const first = choices[0];
+    const message = first.message as Record<string, unknown> | undefined;
+    if (message && message.content !== undefined) {
+      return String(message.content);
+    }
+    if (first.text !== undefined) {
+      return String(first.text);
+    }
+  }
+
+  // Mistral/OpenAI response-like variants
+  if (response.output_text !== undefined) {
+    return String(response.output_text);
+  }
+
+  // Responses API style: output[].content[].text
+  const output = response.output as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(output) && output.length > 0) {
+    const firstOut = output[0];
+    const content = firstOut.content as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(content) && content.length > 0) {
+      const firstContent = content[0];
+      if (firstContent.text !== undefined) {
+        return String(firstContent.text);
+      }
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * Set request attributes on span
  * These are shared across different LLM providers
@@ -62,7 +123,7 @@ export function setRequestAttributes(
   }
 
   // Temperature (handle both snake_case and camelCase)
-  const temperature = kwargs.temperature ?? kwargs.temperature;
+  const temperature = kwargs.temperature;
   if (temperature !== undefined && temperature !== null) {
     span.setAttribute("gen_ai.request.temperature", Number(temperature));
     span.setAttribute("llm.request.temperature", Number(temperature));
@@ -129,6 +190,35 @@ export function setRequestAttributes(
       "gen_ai.request.tool_choice",
       typeof toolChoice === "string" ? toolChoice : JSON.stringify(toolChoice)
     );
+  }
+
+  // Content tracing (guarded by config/env)
+  if (isTraceContentEnabled()) {
+    const maxLen = Config.CONVERSATION_MAX_LEN;
+
+    if (Array.isArray(kwargs.messages)) {
+      const promptJson = truncateAttribute(safeStringify(kwargs.messages), maxLen);
+      span.setAttribute("gen_ai.prompt", promptJson);
+      span.setAttribute("llm.request.messages", promptJson);
+    } else if (kwargs.prompt !== undefined) {
+      const prompt = truncateAttribute(safeStringify(kwargs.prompt), maxLen);
+      span.setAttribute("gen_ai.prompt", prompt);
+      span.setAttribute("llm.request.prompt", prompt);
+    } else {
+      // Embeddings / generic inputs
+      const content = kwargs.input ?? kwargs.inputs;
+      if (content !== undefined) {
+        const prompt = truncateAttribute(safeStringify(content), maxLen);
+        span.setAttribute("gen_ai.prompt", prompt);
+        span.setAttribute("llm.request.input", prompt);
+      }
+    }
+
+    // FIM suffix (if present)
+    if (kwargs.suffix !== undefined) {
+      const suffix = truncateAttribute(safeStringify(kwargs.suffix), maxLen);
+      span.setAttribute("llm.request.suffix", suffix);
+    }
   }
 }
 
@@ -207,6 +297,17 @@ export function setResponseAttributes(
     if (finishReason) {
       span.setAttribute("gen_ai.response.finish_reason", String(finishReason));
       span.setAttribute("llm.response.finish_reason", String(finishReason));
+    }
+  }
+
+  // Content tracing (guarded by config/env)
+  if (isTraceContentEnabled()) {
+    const completion = extractFirstCompletionText(response);
+    if (completion) {
+      const maxLen = Config.CONVERSATION_MAX_LEN;
+      const value = truncateAttribute(String(completion), maxLen);
+      span.setAttribute("gen_ai.completion", value);
+      span.setAttribute("llm.response.completion", value);
     }
   }
 
