@@ -7,6 +7,9 @@ import { NetraInstruments, Config } from "../config";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
 
+// Track which instrumentations are active for cleanup
+let openAIInstrumentationActive = false;
+
 export function initInstrumentations(
   config: Config,
   instruments?: Set<NetraInstruments>,
@@ -76,6 +79,7 @@ export function initInstrumentations(
   if (useCustomOpenAI && !blockInstruments?.has(NetraInstruments.OPENAI)) {
     try {
       openAIInstrumentor.instrument();
+      openAIInstrumentationActive = true;
       if (config.debugMode) {
         console.debug("Custom OpenAI instrumentation enabled");
       }
@@ -164,6 +168,23 @@ function initOpenTelemetryInstrumentations(
       if (config.debugMode) {
         console.debug("Express instrumentation not available:", e);
       }
+    }
+  }
+}
+
+/**
+ * Uninstrument all active instrumentations
+ * Should be called during shutdown
+ */
+export function uninstrumentAll(): void {
+  // Uninstrument OpenAI if it was active
+  if (openAIInstrumentationActive) {
+    try {
+      openAIInstrumentor.uninstrument();
+      openAIInstrumentationActive = false;
+      console.debug("Custom OpenAI instrumentation disabled");
+    } catch (e) {
+      console.debug("Failed to uninstrument OpenAI:", e);
     }
   }
 }

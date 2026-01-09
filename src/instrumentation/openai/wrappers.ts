@@ -24,7 +24,7 @@ type WrappedFunction = (...args: unknown[]) => unknown;
 type AsyncWrappedFunction = (...args: unknown[]) => Promise<unknown>;
 
 /**
- * Wrapper factory for chat completions
+ * Wrapper factory for chat completions (sync)
  */
 export function chatWrapper(tracer: Tracer) {
   return function wrapper(
@@ -162,7 +162,7 @@ export function achatWrapper(tracer: Tracer) {
 }
 
 /**
- * Wrapper factory for embeddings
+ * Wrapper factory for embeddings (sync)
  */
 export function embeddingsWrapper(tracer: Tracer) {
   return function wrapper(
@@ -250,7 +250,7 @@ export function aembeddingsWrapper(tracer: Tracer) {
 }
 
 /**
- * Wrapper factory for responses.create (new OpenAI API)
+ * Wrapper factory for responses.create (new OpenAI API) - sync
  */
 export function responsesWrapper(tracer: Tracer) {
   return function wrapper(
@@ -387,12 +387,15 @@ export function aresponsesWrapper(tracer: Tracer) {
   };
 }
 
+
 /**
- * Wrapper for streaming responses
+ * Wrapper for streaming responses (handles AsyncIterable from OpenAI SDK)
  */
-export class StreamingWrapper implements Iterator<unknown> {
+export class StreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<unknown> {
   private span: Span;
-  private response: Iterator<unknown>;
+  private response: unknown;
+  private resolvedResponse: AsyncIterable<unknown> | null = null;
+  private iterator: AsyncIterator<unknown> | null = null;
   private startTime: number;
   private requestKwargs: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
@@ -404,7 +407,7 @@ export class StreamingWrapper implements Iterator<unknown> {
     requestKwargs: Record<string, unknown>
   ) {
     this.span = span;
-    this.response = response as Iterator<unknown>;
+    this.response = response;
     this.startTime = startTime;
     this.requestKwargs = requestKwargs;
     this.completeResponse = { choices: [], model: "" };
@@ -429,13 +432,46 @@ export class StreamingWrapper implements Iterator<unknown> {
     }
   }
 
-  [Symbol.iterator](): Iterator<unknown> {
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
     return this;
   }
 
-  next(): IteratorResult<unknown> {
+  private isPromise(obj: unknown): obj is Promise<unknown> {
+    return (
+      obj !== null &&
+      typeof obj === "object" &&
+      typeof (obj as Promise<unknown>).then === "function"
+    );
+  }
+
+  async next(): Promise<IteratorResult<unknown>> {
     try {
-      const result = this.response.next();
+      // Initialize the iterator on first call
+      if (!this.iterator) {
+        // If response is a Promise, await it first to get the actual stream
+        if (this.isPromise(this.response)) {
+          this.resolvedResponse = await this.response as AsyncIterable<unknown>;
+        } else {
+          this.resolvedResponse = this.response as AsyncIterable<unknown>;
+        }
+
+        // Now check if the resolved response is iterable
+        if (Symbol.asyncIterator in this.resolvedResponse) {
+          this.iterator = (this.resolvedResponse as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+        } else if (Symbol.iterator in (this.resolvedResponse as any)) {
+          // Handle sync iterables wrapped as async
+          const syncIterator = (this.resolvedResponse as Iterable<unknown>)[Symbol.iterator]();
+          this.iterator = {
+            async next() {
+              return syncIterator.next();
+            }
+          };
+        } else {
+          throw new Error("Response is not iterable");
+        }
+      }
+
+      const result = await this.iterator.next();
       if (result.done) {
         this.finalizeSpan();
         return result;
@@ -495,9 +531,10 @@ export class StreamingWrapper implements Iterator<unknown> {
           if (content) {
             for (const contentItem of content) {
               const assistantText = contentItem.text || "";
-              this.completeResponse.choices = [
-                { message: { role: "assistant", content: assistantText } },
-              ];
+              // Append to choices array instead of replacing
+              (this.completeResponse.choices as Array<Record<string, unknown>>).push({
+                message: { role: "assistant", content: assistantText },
+              });
             }
           }
         }
@@ -523,9 +560,10 @@ export class StreamingWrapper implements Iterator<unknown> {
 /**
  * Async wrapper for streaming responses
  */
-export class AsyncStreamingWrapper implements AsyncIterator<unknown> {
+export class AsyncStreamingWrapper implements AsyncIterable<unknown>, AsyncIterator<unknown> {
   private span: Span;
-  private response: AsyncIterator<unknown>;
+  private response: unknown;
+  private iterator: AsyncIterator<unknown> | null = null;
   private startTime: number;
   private requestKwargs: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
@@ -537,7 +575,7 @@ export class AsyncStreamingWrapper implements AsyncIterator<unknown> {
     requestKwargs: Record<string, unknown>
   ) {
     this.span = span;
-    this.response = response as AsyncIterator<unknown>;
+    this.response = response;
     this.startTime = startTime;
     this.requestKwargs = requestKwargs;
     this.completeResponse = { choices: [], model: "" };
@@ -568,7 +606,28 @@ export class AsyncStreamingWrapper implements AsyncIterator<unknown> {
 
   async next(): Promise<IteratorResult<unknown>> {
     try {
-      const result = await this.response.next();
+      // Initialize the iterator on first call
+      if (!this.iterator) {
+        // Check if response is an AsyncIterable and get the iterator
+        if (this.response && typeof this.response === "object" && Symbol.asyncIterator in this.response) {
+          this.iterator = (this.response as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+        } else if (this.response && typeof this.response === "object" && Symbol.iterator in (this.response as any)) {
+          // Handle sync iterables
+          const syncIterator = (this.response as Iterable<unknown>)[Symbol.iterator]();
+          this.iterator = {
+            async next() {
+              return syncIterator.next();
+            }
+          };
+        } else if (this.response && typeof this.response === "object" && typeof (this.response as AsyncIterator<unknown>).next === "function") {
+          // Already an iterator
+          this.iterator = this.response as AsyncIterator<unknown>;
+        } else {
+          throw new Error("Response is not iterable");
+        }
+      }
+
+      const result = await this.iterator.next();
       if (result.done) {
         this.finalizeSpan();
         return result;
@@ -628,9 +687,10 @@ export class AsyncStreamingWrapper implements AsyncIterator<unknown> {
           if (content) {
             for (const contentItem of content) {
               const assistantText = contentItem.text || "";
-              this.completeResponse.choices = [
-                { message: { role: "assistant", content: assistantText } },
-              ];
+              // Append to choices array instead of replacing
+              (this.completeResponse.choices as Array<Record<string, unknown>>).push({
+                message: { role: "assistant", content: assistantText },
+              });
             }
           }
         }
@@ -652,3 +712,4 @@ export class AsyncStreamingWrapper implements AsyncIterator<unknown> {
     this.span.end();
   }
 }
+
