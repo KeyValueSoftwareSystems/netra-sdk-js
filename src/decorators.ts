@@ -108,67 +108,65 @@ function createFunctionWrapper<T extends AnyFunction>(
       SessionManager.pushEntity(entityType, spanName);
 
       const tracer = trace.getTracer(moduleName);
-      const span = tracer.startSpan(spanName);
-      span.setAttribute("netra.span.type", asType);
+      return tracer.startActiveSpan(spanName, async span => {
+        span.setAttribute("netra.span.type", asType);
+  
+        SessionManager.registerSpan(spanName, span);
+        SessionManager.setCurrentSpan(span);
+  
+        try {
+          const kwargs: Record<string, any> = {};
+          addSpanAttributes(span, func, args, kwargs, entityType);
+          
+          const result = await (func as AsyncFunction).call(this, ...args);
 
-      SessionManager.registerSpan(spanName, span);
-      SessionManager.setCurrentSpan(span);
-
-      try {
-        const kwargs: Record<string, any> = {};
-        addSpanAttributes(span, func, args, kwargs, entityType);
-
-        const result = await (func as AsyncFunction).call(this, ...args);
-        console.log("result-----------", result);
-        addOutputAttributes(span, result);
-        span.end();
-        SessionManager.unregisterSpan(spanName, span);
-        SessionManager.popEntity(entityType);
-        return result;
-      } catch (e: any) {
-        span.setAttribute(
-          `${Config.LIBRARY_NAME}.entity.error`,
-          String(e)
-        );
-        span.recordException(e);
-        span.end();
-        SessionManager.unregisterSpan(spanName, span);
-        SessionManager.popEntity(entityType);
-        throw e;
-      }
+          addOutputAttributes(span, result);
+          return result;
+        } catch (e: any) {
+          span.setAttribute(
+            `${Config.LIBRARY_NAME}.entity.error`,
+            String(e)
+          );
+          span.recordException(e);
+          throw e;
+        } finally {
+          span.end();
+          SessionManager.unregisterSpan(spanName, span);
+          SessionManager.popEntity(entityType);
+        }
+      });
     }) as T;
   } else {
     return (function (this: any, ...args: any[]) {
       SessionManager.pushEntity(entityType, spanName);
 
       const tracer = trace.getTracer(moduleName);
-      const span = tracer.startSpan(spanName);
-      span.setAttribute("netra.span.type", asType);
+      return tracer.startActiveSpan(spanName, span => {
+        span.setAttribute("netra.span.type", asType);
+        SessionManager.registerSpan(spanName, span);
+        SessionManager.setCurrentSpan(span);
+  
+        try {
+          const kwargs: Record<string, any> = {};
+          addSpanAttributes(span, func, args, kwargs, entityType);
 
-      SessionManager.registerSpan(spanName, span);
-      SessionManager.setCurrentSpan(span);
+          const result = (func as AnyFunction).call(this, ...args);
+          addOutputAttributes(span, result);
 
-      try {
-        const kwargs: Record<string, any> = {};
-        addSpanAttributes(span, func, args, kwargs, entityType);
-
-        const result = (func as AnyFunction).call(this, ...args);
-        addOutputAttributes(span, result);
-        span.end();
-        SessionManager.unregisterSpan(spanName, span);
-        SessionManager.popEntity(entityType);
-        return result;
-      } catch (e: any) {
-        span.setAttribute(
-          `${Config.LIBRARY_NAME}.entity.error`,
-          String(e)
-        );
-        span.recordException(e);
-        span.end();
-        SessionManager.unregisterSpan(spanName, span);
-        SessionManager.popEntity(entityType);
-        throw e;
-      }
+          return result;
+        } catch (e: any) {
+          span.setAttribute(
+            `${Config.LIBRARY_NAME}.entity.error`,
+            String(e)
+          );
+          span.recordException(e);
+          throw e;
+        } finally {
+          span.end();
+          SessionManager.unregisterSpan(spanName, span);
+          SessionManager.popEntity(entityType);
+        }
+      });
     }) as T;
   }
 }
