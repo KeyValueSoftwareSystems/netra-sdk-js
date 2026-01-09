@@ -7,16 +7,15 @@
 import { Span, SpanKind, trace } from "@opentelemetry/api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, uninstrumentAll } from "./instrumentation";
+import { groqInstrumentor } from "./instrumentation/groq";
 import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
-// Re-export decorators
 export { agent, span, task, workflow } from "./decorators";
-
-// Re-export types
-export { NetraInstruments } from "./config";
-export { ConversationType, SpanType } from "./types";
+export { ConversationType } from "./session-manager";
+export { SpanType } from "./types";
+export type { ActionModel, UsageModel } from "./types";
 
 let _initialized = false;
 let _rootSpan: Span | undefined;
@@ -103,7 +102,10 @@ export class Netra {
       }
     }
 
-    // Try to flush and shutdown the tracer provider
+    if (groqInstrumentor.isInstrumented()) {
+      groqInstrumentor.uninstrument();
+    }
+
     try {
       const provider = trace.getTracerProvider();
       if (
