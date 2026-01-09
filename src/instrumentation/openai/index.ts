@@ -2,20 +2,10 @@
  * Custom OpenAI instrumentor for Netra SDK
  */
 
-import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { __version__ } from "./version";
-import {
-  chatWrapper,
-  achatWrapper,
-  embeddingsWrapper,
-  aembeddingsWrapper,
-  responsesWrapper,
-  aresponsesWrapper,
-} from "./wrappers";
-
-// Create require function for ESM compatibility
-const require = createRequire(import.meta.url);
+import { chatWrapper, embeddingsWrapper, responsesWrapper } from "./wrappers";
+import { OpenAI } from "openai";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.openai";
 const INSTRUMENTS = ["openai >= 1.0.0"];
@@ -38,14 +28,14 @@ export class NetraOpenAIInstrumentor {
   private tracerProvider?: TracerProvider;
 
   constructor() {
-    // Initialize without tracer - will be set during instrument()
+    // Tracer is initialized lazily during instrument()
   }
 
   /**
    * Returns the list of instrumentation dependencies
    */
   instrumentationDependencies(): string[] {
-    return INSTRUMENTS;
+    return [...INSTRUMENTS];
   }
 
   /**
@@ -59,27 +49,16 @@ export class NetraOpenAIInstrumentor {
 
     try {
       this.tracerProvider = options.tracerProvider;
-      // Use provided tracer provider or fall back to global
-      if (this.tracerProvider) {
-        this.tracer = this.tracerProvider.getTracer(
-          INSTRUMENTATION_NAME,
-          __version__
-        );
-      } else {
-        this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
-      }
+      this.tracer = this.tracerProvider
+        ? this.tracerProvider.getTracer(INSTRUMENTATION_NAME, __version__)
+        : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
       console.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
-    // Instrument chat completions
     this._instrumentChatCompletions();
-
-    // Instrument embeddings
     this._instrumentEmbeddings();
-
-    // Instrument responses
     this._instrumentResponses();
 
     isInstrumented = true;
@@ -95,13 +74,8 @@ export class NetraOpenAIInstrumentor {
       return;
     }
 
-    // Uninstrument chat completions
     this._uninstrumentChatCompletions();
-
-    // Uninstrument embeddings
     this._uninstrumentEmbeddings();
-
-    // Uninstrument responses
     this._uninstrumentResponses();
 
     originalMethods.clear();
@@ -119,45 +93,29 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      try {
-        const chatModule = require("openai/resources/chat/completions");
-        const CompletionsClass = chatModule.Completions;
-
-        if (CompletionsClass?.prototype?.create) {
-          const originalCreate = CompletionsClass.prototype.create;
-          originalMethods.set("chat.completions.create", originalCreate);
-
-          const tracer = this.tracer;
-          // Create both sync and async wrappers for flexibility
-          const syncWrapper = chatWrapper(tracer);
-          const asyncWrapper = achatWrapper(tracer);
-
-          CompletionsClass.prototype.create = function (
-            this: unknown,
-            ...args: unknown[]
-          ): unknown {
-            const original = originalCreate.bind(this);
-            const kwargs = (args[0] || {}) as Record<string, unknown>;
-            
-            // Check if the original function is an async function
-            const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
-            
-            if (isAsyncFunction) {
-              // Use async wrapper for async functions
-              const wrappedFunction = async (...a: unknown[]) => original(...a);
-              return asyncWrapper(wrappedFunction, this, args, kwargs);
-            } else {
-              // Use sync wrapper for sync functions
-              const wrappedFunction = (...a: unknown[]) => original(...a);
-              return syncWrapper(wrappedFunction, this, args, kwargs);
-            }
-          };
-        }
-      } catch {
-        console.error("Failed to instrument chat completions");
+      const CompletionsClass: any = OpenAI.Chat?.Completions;
+      if (!CompletionsClass?.prototype?.create) {
+        console.error(
+          "Failed to find OpenAI chat completions class to instrument"
+        );
+        return;
       }
+      const originalCreate = CompletionsClass.prototype.create;
+      originalMethods.set("chat.completions.create", originalCreate);
+
+      const tracer = this.tracer;
+      const wrapper = chatWrapper(tracer);
+
+      CompletionsClass.prototype.create = function (
+        this: unknown,
+        ...args: unknown[]
+      ): unknown {
+        const original = originalCreate.bind(this);
+        const kwargs = (args[0] || {}) as Record<string, unknown>;
+        return wrapper((...a: unknown[]) => original(...a), this, args, kwargs);
+      };
     } catch (error) {
-      console.error("Failed to instrument chat completions:", error);
+      console.error(`Failed to instrument chat completions: ${error}`);
     }
   }
 
@@ -165,45 +123,28 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      try {
-        const embeddingsModule = require("openai/resources/embeddings");
-        const EmbeddingsClass = embeddingsModule.Embeddings;
-        
-        if (EmbeddingsClass?.prototype?.create) {
-          const originalCreate = EmbeddingsClass.prototype.create;
-          originalMethods.set("embeddings.create", originalCreate);
-
-          const tracer = this.tracer;
-          // Create both sync and async wrappers for flexibility
-          const syncWrapper = embeddingsWrapper(tracer);
-          const asyncWrapper = aembeddingsWrapper(tracer);
-
-          EmbeddingsClass.prototype.create = function (
-            this: unknown,
-            ...args: unknown[]
-          ): unknown {
-            const original = originalCreate.bind(this);
-            const kwargs = (args[0] || {}) as Record<string, unknown>;
-            
-            // Check if the original function is an async function
-            const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
-            
-            if (isAsyncFunction) {
-              // Use async wrapper for async functions
-              const wrappedFunction = async (...a: unknown[]) => original(...a);
-              return asyncWrapper(wrappedFunction, this, args, kwargs);
-            } else {
-              // Use sync wrapper for sync functions
-              const wrappedFunction = (...a: unknown[]) => original(...a);
-              return syncWrapper(wrappedFunction, this, args, kwargs);
-            }
-          };
-        }
-      } catch (error) {
-        console.error(`Failed to instrument embeddings: ${error}`);
+      const EmbeddingsClass: any = OpenAI.Embeddings;
+      if (!EmbeddingsClass?.prototype?.create) {
+        console.error("Failed to find OpenAI embeddings class to instrument");
+        return;
       }
+
+      const originalCreate = EmbeddingsClass.prototype.create;
+      originalMethods.set("embeddings.create", originalCreate);
+
+      const tracer = this.tracer;
+      const wrapper = embeddingsWrapper(tracer);
+
+      EmbeddingsClass.prototype.create = function (
+        this: unknown,
+        ...args: unknown[]
+      ): unknown {
+        const original = originalCreate.bind(this);
+        const kwargs = (args[0] || {}) as Record<string, unknown>;
+        return wrapper((...a: unknown[]) => original(...a), this, args, kwargs);
+      };
     } catch (error) {
-      console.error("Failed to instrument embeddings:", error);
+      console.error(`Failed to instrument embeddings: ${error}`);
     }
   }
 
@@ -211,66 +152,54 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      const responsesModule = require("openai/resources/responses");
-      const ResponsesClass = responsesModule.Responses;
-
-      if (ResponsesClass?.prototype?.create) {
-        const originalCreate = ResponsesClass.prototype.create;
-        originalMethods.set("responses.create", originalCreate);
-
-        const tracer = this.tracer;
-        // Create both sync and async wrappers for flexibility
-        const syncWrapper = responsesWrapper(tracer);
-        const asyncWrapper = aresponsesWrapper(tracer);
-
-        ResponsesClass.prototype.create = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalCreate.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-          
-          // Check if the original function is an async function
-          const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
-          
-          if (isAsyncFunction) {
-            // Use async wrapper for async functions
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            // Use sync wrapper for sync functions
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
-        };
+      const ResponsesClass: any = OpenAI.Responses;
+      if (!ResponsesClass?.prototype?.create) {
+        console.error("Failed to find OpenAI responses class to instrument");
+        return;
       }
+
+      const originalCreate = ResponsesClass.prototype.create;
+      originalMethods.set("responses.create", originalCreate);
+
+      const tracer = this.tracer;
+      const wrapper = responsesWrapper(tracer);
+
+      ResponsesClass.prototype.create = function (
+        this: unknown,
+        ...args: unknown[]
+      ): unknown {
+        const original = originalCreate.bind(this);
+        const kwargs = (args[0] || {}) as Record<string, unknown>;
+        return wrapper((...a: unknown[]) => original(...a), this, args, kwargs);
+      };
     } catch (error) {
-      console.error("Failed to instrument responses:", error);
+      console.error(`Failed to instrument responses: ${error}`);
     }
   }
 
   private _uninstrumentChatCompletions(): void {
     try {
-      const chatModule = require("openai/resources/chat/completions");
-      const CompletionsClass = chatModule.Completions;
-
+      const CompletionsClass = OpenAI.Chat?.Completions;
       const originalCreate = originalMethods.get("chat.completions.create");
-      if (originalCreate && CompletionsClass?.prototype) {
-        CompletionsClass.prototype.create = originalCreate;
+
+      if (originalCreate && CompletionsClass?.prototype?.create) {
+        CompletionsClass.prototype.create =
+          originalCreate as typeof CompletionsClass.prototype.create;
       }
     } catch (error) {
       console.error(`Failed to uninstrument chat completions: ${error}`);
     }
+    return;
   }
 
   private _uninstrumentEmbeddings(): void {
     try {
-      const embeddingsModule = require("openai/resources/embeddings");
-      const EmbeddingsClass = embeddingsModule.Embeddings;
-
+      const EmbeddingsClass = OpenAI.Embeddings;
       const originalCreate = originalMethods.get("embeddings.create");
-      if (originalCreate && EmbeddingsClass?.prototype) {
-        EmbeddingsClass.prototype.create = originalCreate;
+
+      if (originalCreate && EmbeddingsClass?.prototype?.create) {
+        EmbeddingsClass.prototype.create =
+          originalCreate as typeof EmbeddingsClass.prototype.create;
       }
     } catch (error) {
       console.error(`Failed to uninstrument embeddings: ${error}`);
@@ -279,12 +208,12 @@ export class NetraOpenAIInstrumentor {
 
   private _uninstrumentResponses(): void {
     try {
-      const responsesModule = require("openai/resources/responses");
-      const ResponsesClass = responsesModule.Responses;
-
+      const ResponsesClass = OpenAI.Responses;
       const originalCreate = originalMethods.get("responses.create");
-      if (originalCreate && ResponsesClass?.prototype) {
-        ResponsesClass.prototype.create = originalCreate;
+
+      if (originalCreate && ResponsesClass?.prototype?.create) {
+        ResponsesClass.prototype.create =
+          originalCreate as typeof ResponsesClass.prototype.create;
       }
     } catch (error) {
       console.error(`Failed to uninstrument responses: ${error}`);
@@ -298,11 +227,8 @@ export const openAIInstrumentor = new NetraOpenAIInstrumentor();
 // Re-export wrappers for advanced usage
 export {
   chatWrapper,
-  achatWrapper,
   embeddingsWrapper,
-  aembeddingsWrapper,
   responsesWrapper,
-  aresponsesWrapper,
   StreamingWrapper,
   AsyncStreamingWrapper,
 } from "./wrappers";
