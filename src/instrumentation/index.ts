@@ -10,7 +10,7 @@ import { groqInstrumentor } from "./groq";
 import { typeORMInstrumentor } from "./typeorm";
 import { createRequire } from "module";
 
-const require = createRequire(import.meta.url)
+const require = createRequire(import.meta.url);
 
 export function initInstrumentations(
   config: Config,
@@ -43,11 +43,17 @@ export function initInstrumentations(
     if (instruments.has(NetraInstruments.GROQ)) {
       useCustomGroq = true;
     }
-    if (instruments.has(NetraInstruments.GOOGLE_GENAI) || instruments.has(NetraInstruments.VERTEX_AI)) {
+    if (
+      instruments.has(NetraInstruments.GOOGLE_GENAI) ||
+      instruments.has(NetraInstruments.VERTEX_AI)
+    ) {
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
       instrumentModules.google_vertexai = true;
     }
-    if (instruments.has(NetraInstruments.LANGCHAIN) || instruments.has(NetraInstruments.LANGGRAPH)) {
+    if (
+      instruments.has(NetraInstruments.LANGCHAIN) ||
+      instruments.has(NetraInstruments.LANGGRAPH)
+    ) {
       // LangGraph is supported via LangChain instrumentation
       instrumentModules.langchain = true;
     }
@@ -126,7 +132,9 @@ function initOpenTelemetryInstrumentations(
     (!instruments || instruments.has(NetraInstruments.HTTP))
   ) {
     try {
-      const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
+      const {
+        HttpInstrumentation,
+      } = require("@opentelemetry/instrumentation-http");
       const httpInstrumentation = new HttpInstrumentation();
       // Note: This would need to be registered with the SDK
     } catch (e) {
@@ -156,16 +164,19 @@ function initOpenTelemetryInstrumentations(
     (!instruments || instruments.has(NetraInstruments.TYPEORM))
   ) {
     try {
-      typeORMInstrumentor.instrument().then(() => {
-        if (config.debugMode) {
-          console.debug("TypeORM instrumentation successfully initialized");
-        }
-      }).catch((e) => {
-        console.error("TypeORM instrumentation error:", e);
-        if (config.debugMode) {
-          console.debug("TypeORM instrumentation error details:", e);
-        }
-      });
+      typeORMInstrumentor
+        .instrument()
+        .then(() => {
+          if (config.debugMode) {
+            console.debug("TypeORM instrumentation successfully initialized");
+          }
+        })
+        .catch((e) => {
+          console.error("TypeORM instrumentation error:", e);
+          if (config.debugMode) {
+            console.debug("TypeORM instrumentation error details:", e);
+          }
+        });
       if (config.debugMode) {
         console.debug("TypeORM instrumentation initialization started");
       }
@@ -183,7 +194,9 @@ function initOpenTelemetryInstrumentations(
     (!instruments || instruments.has(NetraInstruments.EXPRESS))
   ) {
     try {
-      const { ExpressInstrumentation } = require("@opentelemetry/instrumentation-express");
+      const {
+        ExpressInstrumentation,
+      } = require("@opentelemetry/instrumentation-express");
       // Note: This would need to be registered with the SDK
     } catch (e) {
       if (config.debugMode) {
@@ -192,4 +205,3 @@ function initOpenTelemetryInstrumentations(
     }
   }
 }
-
