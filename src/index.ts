@@ -16,6 +16,7 @@ export { agent, span, task, workflow } from "./decorators";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
 export type { ActionModel, UsageModel } from "./types";
+export { NetraInstruments } from "./config";
 
 let _initialized = false;
 let _rootSpan: Span | undefined;
