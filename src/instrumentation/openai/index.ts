@@ -2,6 +2,7 @@
  * Custom OpenAI instrumentor for Netra SDK
  */
 
+import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { __version__ } from "./version";
 import {
@@ -12,6 +13,9 @@ import {
   responsesWrapper,
   aresponsesWrapper,
 } from "./wrappers";
+
+// Create require function for ESM compatibility
+const require = createRequire(import.meta.url);
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.openai";
 const INSTRUMENTS = ["openai >= 1.0.0"];
@@ -41,7 +45,7 @@ export class NetraOpenAIInstrumentor {
    * Returns the list of instrumentation dependencies
    */
   instrumentationDependencies(): string[] {
-    return [...INSTRUMENTS];
+    return INSTRUMENTS;
   }
 
   /**
@@ -115,61 +119,45 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const openai = require("openai");
-
-      // Get the Completions class from chat resources
-      const Completions = openai.OpenAI?.Chat?.Completions ?? openai.default?.Chat?.Completions;
-      const AsyncCompletions = openai.OpenAI?.Chat?.Completions ?? openai.default?.Chat?.Completions;
-
-      // Try to get from the resources path
-      let CompletionsClass: any;
-      let AsyncCompletionsClass: any;
-
       try {
         const chatModule = require("openai/resources/chat/completions");
-        CompletionsClass = chatModule.Completions;
-        AsyncCompletionsClass = chatModule.Completions; // In JS SDK, same class handles both
-      } catch {
-        // Fallback: try to patch via prototype on OpenAI instance
-        const OpenAI = openai.OpenAI ?? openai.default;
-        if (OpenAI?.prototype?.chat?.completions) {
-          CompletionsClass = OpenAI.prototype.chat.completions.constructor;
+        const CompletionsClass = chatModule.Completions;
+
+        if (CompletionsClass?.prototype?.create) {
+          const originalCreate = CompletionsClass.prototype.create;
+          originalMethods.set("chat.completions.create", originalCreate);
+
+          const tracer = this.tracer;
+          // Create both sync and async wrappers for flexibility
+          const syncWrapper = chatWrapper(tracer);
+          const asyncWrapper = achatWrapper(tracer);
+
+          CompletionsClass.prototype.create = function (
+            this: unknown,
+            ...args: unknown[]
+          ): unknown {
+            const original = originalCreate.bind(this);
+            const kwargs = (args[0] || {}) as Record<string, unknown>;
+            
+            // Check if the original function is an async function
+            const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
+            
+            if (isAsyncFunction) {
+              // Use async wrapper for async functions
+              const wrappedFunction = async (...a: unknown[]) => original(...a);
+              return asyncWrapper(wrappedFunction, this, args, kwargs);
+            } else {
+              // Use sync wrapper for sync functions
+              const wrappedFunction = (...a: unknown[]) => original(...a);
+              return syncWrapper(wrappedFunction, this, args, kwargs);
+            }
+          };
         }
-      }
-
-      if (CompletionsClass?.prototype?.create) {
-        const originalCreate = CompletionsClass.prototype.create;
-        originalMethods.set("chat.completions.create", originalCreate);
-
-        const tracer = this.tracer;
-        const wrapper = chatWrapper(tracer);
-        const asyncWrapper = achatWrapper(tracer);
-
-        CompletionsClass.prototype.create = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalCreate.bind(this);
-          // First argument is the kwargs/options object
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-          const result = original(...args);
-
-          // Check if result is a Promise (async call)
-          if (result && typeof result.then === "function") {
-            return asyncWrapper(
-              (...a: unknown[]) => original(...a),
-              this,
-              args,
-              kwargs
-            );
-          }
-
-          return wrapper((...a: unknown[]) => original(...a), this, args, kwargs);
-        };
+      } catch {
+        console.error("Failed to instrument chat completions");
       }
     } catch (error) {
-      console.error(`Failed to instrument chat completions: ${error}`);
+      console.error("Failed to instrument chat completions:", error);
     }
   }
 
@@ -177,50 +165,45 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      let EmbeddingsClass: any;
-
       try {
         const embeddingsModule = require("openai/resources/embeddings");
-        EmbeddingsClass = embeddingsModule.Embeddings;
-      } catch {
-        // Fallback approach
-        const openai = require("openai");
-        const OpenAI = openai.OpenAI ?? openai.default;
-        if (OpenAI?.prototype?.embeddings) {
-          EmbeddingsClass = OpenAI.prototype.embeddings.constructor;
+        const EmbeddingsClass = embeddingsModule.Embeddings;
+        
+        if (EmbeddingsClass?.prototype?.create) {
+          const originalCreate = EmbeddingsClass.prototype.create;
+          originalMethods.set("embeddings.create", originalCreate);
+
+          const tracer = this.tracer;
+          // Create both sync and async wrappers for flexibility
+          const syncWrapper = embeddingsWrapper(tracer);
+          const asyncWrapper = aembeddingsWrapper(tracer);
+
+          EmbeddingsClass.prototype.create = function (
+            this: unknown,
+            ...args: unknown[]
+          ): unknown {
+            const original = originalCreate.bind(this);
+            const kwargs = (args[0] || {}) as Record<string, unknown>;
+            
+            // Check if the original function is an async function
+            const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
+            
+            if (isAsyncFunction) {
+              // Use async wrapper for async functions
+              const wrappedFunction = async (...a: unknown[]) => original(...a);
+              return asyncWrapper(wrappedFunction, this, args, kwargs);
+            } else {
+              // Use sync wrapper for sync functions
+              const wrappedFunction = (...a: unknown[]) => original(...a);
+              return syncWrapper(wrappedFunction, this, args, kwargs);
+            }
+          };
         }
-      }
-
-      if (EmbeddingsClass?.prototype?.create) {
-        const originalCreate = EmbeddingsClass.prototype.create;
-        originalMethods.set("embeddings.create", originalCreate);
-
-        const tracer = this.tracer;
-        const wrapper = embeddingsWrapper(tracer);
-        const asyncWrapper = aembeddingsWrapper(tracer);
-
-        EmbeddingsClass.prototype.create = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalCreate.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-          const result = original(...args);
-
-          if (result && typeof result.then === "function") {
-            return asyncWrapper(
-              (...a: unknown[]) => original(...a),
-              this,
-              args,
-              kwargs
-            );
-          }
-
-          return wrapper((...a: unknown[]) => original(...a), this, args, kwargs);
-        };
+      } catch (error) {
+        console.error(`Failed to instrument embeddings: ${error}`);
       }
     } catch (error) {
-      console.error(`Failed to instrument embeddings: ${error}`);
+      console.error("Failed to instrument embeddings:", error);
     }
   }
 
@@ -228,22 +211,16 @@ export class NetraOpenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      let ResponsesClass: any;
-
-      try {
-        const responsesModule = require("openai/resources/responses");
-        ResponsesClass = responsesModule.Responses;
-      } catch {
-        // Responses API might not exist in older versions
-        return;
-      }
+      const responsesModule = require("openai/resources/responses");
+      const ResponsesClass = responsesModule.Responses;
 
       if (ResponsesClass?.prototype?.create) {
         const originalCreate = ResponsesClass.prototype.create;
         originalMethods.set("responses.create", originalCreate);
 
         const tracer = this.tracer;
-        const wrapper = responsesWrapper(tracer);
+        // Create both sync and async wrappers for flexibility
+        const syncWrapper = responsesWrapper(tracer);
         const asyncWrapper = aresponsesWrapper(tracer);
 
         ResponsesClass.prototype.create = function (
@@ -252,22 +229,23 @@ export class NetraOpenAIInstrumentor {
         ): unknown {
           const original = originalCreate.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-          const result = original(...args);
-
-          if (result && typeof result.then === "function") {
-            return asyncWrapper(
-              (...a: unknown[]) => original(...a),
-              this,
-              args,
-              kwargs
-            );
+          
+          // Check if the original function is an async function
+          const isAsyncFunction = originalCreate.constructor.name === "AsyncFunction";
+          
+          if (isAsyncFunction) {
+            // Use async wrapper for async functions
+            const wrappedFunction = async (...a: unknown[]) => original(...a);
+            return asyncWrapper(wrappedFunction, this, args, kwargs);
+          } else {
+            // Use sync wrapper for sync functions
+            const wrappedFunction = (...a: unknown[]) => original(...a);
+            return syncWrapper(wrappedFunction, this, args, kwargs);
           }
-
-          return wrapper((...a: unknown[]) => original(...a), this, args, kwargs);
         };
       }
     } catch (error) {
-      console.error(`Failed to instrument responses: ${error}`);
+      console.error("Failed to instrument responses:", error);
     }
   }
 
@@ -338,4 +316,3 @@ export {
 } from "./utils";
 
 export { __version__ } from "./version";
-
