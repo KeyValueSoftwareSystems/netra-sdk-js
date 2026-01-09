@@ -40,7 +40,8 @@
     "@opentelemetry/core": "^2.0.1",
     "@opentelemetry/resources": "^2.0.1",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
-    "@traceloop/node-server-sdk": "^0.22.5"
+    "@traceloop/node-server-sdk": "^0.22.5",
+    "openai": "^6.15.0"
   },
   "peerDependencies": {
     "@opentelemetry/instrumentation-http": "^0.52.0",
