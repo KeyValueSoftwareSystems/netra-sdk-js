@@ -205,3 +205,39 @@ function initOpenTelemetryInstrumentations(
     }
   }
 }
+
+/**
+ * Uninstrument all active instrumentations
+ * Should be called during shutdown
+ */
+export function uninstrumentAll(): void {
+  // Uninstrument custom OpenAI instrumentation
+  try {
+    if (openAIInstrumentor.isInstrumented()) {
+      openAIInstrumentor.uninstrument();
+      console.debug("Custom OpenAI instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument OpenAI:", e);
+  }
+
+  // Uninstrument custom Groq instrumentation
+  try {
+    if (groqInstrumentor.isInstrumented()) {
+      groqInstrumentor.uninstrument();
+      console.debug("Custom Groq instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument Groq:", e);
+  }
+
+  // Uninstrument custom TypeORM instrumentation
+  try {
+    if (typeORMInstrumentor.isInstrumented()) {
+      typeORMInstrumentor.uninstrument();
+      console.debug("Custom TypeORM instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument TypeORM:", e);
+  }
+}
