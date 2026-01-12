@@ -1,43 +1,62 @@
-import {
-  Tracer,
-  Span,
-  SpanKind,
-  SpanStatusCode,
-} from "@opentelemetry/api";
+import { Tracer, Span, SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
   modelAsDict,
-  setRequestAttributes,
-  setResponseAttributes,
+  isPromise,
   shouldSuppressInstrumentation,
-} from "./utils";
+} from "../utils";
+
+type GroqRequestType = "chat";
 
 const CHAT_SPAN_NAME = "groq.chat";
-type WrappedFunction = (...args: unknown[]) => unknown;
+const STREAM_ENABLED_REQUESTS: GroqRequestType[] = ["chat"];
 
-export function chatWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
+function groqWrapper(
+  tracer: Tracer,
+  spanName: string,
+  requestType: GroqRequestType
+) {
+  return function wrapper<F extends (...args: any[]) => any>(
+    wrapped: F,
     instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
+    args: Parameters<F>,
+    kwargs: Record<string, unknown> & { stream?: boolean }
   ): unknown {
     if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((value) => value) : result;
     }
 
     const isStreaming = kwargs.stream === true;
-
-    if (isStreaming) {
-      const span = tracer.startSpan(CHAT_SPAN_NAME, {
+    if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
+      const span = tracer.startSpan(spanName, {
         kind: SpanKind.CLIENT,
-        attributes: { "llm.request.type": "chat" },
+        attributes: { "llm.request.type": requestType },
       });
 
       try {
-        setRequestAttributes(span, kwargs, "chat");
+        setRequestAttributes(span, kwargs, requestType);
         const startTime = Date.now();
-        const responsePromise = wrapped.call(instance, ...args) as Promise<AsyncIterable<unknown>>;
-        return new StreamingWrapper(span, responsePromise, startTime, kwargs);
+        const response = wrapped.call(instance, ...args);
+        if (isPromise(response)) {
+          return (async () => {
+            try {
+              const stream: any = await response;
+              return new StreamingWrapper(span, stream, startTime, kwargs);
+            } catch (error) {
+              console.error("netra.instrumentation.groq:", error);
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: error instanceof Error ? error.message : String(error),
+              });
+              span.recordException(error as Error);
+              span.end();
+              throw error;
+            }
+          })();
+        } else {
+          return new StreamingWrapper(span, response, startTime, kwargs);
+        }
       } catch (error) {
         console.error("netra.instrumentation.groq:", error);
         span.setStatus({
@@ -49,20 +68,55 @@ export function chatWrapper(tracer: Tracer) {
         throw error;
       }
     } else {
-      const result = tracer.startActiveSpan(
-        CHAT_SPAN_NAME,
-        { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "chat" } },
-        async (span: Span) => {
-          const startTime = Date.now();
+      return tracer.startActiveSpan(
+        spanName,
+        {
+          kind: SpanKind.CLIENT,
+          attributes: { "llm.request.type": requestType },
+        },
+        (span: Span) => {
           try {
-            setRequestAttributes(span, kwargs, "chat");
-            const response = await (wrapped.call(instance, ...args) as Promise<unknown>);
-            const endTime = Date.now();
-            const responseDict = modelAsDict(response);
-            setResponseAttributes(span, responseDict);
-            span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
-            span.setStatus({ code: SpanStatusCode.OK });
-            return response;
+            setRequestAttributes(span, kwargs, requestType);
+            const startTime = Date.now();
+            const response = wrapped.call(instance, ...args);
+            if (isPromise(response)) {
+              return (async () => {
+                try {
+                  const value = await response;
+                  const endTime = Date.now();
+                  const responseDict = modelAsDict(value);
+                  setResponseAttributes(span, responseDict);
+                  span.setAttribute(
+                    "llm.response.duration",
+                    (endTime - startTime) / 1000
+                  );
+                  span.setStatus({ code: SpanStatusCode.OK });
+                  span.end();
+                  return value;
+                } catch (error) {
+                  console.error("netra.instrumentation.groq:", error);
+                  span.setStatus({
+                    code: SpanStatusCode.ERROR,
+                    message:
+                      error instanceof Error ? error.message : String(error),
+                  });
+                  span.recordException(error as Error);
+                  span.end();
+                  throw error;
+                }
+              })();
+            } else {
+              const endTime = Date.now();
+              const responseDict = modelAsDict(response);
+              setResponseAttributes(span, responseDict);
+              span.setAttribute(
+                "llm.response.duration",
+                (endTime - startTime) / 1000
+              );
+              span.setStatus({ code: SpanStatusCode.OK });
+              span.end();
+              return response;
+            }
           } catch (error) {
             console.error("netra.instrumentation.groq:", error);
             span.setStatus({
@@ -70,17 +124,17 @@ export function chatWrapper(tracer: Tracer) {
               message: error instanceof Error ? error.message : String(error),
             });
             span.recordException(error as Error);
-            throw error;
-          } finally {
             span.end();
+            throw error;
           }
         }
       );
-      return result;
     }
   };
 }
 
+export const chatWrapper = (tracer: Tracer) =>
+  groqWrapper(tracer, CHAT_SPAN_NAME, "chat");
 
 export class StreamingWrapper implements AsyncIterator<unknown> {
   private span: Span;
@@ -121,7 +175,9 @@ export class StreamingWrapper implements AsyncIterator<unknown> {
   }
 
   private ensureChoice(index: number): void {
-    const choices = this.completeResponse.choices as Array<Record<string, unknown>>;
+    const choices = this.completeResponse.choices as Array<
+      Record<string, unknown>
+    >;
     while (choices.length <= index) {
       if (this.isChat()) {
         choices.push({ message: { role: "assistant", content: "" } });
@@ -141,7 +197,7 @@ export class StreamingWrapper implements AsyncIterator<unknown> {
       if (!this.responseIterator) {
         throw new Error("Response iterator not initialized");
       }
-      
+
       const result = await this.responseIterator.next();
       if (result.done) {
         this.finalizeSpan();
@@ -157,13 +213,17 @@ export class StreamingWrapper implements AsyncIterator<unknown> {
 
   private processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
-    const choices = this.completeResponse.choices as Array<Record<string, unknown>>;
+    const choices = this.completeResponse.choices as Array<
+      Record<string, unknown>
+    >;
 
     if (chunkDict.model) {
       this.completeResponse.model = chunkDict.model;
     }
 
-    const chunkChoices = (chunkDict.choices || []) as Array<Record<string, unknown>>;
+    const chunkChoices = (chunkDict.choices || []) as Array<
+      Record<string, unknown>
+    >;
     if (Array.isArray(chunkChoices)) {
       for (const choice of chunkChoices) {
         const index = Number(choice.index || 0);
@@ -202,4 +262,3 @@ export class StreamingWrapper implements AsyncIterator<unknown> {
     this.span.end();
   }
 }
-
