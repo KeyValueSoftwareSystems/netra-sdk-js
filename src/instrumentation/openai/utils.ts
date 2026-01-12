@@ -3,7 +3,7 @@
  */
 
 import { Span, context } from "@opentelemetry/api";
-import { SpanAttributes } from "./attributes";
+import { SpanAttributes } from "../span-attributes";
 
 // Suppression key for instrumentation
 const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
