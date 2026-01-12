@@ -1,9 +1,7 @@
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
-import { createRequire } from "module";
 import { __version__ } from "./version";
 import { chatWrapper } from "./wrappers";
-
-const require = createRequire(import.meta.url);
+import { Groq } from "groq-sdk";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.groq";
 const INSTRUMENTS = ["groq-sdk >= 0.0.1"];
@@ -73,8 +71,7 @@ export class NetraGroqInstrumentor {
     }
 
     try {
-      const chatModule = require("groq-sdk/resources/chat/completions");
-      const CompletionsClass = chatModule.Completions;
+      const CompletionsClass = Groq.Chat.Completions;
 
       if (!CompletionsClass?.prototype?.create) {
         console.error(
@@ -82,7 +79,7 @@ export class NetraGroqInstrumentor {
         );
         return;
       }
-      const originalCreate = CompletionsClass.prototype.create;
+      const originalCreate = CompletionsClass.prototype.create as Function;
       originalMethods.set("chat.completions.create", originalCreate);
 
       const tracer = this.tracer;
@@ -96,7 +93,7 @@ export class NetraGroqInstrumentor {
         const kwargs = (args[0] || {}) as Record<string, unknown>;
         const wrappedFn = (...a: unknown[]) => original(...a);
         return wrapper(wrappedFn, this, args, kwargs);
-      };
+      } as typeof CompletionsClass.prototype.create;
     } catch (error) {
       console.error(
         `Groq instrumentation: Failed to instrument chat completions: ${error}`
@@ -106,12 +103,12 @@ export class NetraGroqInstrumentor {
 
   private _uninstrumentChatCompletions(): void {
     try {
-      const chatModule = require("groq-sdk/resources/chat/completions");
-      const CompletionsClass = chatModule.Completions;
+      const CompletionsClass = Groq.Chat.Completions;
 
       const originalCreate = originalMethods.get("chat.completions.create");
       if (originalCreate && CompletionsClass?.prototype) {
-        CompletionsClass.prototype.create = originalCreate;
+        CompletionsClass.prototype.create =
+          originalCreate as typeof CompletionsClass.prototype.create;
       }
     } catch (error) {
       console.error(`Failed to uninstrument chat completions: ${error}`);
@@ -123,11 +120,6 @@ export const groqInstrumentor = new NetraGroqInstrumentor();
 
 export { chatWrapper } from "./wrappers";
 
-export {
-  modelAsDict,
-  setRequestAttributes,
-  setResponseAttributes,
-  shouldSuppressInstrumentation,
-} from "./utils";
+export { setRequestAttributes, setResponseAttributes } from "./utils";
 
 export { __version__ } from "./version";

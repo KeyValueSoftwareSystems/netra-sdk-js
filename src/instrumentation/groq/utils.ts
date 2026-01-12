@@ -1,155 +1,215 @@
-import { Span, context } from "@opentelemetry/api";
-
-const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
-
-export function shouldSuppressInstrumentation(): boolean {
-  const ctx = context.active();
-  return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
-}
-
-export function modelAsDict(obj: unknown): Record<string, unknown> {
-  if (!obj || typeof obj !== "object") {
-    return {};
-  }
-
-  if ("toJSON" in obj && typeof (obj as any).toJSON === "function") {
-    return (obj as any).toJSON();
-  }
-
-  if (obj.constructor === Object) {
-    return { ...obj } as Record<string, unknown>;
-  }
-
-  try {
-    return JSON.parse(JSON.stringify(obj));
-  } catch {
-    return {};
-  }
-}
+import { Span } from "@opentelemetry/api";
+import { SpanAttributes } from "../span-attributes";
+import { isDict } from "../utils";
 
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
   requestType: string
 ): void {
-  span.setAttribute("llm.request.type", requestType);
-  span.setAttribute("gen_ai.system", "groq");
-
-  if (kwargs.model) {
-    span.setAttribute("gen_ai.request.model", String(kwargs.model));
-    span.setAttribute("llm.request.model", String(kwargs.model));
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
   }
 
-  if (kwargs.temperature !== undefined) {
-    span.setAttribute("gen_ai.request.temperature", Number(kwargs.temperature));
-    span.setAttribute("llm.request.temperature", Number(kwargs.temperature));
-  }
+  span.setAttribute(SpanAttributes.LLM_REQUEST_TYPE, requestType);
+  span.setAttribute(SpanAttributes.LLM_SYSTEM, "groq");
 
-  if (kwargs.max_tokens !== undefined) {
-    span.setAttribute("gen_ai.request.max_tokens", Number(kwargs.max_tokens));
-    span.setAttribute("llm.request.max_tokens", Number(kwargs.max_tokens));
-  }
+  const attributeMappings = {
+    model: SpanAttributes.LLM_REQUEST_MODEL,
+    temperature: SpanAttributes.LLM_REQUEST_TEMPERATURE,
+    max_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+    max_completion_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+    max_tokens_to_sample: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+    frequency_penalty: SpanAttributes.LLM_FREQUENCY_PENALTY,
+    presence_penalty: SpanAttributes.LLM_PRESENCE_PENALTY,
+    reasoning_effort: SpanAttributes.LLM_REQUEST_REASONING_EFFORT,
+    stop: SpanAttributes.LLM_CHAT_STOP_SEQUENCES,
+    stream: SpanAttributes.LLM_IS_STREAMING,
+    top_p: SpanAttributes.LLM_REQUEST_TOP_P,
+  };
 
-  if (kwargs.top_p !== undefined) {
-    span.setAttribute("gen_ai.request.top_p", Number(kwargs.top_p));
-    span.setAttribute("llm.request.top_p", Number(kwargs.top_p));
-  }
-
-  if (kwargs.frequency_penalty !== undefined) {
-    span.setAttribute("llm.request.frequency_penalty", Number(kwargs.frequency_penalty));
-  }
-
-  if (kwargs.presence_penalty !== undefined) {
-    span.setAttribute("llm.request.presence_penalty", Number(kwargs.presence_penalty));
-  }
-
-  if (kwargs.stream !== undefined) {
-    span.setAttribute("llm.request.stream", Boolean(kwargs.stream));
+  for (let [key, attribute] of Object.entries(attributeMappings)) {
+    const value: any = kwargs[key];
+    if (value !== undefined) {
+      span.setAttribute(attribute, value);
+    }
   }
 
   if (Array.isArray(kwargs.messages)) {
-    span.setAttribute("llm.request.message_count", kwargs.messages.length);
-    
-    //TODO: Need to confirm whether we need to add the prompt to the span
-    if (kwargs.messages.length > 0) {
-      try {
-        const messagesJson = JSON.stringify(kwargs.messages);
-        const maxLen = 50000;
-        const truncatedMessages = messagesJson.length > maxLen 
-          ? messagesJson.substring(0, maxLen) + "..."
-          : messagesJson;
-        
-        span.setAttribute("llm.request.messages", truncatedMessages);
-        
-        const userMessages = kwargs.messages.filter(
-          (msg: any) => msg.role === "user"
-        );
-        if (userMessages.length > 0) {
-          const lastUserMessage = userMessages[userMessages.length - 1];
-          if (lastUserMessage.content && typeof lastUserMessage.content === "string") {
-            const prompt = lastUserMessage.content.length > maxLen
-              ? lastUserMessage.content.substring(0, maxLen) + "..."
-              : lastUserMessage.content;
-            span.setAttribute("llm.prompt", prompt);
-          }
-        }
-      } catch (e) {
+    const messages = kwargs.messages;
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i];
+      if (!isDict(message)) {
+        continue;
       }
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
+        message?.role ?? "user"
+      );
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+        String(message?.content ?? "")
+      );
     }
   }
-}
 
+  if (typeof kwargs.prompt === "string") {
+    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.role`, "user");
+    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.content`, kwargs.prompt);
+  }
+}
 
 export function setResponseAttributes(
   span: Span,
   response: Record<string, unknown>
 ): void {
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
+  }
+
   if (response.id) {
-    span.setAttribute("gen_ai.response.id", String(response.id));
     span.setAttribute("llm.response.id", String(response.id));
   }
 
   if (response.model) {
-    span.setAttribute("gen_ai.response.model", String(response.model));
-    span.setAttribute("llm.response.model", String(response.model));
+    span.setAttribute(
+      SpanAttributes.LLM_RESPONSE_MODEL,
+      String(response.model)
+    );
   }
 
+  _setUsageAttributes(span, response);
+  _setResponseMessageAttributes(span, response);
+}
+
+function _setUsageAttributes(
+  span: Span,
+  response: Record<string, unknown>
+): void {
   const usage = response.usage as Record<string, unknown> | undefined;
-  if (usage) {
-    if (usage.prompt_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.prompt_tokens", Number(usage.prompt_tokens));
-      span.setAttribute("llm.usage.prompt_tokens", Number(usage.prompt_tokens));
-    }
-    if (usage.completion_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.completion_tokens", Number(usage.completion_tokens));
-      span.setAttribute("llm.usage.completion_tokens", Number(usage.completion_tokens));
-    }
-    if (usage.total_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.total_tokens", Number(usage.total_tokens));
-      span.setAttribute("llm.usage.total_tokens", Number(usage.total_tokens));
-    }
+  if (!usage) return;
+
+  const promptTokens = usage.prompt_tokens || usage.input_tokens;
+  if (promptTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+      Number(promptTokens)
+    );
   }
 
-  const choices = response.choices as Array<Record<string, unknown>> | undefined;
-  if (choices && choices.length > 0) {
-    const firstChoice = choices[0];
-    if (firstChoice.finish_reason) {
-      span.setAttribute("gen_ai.response.finish_reason", String(firstChoice.finish_reason));
-      span.setAttribute("llm.response.finish_reason", String(firstChoice.finish_reason));
+  const completionTokens = usage.completion_tokens || usage.output_tokens;
+  if (completionTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+      Number(completionTokens)
+    );
+  }
+
+  const totalTokens = usage.total_tokens;
+  if (totalTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+      Number(totalTokens)
+    );
+  }
+
+  const cacheTokens = (
+    (usage.prompt_tokens_details || usage.input_tokens_details) as {
+      cached_tokens?: unknown;
     }
-    
-    //TODO: Need to confirm whether we need to add the resonse to the span
-    try {
-      const message = firstChoice.message as Record<string, unknown> | undefined;
-      if (message && message.content && typeof message.content === "string") {
-        const maxLen = 50000;
-        const content = message.content.length > maxLen
-          ? message.content.substring(0, maxLen) + "..."
-          : message.content;
-        span.setAttribute("llm.response.content", content);
-      }
-    } catch (e) {
+  )?.cached_tokens;
+  if (cacheTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS,
+      Number(cacheTokens)
+    );
+  }
+
+  const reasoningTokens = (
+    (usage.completion_tokens_details || usage.output_tokens_details) as {
+      reasoning_tokens?: unknown;
     }
+  )?.reasoning_tokens;
+  if (reasoningTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_REASONING_TOKENS,
+      Number(reasoningTokens)
+    );
   }
 }
 
+function _setResponseMessageAttributes(
+  span: Span,
+  response: Record<string, unknown>
+): void {
+  let messageIndex = 0;
+  if (response.output_text) {
+    span.setAttribute(
+      `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+      "assistant"
+    );
+    span.setAttribute(
+      `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+      String(response.output_text)
+    );
+  }
+
+  if (response.output !== undefined) {
+    for (let element of response.output as Array<Record<string, unknown>>) {
+      if (element.content === undefined) continue;
+      for (let chunk of element.content as Array<Record<string, unknown>>) {
+        if (chunk.text === undefined) continue;
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+          "assistant"
+        );
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+          String(chunk.text)
+        );
+        messageIndex += 1;
+      }
+    }
+  }
+
+  // Handle choices
+  const choices = response.choices as Array<Record<string, any>> | undefined;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      const message = choice.message;
+      if (message !== undefined) {
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+          message.role ?? "assistant"
+        );
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+          String(message.content ?? "")
+        );
+        messageIndex++;
+      } else {
+        const delta = choice.delta;
+        if (delta !== undefined) {
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+            delta.role ?? "assistant"
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+            String(delta.content ?? "")
+          );
+          messageIndex++;
+        }
+      }
+
+      if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.finish_reason`,
+          choice.finish_reason
+        );
+      }
+    }
+  }
+}
