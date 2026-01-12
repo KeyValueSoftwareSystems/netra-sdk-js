@@ -1,3 +1,6 @@
+// TODO: Replace this temporary implementation with the official OpenTelemetry GenAI semantic conventions
+// when they are published for the JavaScript SDK.
+
 export const SpanAttributes = {
   LLM_SYSTEM: "gen_ai.system",
 
