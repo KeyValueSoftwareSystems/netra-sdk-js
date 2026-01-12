@@ -2,45 +2,9 @@
  * Utility functions for OpenAI instrumentation
  */
 
-import { Span, context } from "@opentelemetry/api";
+import { Span } from "@opentelemetry/api";
 import { SpanAttributes } from "../span-attributes";
-
-// Suppression key for instrumentation
-const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
-
-/**
- * Check if instrumentation should be suppressed
- */
-export function shouldSuppressInstrumentation(): boolean {
-  const ctx = context.active();
-  return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
-}
-
-/**
- * Convert a model/response object to a plain dictionary
- */
-export function modelAsDict(obj: unknown): Record<string, unknown> {
-  if (!obj || typeof obj !== "object") {
-    return {};
-  }
-
-  // If it has a toJSON method (like OpenAI SDK responses), use it
-  if ("toJSON" in obj && typeof (obj as any).toJSON === "function") {
-    return (obj as any).toJSON();
-  }
-
-  // If it's already a plain object, return a shallow copy
-  if (obj.constructor === Object) {
-    return { ...obj } as Record<string, unknown>;
-  }
-
-  // Try to convert class instance to plain object
-  try {
-    return JSON.parse(JSON.stringify(obj));
-  } catch {
-    return {};
-  }
-}
+import { isDict } from "../utils";
 
 /**
  * Set request attributes on span
@@ -88,9 +52,8 @@ export function setRequestAttributes(
   }
 
   if (requestType === "chat") {
-    const messages = kwargs.messages;
-    if (Array.isArray(messages)) {
-      _setChatCompletionInput(span, messages);
+    if (Array.isArray(kwargs.messages)) {
+      _setChatCompletionInput(span, kwargs.messages);
     }
   } else if (requestType === "response") {
     _setChatResponseInput(span, kwargs);
@@ -262,7 +225,7 @@ function _setUsageAttributes(
 function _setResponseMessageAttributes(
   span: Span,
   response: Record<string, unknown>
-): number {
+): void {
   let messageIndex = 0;
   if (response.output_text) {
     span.setAttribute(
@@ -288,7 +251,7 @@ function _setResponseMessageAttributes(
           `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
           String(chunk.text)
         );
-        messageIndex += 1;
+        messageIndex++;
       }
     }
   }
@@ -305,7 +268,7 @@ function _setResponseMessageAttributes(
         );
         span.setAttribute(
           `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-          (message as any)["content"] ?? ""
+          String(message.content ?? "")
         );
         messageIndex++;
       } else {
@@ -331,9 +294,4 @@ function _setResponseMessageAttributes(
       }
     }
   }
-
-  return messageIndex;
 }
-
-const isDict = (v: unknown): v is Record<string, any> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
