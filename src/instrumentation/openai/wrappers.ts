@@ -85,11 +85,11 @@ function openAIWrapper(
             setRequestAttributes(span, kwargs, requestType);
             const startTime = Date.now();
             const response = wrapped.call(instance, ...args);
-            const endTime = Date.now();
             if (isPromise(response)) {
               return (async () => {
                 try {
                   const value = await response;
+                  const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
                   span.setAttribute(
@@ -112,6 +112,7 @@ function openAIWrapper(
                 }
               })();
             } else {
+              const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
               span.setAttribute(
