@@ -1,26 +1,22 @@
 import { Tracer, Span, SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
   modelAsDict,
-  setRequestAttributes,
-  setResponseAttributes,
+  isPromise,
   shouldSuppressInstrumentation,
-} from "./utils";
+} from "../utils";
 
-type RequestType = "chat" | "embedding" | "response";
-
-function isPromise<T>(value: unknown): value is Promise<T> {
-  return value instanceof Promise;
-}
+type OpenAIRequestType = "chat" | "embedding" | "response";
 
 const CHAT_SPAN_NAME = "openai.chat";
 const EMBEDDING_SPAN_NAME = "openai.embedding";
 const RESPONSE_SPAN_NAME = "openai.response";
-const STREAM_ENABLED_REQUESTS: RequestType[] = ["chat", "response"];
+const STREAM_ENABLED_REQUESTS: OpenAIRequestType[] = ["chat", "response"];
 
 function openAIWrapper(
   tracer: Tracer,
   spanName: string,
-  requestType: RequestType
+  requestType: OpenAIRequestType
 ) {
   return function wrapper<F extends (...args: any[]) => any>(
     wrapped: F,

@@ -1,9 +1,7 @@
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { __version__ } from "./version";
-import {
-  chatWrapper,
-} from "./wrappers";
+import { chatWrapper } from "./wrappers";
 
 const require = createRequire(import.meta.url);
 
@@ -20,8 +18,7 @@ export class NetraGroqInstrumentor {
   private tracer: Tracer | null = null;
   private tracerProvider?: TracerProvider;
 
-  constructor() {
-  }
+  constructor() {}
   instrumentationDependencies(): string[] {
     return INSTRUMENTS;
   }
@@ -79,27 +76,31 @@ export class NetraGroqInstrumentor {
       const chatModule = require("groq-sdk/resources/chat/completions");
       const CompletionsClass = chatModule.Completions;
 
-      if (CompletionsClass?.prototype?.create) {
-        const originalCreate = CompletionsClass.prototype.create;
-        originalMethods.set("chat.completions.create", originalCreate);
-
-        const tracer = this.tracer;
-        const wrapper = chatWrapper(tracer);
-
-        CompletionsClass.prototype.create = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalCreate.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-          const wrappedFn = (...a: unknown[]) => original(...a);
-          return wrapper(wrappedFn, this, args, kwargs);
-        };
-      } else {
-        console.error("Groq instrumentation: Could not find Groq chat completions class to instrument");
+      if (!CompletionsClass?.prototype?.create) {
+        console.error(
+          "Groq instrumentation: Could not find Groq chat completions class to instrument"
+        );
+        return;
       }
+      const originalCreate = CompletionsClass.prototype.create;
+      originalMethods.set("chat.completions.create", originalCreate);
+
+      const tracer = this.tracer;
+      const wrapper = chatWrapper(tracer);
+
+      CompletionsClass.prototype.create = function (
+        this: unknown,
+        ...args: unknown[]
+      ): unknown {
+        const original = originalCreate.bind(this);
+        const kwargs = (args[0] || {}) as Record<string, unknown>;
+        const wrappedFn = (...a: unknown[]) => original(...a);
+        return wrapper(wrappedFn, this, args, kwargs);
+      };
     } catch (error) {
-      console.error(`Groq instrumentation: Failed to instrument chat completions: ${error}`);
+      console.error(
+        `Groq instrumentation: Failed to instrument chat completions: ${error}`
+      );
     }
   }
 
@@ -120,9 +121,7 @@ export class NetraGroqInstrumentor {
 
 export const groqInstrumentor = new NetraGroqInstrumentor();
 
-export {
-  chatWrapper,
-} from "./wrappers";
+export { chatWrapper } from "./wrappers";
 
 export {
   modelAsDict,
