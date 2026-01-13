@@ -7,16 +7,17 @@
 import { Span, SpanKind, trace } from "@opentelemetry/api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, uninstrumentAll } from "./instrumentation";
-import { groqInstrumentor } from "./instrumentation/groq";
 import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
+export { NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
 export type { ActionModel, UsageModel } from "./types";
-export { NetraInstruments } from "./config";
+// Expose provider instrumentors for advanced usage/testing
+export { mistralAIInstrumentor } from "./instrumentation/mistralai";
 
 let _initialized = false;
 let _rootSpan: Span | undefined;
@@ -54,6 +55,11 @@ export class Netra {
     this._initialized = true;
     console.info("Netra successfully initialized.");
 
+    // Ensure cleanup at process exit (even if root span is disabled)
+    process.on("exit", () => {
+      this.shutdown();
+    });
+
     // Create root span if enabled
     if (cfg.enableRootSpan) {
       const tracer = trace.getTracer("netra.root.span");
@@ -75,11 +81,6 @@ export class Netra {
       }
 
       console.info("Netra root span created and attached to context.");
-
-      // Ensure cleanup at process exit
-      process.on("exit", () => {
-        this.shutdown();
-      });
     }
   }
 
@@ -87,7 +88,7 @@ export class Netra {
    * Optional cleanup to end the root span and uninstrument all
    */
   static shutdown(): void {
-    // Uninstrument all active instrumentations
+    // Unpatch any monkey-patched instrumentations first
     try {
       uninstrumentAll();
     } catch (e) {
@@ -101,10 +102,6 @@ export class Netra {
       } finally {
         _rootSpan = undefined;
       }
-    }
-
-    if (groqInstrumentor.isInstrumented()) {
-      groqInstrumentor.uninstrument();
     }
 
     try {
