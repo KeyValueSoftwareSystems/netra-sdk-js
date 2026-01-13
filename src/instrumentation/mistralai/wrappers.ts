@@ -3,6 +3,7 @@
  */
 
 import { Span, SpanKind, SpanStatusCode, Tracer } from "@opentelemetry/api";
+import { isPromise } from "../utils";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -12,217 +13,78 @@ import {
 
 // Span names
 const CHAT_SPAN_NAME = "mistralai.chat";
-const CHAT_STREAM_SPAN_NAME = "mistralai.chat.stream";
 const EMBEDDING_SPAN_NAME = "mistralai.embedding";
 const FIM_SPAN_NAME = "mistralai.fim";
-const FIM_STREAM_SPAN_NAME = "mistralai.fim.stream";
 const AGENTS_SPAN_NAME = "mistralai.agents";
-const AGENTS_STREAM_SPAN_NAME = "mistralai.agents.stream";
+// Align with OpenAI/Groq: streaming uses same span name
+const CHAT_STREAM_SPAN_NAME = CHAT_SPAN_NAME;
+const FIM_STREAM_SPAN_NAME = FIM_SPAN_NAME;
+const AGENTS_STREAM_SPAN_NAME = AGENTS_SPAN_NAME;
 
-type WrappedFunction = (...args: unknown[]) => unknown;
-type AsyncWrappedFunction = (...args: unknown[]) => Promise<unknown>;
+type MistralRequestType = "chat" | "embedding" | "fim" | "agent";
 
-/**
- * Wrapper factory for chat completions (sync)
- */
-export function chatWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
+function mistralWrapper(
+  tracer: Tracer,
+  spanName: string,
+  requestType: MistralRequestType
+) {
+  return function wrapper<F extends (...args: any[]) => any>(
+    wrapped: F,
     instance: unknown,
-    args: unknown[],
+    args: Parameters<F>,
     kwargs: Record<string, unknown>
   ): unknown {
     if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((value) => value) : result;
     }
 
     return tracer.startActiveSpan(
-      CHAT_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "chat" } },
-      (span: Span) => {
-        try {
-          setRequestAttributes(span, kwargs, "chat");
-          const startTime = Date.now();
-          const response = wrapped.call(instance, ...args);
-          const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          return response;
-        } catch (error) {
-          console.error("netra.instrumentation.mistralai:", error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          span.recordException(error as Error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      }
-    );
-  };
-}
-
-/**
- * Async wrapper factory for chat completions
- */
-export function achatWrapper(tracer: Tracer) {
-  return async function wrapper(
-    wrapped: AsyncWrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
-      return await wrapped.call(instance, ...args);
-    }
-
-    return tracer.startActiveSpan(
-      CHAT_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "chat" } },
-      async (span: Span) => {
-        try {
-          setRequestAttributes(span, kwargs, "chat");
-          const startTime = Date.now();
-          const response = await wrapped.call(instance, ...args);
-          const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          return response;
-        } catch (error) {
-          console.error("netra.instrumentation.mistralai:", error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          span.recordException(error as Error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      }
-    );
-  };
-}
-
-/**
- * Wrapper factory for chat stream (sync)
- */
-export function chatStreamWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): unknown {
-    if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
-    }
-
-    const span = tracer.startSpan(CHAT_STREAM_SPAN_NAME, {
-      kind: SpanKind.CLIENT,
-      attributes: { "llm.request.type": "chat", "llm.request.stream": true },
-    });
-
-    try {
-      setRequestAttributes(span, { ...kwargs, stream: true }, "chat");
-      const startTime = Date.now();
-      const response = wrapped.call(instance, ...args);
-      return new StreamingWrapper(span, response, startTime, kwargs);
-    } catch (error) {
-      console.error("netra.instrumentation.mistralai:", error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      span.recordException(error as Error);
-      span.end();
-      throw error;
-    }
-  };
-}
-
-/**
- * Async wrapper factory for chat stream
- */
-export function achatStreamWrapper(tracer: Tracer) {
-  return async function wrapper(
-    wrapped: AsyncWrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
-      return await wrapped.call(instance, ...args);
-    }
-
-    const span = tracer.startSpan(CHAT_STREAM_SPAN_NAME, {
-      kind: SpanKind.CLIENT,
-      attributes: { "llm.request.type": "chat", "llm.request.stream": true },
-    });
-
-    try {
-      setRequestAttributes(span, { ...kwargs, stream: true }, "chat");
-      const startTime = Date.now();
-      const response = await wrapped.call(instance, ...args);
-      return new AsyncStreamingWrapper(span, response, startTime, kwargs);
-    } catch (error) {
-      console.error("netra.instrumentation.mistralai:", error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      span.recordException(error as Error);
-      span.end();
-      throw error;
-    }
-  };
-}
-
-/**
- * Wrapper factory for embeddings (sync)
- */
-export function embeddingsWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): unknown {
-    if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
-    }
-
-    return tracer.startActiveSpan(
-      EMBEDDING_SPAN_NAME,
+      spanName,
       {
         kind: SpanKind.CLIENT,
-        attributes: { "llm.request.type": "embedding" },
+        attributes: { "llm.request.type": requestType },
       },
       (span: Span) => {
         try {
-          setRequestAttributes(span, kwargs, "embedding");
+          setRequestAttributes(span, kwargs, requestType);
           const startTime = Date.now();
           const response = wrapped.call(instance, ...args);
+          if (isPromise(response)) {
+            return (async () => {
+              try {
+                const value = await response;
+                const endTime = Date.now();
+                setResponseAttributes(span, modelAsDict(value));
+                span.setAttribute(
+                  "llm.response.duration",
+                  (endTime - startTime) / 1000
+                );
+                span.setStatus({ code: SpanStatusCode.OK });
+                span.end();
+                return value;
+              } catch (error) {
+                console.error("netra.instrumentation.mistralai:", error);
+                span.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+                span.recordException(error as Error);
+                span.end();
+                throw error;
+              }
+            })();
+          }
+
           const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
+          setResponseAttributes(span, modelAsDict(response));
           span.setAttribute(
             "llm.response.duration",
             (endTime - startTime) / 1000
           );
           span.setStatus({ code: SpanStatusCode.OK });
+          span.end();
           return response;
         } catch (error) {
           console.error("netra.instrumentation.mistralai:", error);
@@ -231,182 +93,60 @@ export function embeddingsWrapper(tracer: Tracer) {
             message: error instanceof Error ? error.message : String(error),
           });
           span.recordException(error as Error);
-          throw error;
-        } finally {
           span.end();
+          throw error;
         }
       }
     );
   };
 }
 
-/**
- * Async wrapper factory for embeddings
- */
-export function aembeddingsWrapper(tracer: Tracer) {
-  return async function wrapper(
-    wrapped: AsyncWrappedFunction,
+function mistralStreamWrapper(
+  tracer: Tracer,
+  spanName: string,
+  requestType: MistralRequestType
+) {
+  return function wrapper<F extends (...args: any[]) => any>(
+    wrapped: F,
     instance: unknown,
-    args: unknown[],
+    args: Parameters<F>,
     kwargs: Record<string, unknown>
-  ): Promise<unknown> {
+  ): unknown {
     if (shouldSuppressInstrumentation()) {
-      return await wrapped.call(instance, ...args);
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((value) => value) : result;
     }
 
-    return tracer.startActiveSpan(
-      EMBEDDING_SPAN_NAME,
-      {
-        kind: SpanKind.CLIENT,
-        attributes: { "llm.request.type": "embedding" },
+    const span = tracer.startSpan(spanName, {
+      kind: SpanKind.CLIENT,
+      attributes: {
+        "llm.request.type": requestType,
+        "llm.request.stream": true,
       },
-      async (span: Span) => {
-        try {
-          setRequestAttributes(span, kwargs, "embedding");
-          const startTime = Date.now();
-          const response = await wrapped.call(instance, ...args);
-          const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          return response;
-        } catch (error) {
-          console.error("netra.instrumentation.mistralai:", error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          span.recordException(error as Error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      }
-    );
-  };
-}
-
-/**
- * Wrapper factory for FIM completions (sync)
- */
-export function fimWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): unknown {
-    if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
-    }
-
-    return tracer.startActiveSpan(
-      FIM_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "fim" } },
-      (span: Span) => {
-        try {
-          setRequestAttributes(span, kwargs, "fim");
-          const startTime = Date.now();
-          const response = wrapped.call(instance, ...args);
-          const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          return response;
-        } catch (error) {
-          console.error("netra.instrumentation.mistralai:", error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          span.recordException(error as Error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      }
-    );
-  };
-}
-
-/**
- * Async wrapper factory for FIM completions
- */
-export function afimWrapper(tracer: Tracer) {
-  return async function wrapper(
-    wrapped: AsyncWrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
-      return await wrapped.call(instance, ...args);
-    }
-
-    return tracer.startActiveSpan(
-      FIM_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "fim" } },
-      async (span: Span) => {
-        try {
-          setRequestAttributes(span, kwargs, "fim");
-          const startTime = Date.now();
-          const response = await wrapped.call(instance, ...args);
-          const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          return response;
-        } catch (error) {
-          console.error("netra.instrumentation.mistralai:", error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          span.recordException(error as Error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      }
-    );
-  };
-}
-
-/**
- * Wrapper factory for FIM stream (sync)
- */
-export function fimStreamWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): unknown {
-    if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
-    }
-
-    const span = tracer.startSpan(FIM_STREAM_SPAN_NAME, {
-      kind: SpanKind.CLIENT,
-      attributes: { "llm.request.type": "fim", "llm.request.stream": true },
     });
 
     try {
-      setRequestAttributes(span, { ...kwargs, stream: true }, "fim");
+      // Force stream=true for attribution
+      setRequestAttributes(span, { ...kwargs, stream: true }, requestType);
       const startTime = Date.now();
       const response = wrapped.call(instance, ...args);
+      if (isPromise(response)) {
+        return (async () => {
+          try {
+            const stream = await response;
+            return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
+          } catch (error) {
+            console.error("netra.instrumentation.mistralai:", error);
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            span.recordException(error as Error);
+            span.end();
+            throw error;
+          }
+        })();
+      }
       return new StreamingWrapper(span, response, startTime, kwargs);
     } catch (error) {
       console.error("netra.instrumentation.mistralai:", error);
@@ -422,209 +162,46 @@ export function fimStreamWrapper(tracer: Tracer) {
 }
 
 /**
- * Async wrapper factory for FIM stream
+ * Wrapper factory for chat completions
  */
-export function afimStreamWrapper(tracer: Tracer) {
-  return async function wrapper(
-    wrapped: AsyncWrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
-      return await wrapped.call(instance, ...args);
-    }
-
-    const span = tracer.startSpan(FIM_STREAM_SPAN_NAME, {
-      kind: SpanKind.CLIENT,
-      attributes: { "llm.request.type": "fim", "llm.request.stream": true },
-    });
-
-    try {
-      setRequestAttributes(span, { ...kwargs, stream: true }, "fim");
-      const startTime = Date.now();
-      const response = await wrapped.call(instance, ...args);
-      return new AsyncStreamingWrapper(span, response, startTime, kwargs);
-    } catch (error) {
-      console.error("netra.instrumentation.mistralai:", error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      span.recordException(error as Error);
-      span.end();
-      throw error;
-    }
-  };
-}
+export const chatWrapper = (tracer: Tracer) =>
+  mistralWrapper(tracer, CHAT_SPAN_NAME, "chat");
 
 /**
- * Wrapper factory for agents completions (sync)
+ * Wrapper factory for chat stream
  */
-export function agentsWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): unknown {
-    if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
-    }
-
-    return tracer.startActiveSpan(
-      AGENTS_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "agent" } },
-      (span: Span) => {
-        try {
-          setRequestAttributes(span, kwargs, "agent");
-          const startTime = Date.now();
-          const response = wrapped.call(instance, ...args);
-          const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          return response;
-        } catch (error) {
-          console.error("netra.instrumentation.mistralai:", error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          span.recordException(error as Error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      }
-    );
-  };
-}
+export const chatStreamWrapper = (tracer: Tracer) =>
+  mistralStreamWrapper(tracer, CHAT_STREAM_SPAN_NAME, "chat");
 
 /**
- * Async wrapper factory for agents completions
+ * Wrapper factory for embeddings
  */
-export function aagentsWrapper(tracer: Tracer) {
-  return async function wrapper(
-    wrapped: AsyncWrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
-      return await wrapped.call(instance, ...args);
-    }
-
-    return tracer.startActiveSpan(
-      AGENTS_SPAN_NAME,
-      { kind: SpanKind.CLIENT, attributes: { "llm.request.type": "agent" } },
-      async (span: Span) => {
-        try {
-          setRequestAttributes(span, kwargs, "agent");
-          const startTime = Date.now();
-          const response = await wrapped.call(instance, ...args);
-          const endTime = Date.now();
-          const responseDict = modelAsDict(response);
-          setResponseAttributes(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          return response;
-        } catch (error) {
-          console.error("netra.instrumentation.mistralai:", error);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: error instanceof Error ? error.message : String(error),
-          });
-          span.recordException(error as Error);
-          throw error;
-        } finally {
-          span.end();
-        }
-      }
-    );
-  };
-}
+export const embeddingsWrapper = (tracer: Tracer) =>
+  mistralWrapper(tracer, EMBEDDING_SPAN_NAME, "embedding");
 
 /**
- * Wrapper factory for agents stream (sync)
+ * Wrapper factory for FIM completions
  */
-export function agentsStreamWrapper(tracer: Tracer) {
-  return function wrapper(
-    wrapped: WrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): unknown {
-    if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
-    }
-
-    const span = tracer.startSpan(AGENTS_STREAM_SPAN_NAME, {
-      kind: SpanKind.CLIENT,
-      attributes: { "llm.request.type": "agent", "llm.request.stream": true },
-    });
-
-    try {
-      setRequestAttributes(span, { ...kwargs, stream: true }, "agent");
-      const startTime = Date.now();
-      const response = wrapped.call(instance, ...args);
-      return new StreamingWrapper(span, response, startTime, kwargs);
-    } catch (error) {
-      console.error("netra.instrumentation.mistralai:", error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      span.recordException(error as Error);
-      span.end();
-      throw error;
-    }
-  };
-}
+export const fimWrapper = (tracer: Tracer) =>
+  mistralWrapper(tracer, FIM_SPAN_NAME, "fim");
 
 /**
- * Async wrapper factory for agents stream
+ * Wrapper factory for FIM stream
  */
-export function aagentsStreamWrapper(tracer: Tracer) {
-  return async function wrapper(
-    wrapped: AsyncWrappedFunction,
-    instance: unknown,
-    args: unknown[],
-    kwargs: Record<string, unknown>
-  ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
-      return await wrapped.call(instance, ...args);
-    }
+export const fimStreamWrapper = (tracer: Tracer) =>
+  mistralStreamWrapper(tracer, FIM_STREAM_SPAN_NAME, "fim");
 
-    const span = tracer.startSpan(AGENTS_STREAM_SPAN_NAME, {
-      kind: SpanKind.CLIENT,
-      attributes: { "llm.request.type": "agent", "llm.request.stream": true },
-    });
+/**
+ * Wrapper factory for agents completions
+ */
+export const agentsWrapper = (tracer: Tracer) =>
+  mistralWrapper(tracer, AGENTS_SPAN_NAME, "agent");
 
-    try {
-      setRequestAttributes(span, { ...kwargs, stream: true }, "agent");
-      const startTime = Date.now();
-      const response = await wrapped.call(instance, ...args);
-      return new AsyncStreamingWrapper(span, response, startTime, kwargs);
-    } catch (error) {
-      console.error("netra.instrumentation.mistralai:", error);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      span.recordException(error as Error);
-      span.end();
-      throw error;
-    }
-  };
-}
+/**
+ * Wrapper factory for agents stream
+ */
+export const agentsStreamWrapper = (tracer: Tracer) =>
+  mistralStreamWrapper(tracer, AGENTS_STREAM_SPAN_NAME, "agent");
 
 /**
  * Wrapper for streaming responses (handles AsyncIterable from MistralAI SDK)
@@ -678,20 +255,12 @@ export class StreamingWrapper
     return this;
   }
 
-  private isPromise(obj: unknown): obj is Promise<unknown> {
-    return (
-      obj !== null &&
-      typeof obj === "object" &&
-      typeof (obj as Promise<unknown>).then === "function"
-    );
-  }
-
   async next(): Promise<IteratorResult<unknown>> {
     try {
       // Initialize the iterator on first call
       if (!this.iterator) {
         // If response is a Promise, await it first to get the actual stream
-        if (this.isPromise(this.response)) {
+        if (isPromise(this.response)) {
           this.resolvedResponse = (await this
             .response) as AsyncIterable<unknown>;
         } else {

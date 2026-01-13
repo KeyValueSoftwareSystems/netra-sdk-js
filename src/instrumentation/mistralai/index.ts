@@ -2,24 +2,17 @@
  * Custom MistralAI instrumentor for Netra SDK
  */
 
-import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { createRequire } from "module";
 import { __version__ } from "./version";
 import {
-  chatWrapper,
-  achatWrapper,
-  chatStreamWrapper,
-  achatStreamWrapper,
-  embeddingsWrapper,
-  aembeddingsWrapper,
-  fimWrapper,
-  afimWrapper,
-  fimStreamWrapper,
-  afimStreamWrapper,
-  agentsWrapper,
-  aagentsWrapper,
   agentsStreamWrapper,
-  aagentsStreamWrapper,
+  agentsWrapper,
+  chatStreamWrapper,
+  chatWrapper,
+  embeddingsWrapper,
+  fimStreamWrapper,
+  fimWrapper,
 } from "./wrappers";
 
 // Create require function for ESM compatibility
@@ -82,11 +75,14 @@ export class NetraMistralAIInstrumentor {
     }
 
     // Instrument client methods. Mark instrumented only if we actually patched anything.
+    // NOTE: don't use `a() || b() || ...` here — it short-circuits and would stop
+    // patching after the first successful instrumentation.
+    const patchedChat = this._instrumentChat();
+    const patchedEmbeddings = this._instrumentEmbeddings();
+    const patchedFIM = this._instrumentFIM();
+    const patchedAgents = this._instrumentAgents();
     const didPatch =
-      this._instrumentChat() ||
-      this._instrumentEmbeddings() ||
-      this._instrumentFIM() ||
-      this._instrumentAgents();
+      patchedChat || patchedEmbeddings || patchedFIM || patchedAgents;
 
     if (!didPatch) {
       console.warn(
@@ -144,8 +140,7 @@ export class NetraMistralAIInstrumentor {
         originalMethods.set("chat.complete", originalComplete);
 
         const tracer = this.tracer;
-        const syncWrapper = chatWrapper(tracer);
-        const asyncWrapper = achatWrapper(tracer);
+        const wrapper = chatWrapper(tracer);
 
         ChatClass.prototype.complete = function (
           this: unknown,
@@ -153,17 +148,12 @@ export class NetraMistralAIInstrumentor {
         ): unknown {
           const original = originalComplete.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          const isAsyncFunction =
-            originalComplete.constructor.name === "AsyncFunction";
-
-          if (isAsyncFunction) {
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
+          return wrapper(
+            (...a: unknown[]) => original(...a),
+            this,
+            args,
+            kwargs
+          );
         };
         didPatch = true;
       }
@@ -173,8 +163,7 @@ export class NetraMistralAIInstrumentor {
         originalMethods.set("chat.stream", originalStream);
 
         const tracer = this.tracer;
-        const syncWrapper = chatStreamWrapper(tracer);
-        const asyncWrapper = achatStreamWrapper(tracer);
+        const wrapper = chatStreamWrapper(tracer);
 
         ChatClass.prototype.stream = function (
           this: unknown,
@@ -182,17 +171,12 @@ export class NetraMistralAIInstrumentor {
         ): unknown {
           const original = originalStream.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          const isAsyncFunction =
-            originalStream.constructor.name === "AsyncFunction";
-
-          if (isAsyncFunction) {
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
+          return wrapper(
+            (...a: unknown[]) => original(...a),
+            this,
+            args,
+            kwargs
+          );
         };
         didPatch = true;
       }
@@ -217,8 +201,7 @@ export class NetraMistralAIInstrumentor {
         originalMethods.set("embeddings.create", originalCreate);
 
         const tracer = this.tracer;
-        const syncWrapper = embeddingsWrapper(tracer);
-        const asyncWrapper = aembeddingsWrapper(tracer);
+        const wrapper = embeddingsWrapper(tracer);
 
         EmbeddingsClass.prototype.create = function (
           this: unknown,
@@ -226,17 +209,12 @@ export class NetraMistralAIInstrumentor {
         ): unknown {
           const original = originalCreate.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          const isAsyncFunction =
-            originalCreate.constructor.name === "AsyncFunction";
-
-          if (isAsyncFunction) {
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
+          return wrapper(
+            (...a: unknown[]) => original(...a),
+            this,
+            args,
+            kwargs
+          );
         };
         didPatch = true;
       }
@@ -261,8 +239,7 @@ export class NetraMistralAIInstrumentor {
         originalMethods.set("fim.complete", originalComplete);
 
         const tracer = this.tracer;
-        const syncWrapper = fimWrapper(tracer);
-        const asyncWrapper = afimWrapper(tracer);
+        const wrapper = fimWrapper(tracer);
 
         FimClass.prototype.complete = function (
           this: unknown,
@@ -270,17 +247,12 @@ export class NetraMistralAIInstrumentor {
         ): unknown {
           const original = originalComplete.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          const isAsyncFunction =
-            originalComplete.constructor.name === "AsyncFunction";
-
-          if (isAsyncFunction) {
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
+          return wrapper(
+            (...a: unknown[]) => original(...a),
+            this,
+            args,
+            kwargs
+          );
         };
         didPatch = true;
       }
@@ -290,8 +262,7 @@ export class NetraMistralAIInstrumentor {
         originalMethods.set("fim.stream", originalStream);
 
         const tracer = this.tracer;
-        const syncWrapper = fimStreamWrapper(tracer);
-        const asyncWrapper = afimStreamWrapper(tracer);
+        const wrapper = fimStreamWrapper(tracer);
 
         FimClass.prototype.stream = function (
           this: unknown,
@@ -299,17 +270,12 @@ export class NetraMistralAIInstrumentor {
         ): unknown {
           const original = originalStream.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          const isAsyncFunction =
-            originalStream.constructor.name === "AsyncFunction";
-
-          if (isAsyncFunction) {
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
+          return wrapper(
+            (...a: unknown[]) => original(...a),
+            this,
+            args,
+            kwargs
+          );
         };
         didPatch = true;
       }
@@ -334,8 +300,7 @@ export class NetraMistralAIInstrumentor {
         originalMethods.set("agents.complete", originalComplete);
 
         const tracer = this.tracer;
-        const syncWrapper = agentsWrapper(tracer);
-        const asyncWrapper = aagentsWrapper(tracer);
+        const wrapper = agentsWrapper(tracer);
 
         AgentsClass.prototype.complete = function (
           this: unknown,
@@ -343,17 +308,12 @@ export class NetraMistralAIInstrumentor {
         ): unknown {
           const original = originalComplete.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          const isAsyncFunction =
-            originalComplete.constructor.name === "AsyncFunction";
-
-          if (isAsyncFunction) {
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
+          return wrapper(
+            (...a: unknown[]) => original(...a),
+            this,
+            args,
+            kwargs
+          );
         };
         didPatch = true;
       }
@@ -363,8 +323,7 @@ export class NetraMistralAIInstrumentor {
         originalMethods.set("agents.stream", originalStream);
 
         const tracer = this.tracer;
-        const syncWrapper = agentsStreamWrapper(tracer);
-        const asyncWrapper = aagentsStreamWrapper(tracer);
+        const wrapper = agentsStreamWrapper(tracer);
 
         AgentsClass.prototype.stream = function (
           this: unknown,
@@ -372,17 +331,12 @@ export class NetraMistralAIInstrumentor {
         ): unknown {
           const original = originalStream.bind(this);
           const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          const isAsyncFunction =
-            originalStream.constructor.name === "AsyncFunction";
-
-          if (isAsyncFunction) {
-            const wrappedFunction = async (...a: unknown[]) => original(...a);
-            return asyncWrapper(wrappedFunction, this, args, kwargs);
-          } else {
-            const wrappedFunction = (...a: unknown[]) => original(...a);
-            return syncWrapper(wrappedFunction, this, args, kwargs);
-          }
+          return wrapper(
+            (...a: unknown[]) => original(...a),
+            this,
+            args,
+            kwargs
+          );
         };
         didPatch = true;
       }
@@ -471,22 +425,15 @@ export const mistralAIInstrumentor = new NetraMistralAIInstrumentor();
 
 // Re-export wrappers for advanced usage
 export {
-  chatWrapper,
-  achatWrapper,
-  chatStreamWrapper,
-  achatStreamWrapper,
-  embeddingsWrapper,
-  aembeddingsWrapper,
-  fimWrapper,
-  afimWrapper,
-  fimStreamWrapper,
-  afimStreamWrapper,
-  agentsWrapper,
-  aagentsWrapper,
   agentsStreamWrapper,
-  aagentsStreamWrapper,
-  StreamingWrapper,
+  agentsWrapper,
   AsyncStreamingWrapper,
+  chatStreamWrapper,
+  chatWrapper,
+  embeddingsWrapper,
+  fimStreamWrapper,
+  fimWrapper,
+  StreamingWrapper,
 } from "./wrappers";
 
 // Re-export utilities
