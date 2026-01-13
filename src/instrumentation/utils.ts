@@ -5,6 +5,7 @@
 
 import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
+import { SpanAttributes } from "./span-attributes";
 
 // Suppression key for instrumentation
 const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
@@ -18,25 +19,74 @@ export function shouldSuppressInstrumentation(): boolean {
 }
 
 /**
- * Convert a model/response object to a plain dictionary
- * Works with SDK response objects that have toJSON methods or plain objects
+ * Type guard that determines whether a value is a Promise.
+ *
+ * This is useful for distinguishing between synchronous return values
+ * and Promise-based (asynchronous) results at runtime.
+ *
+ * @param value - The value to test.
+ * @returns `true` if the value is a Promise instance.
+ */
+export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
+  return value instanceof Promise;
+}
+
+/**
+ * Determines whether a value is a plain json object.
+ *
+ * This intended for validating JSON-style objects at runtime
+ *
+ * Excludes:
+ * - `null`
+ * - Arrays
+ *
+ * @param v - The value to test.
+ * @returns `true` if the value is a non-null, non-array object.
+ */
+export function isDict(v: unknown): v is Record<string, any> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Converts a model or response value into a plain dictionary object.
+ *
+ * This utility is intended for normalizing SDK models, class instances,
+ * or arbitrary values into a JSON-compatible key–value structure suitable
+ * for logging, tracing, or serialization.
+ *
+ * Conversion strategy (in order):
+ * 1. Non-objects return an empty object.
+ * 2. Objects with a `toJSON()` method use its output.
+ * 3. Plain objects are shallow-copied.
+ * 4. Other objects are serialized via `JSON.stringify` / `JSON.parse`.
+ *
+ * If conversion fails, an empty object is returned.
+ *
+ * @param obj - The value to convert.
+ * @returns A plain dictionary representation of the input.
  */
 export function modelAsDict(obj: unknown): Record<string, unknown> {
-  if (!obj || typeof obj !== "object") {
+  if (obj == null || typeof obj !== "object") {
     return {};
   }
 
-  // If it has a toJSON method (like SDK responses), use it
-  if ("toJSON" in obj && typeof (obj as any).toJSON === "function") {
-    return (obj as any).toJSON();
+  // Prefer explicit JSON serialization when available
+  if (
+    "toJSON" in obj &&
+    typeof (obj as { toJSON?: unknown }).toJSON === "function"
+  ) {
+    return (obj as { toJSON: () => unknown }).toJSON() as Record<
+      string,
+      unknown
+    >;
   }
 
-  // If it's already a plain object, return a shallow copy
-  if (obj.constructor === Object) {
-    return { ...obj } as Record<string, unknown>;
+  // Fast path for plain objects
+  if (Object.getPrototypeOf(obj) === Object.prototype) {
+    return { ...(obj as Record<string, unknown>) };
   }
 
-  // Try to convert class instance to plain object
+  // Fallback: attempt structural serialization
   try {
     return JSON.parse(JSON.stringify(obj));
   } catch {
@@ -71,7 +121,9 @@ function extractFirstCompletionText(
   response: Record<string, unknown>
 ): string | undefined {
   // Common: choices[0].message.content (chat) or choices[0].text (completion)
-  const choices = response.choices as Array<Record<string, unknown>> | undefined;
+  const choices = response.choices as
+    | Array<Record<string, unknown>>
+    | undefined;
   if (Array.isArray(choices) && choices.length > 0) {
     const first = choices[0];
     const message = first.message as Record<string, unknown> | undefined;
@@ -92,7 +144,9 @@ function extractFirstCompletionText(
   const output = response.output as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(output) && output.length > 0) {
     const firstOut = output[0];
-    const content = firstOut.content as Array<Record<string, unknown>> | undefined;
+    const content = firstOut.content as
+      | Array<Record<string, unknown>>
+      | undefined;
     if (Array.isArray(content) && content.length > 0) {
       const firstContent = content[0];
       if (firstContent.text !== undefined) {
@@ -105,25 +159,6 @@ function extractFirstCompletionText(
 }
 
 /**
- * Type guard for plain dictionary-like objects.
- */
-export function isDict(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-/**
- * Type guard for Promise-like values.
- */
-export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    "then" in (value as any) &&
-    typeof (value as any).then === "function"
-  );
-}
-
-/**
  * Set request attributes on span
  * These are shared across different LLM providers
  */
@@ -133,55 +168,30 @@ export function setRequestAttributes(
   requestType: string,
   system: string
 ): void {
-  span.setAttribute("llm.request.type", requestType);
-  span.setAttribute("gen_ai.system", system);
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
+  }
+
+  span.setAttribute(SpanAttributes.LLM_REQUEST_TYPE, requestType);
+  span.setAttribute(SpanAttributes.LLM_SYSTEM, system);
 
   if (kwargs.model) {
     span.setAttribute("gen_ai.request.model", String(kwargs.model));
     span.setAttribute("llm.request.model", String(kwargs.model));
   }
 
-  // Temperature (handle both snake_case and camelCase)
-  const temperature = kwargs.temperature;
-  if (temperature !== undefined && temperature !== null) {
-    span.setAttribute("gen_ai.request.temperature", Number(temperature));
-    span.setAttribute("llm.request.temperature", Number(temperature));
-  }
+  _setAttributeMappings(span, kwargs);
 
-  // Max tokens (handle both max_tokens and maxTokens)
-  const maxTokens = kwargs.max_tokens ?? kwargs.maxTokens;
-  if (maxTokens !== undefined && maxTokens !== null) {
-    span.setAttribute("gen_ai.request.max_tokens", Number(maxTokens));
-    span.setAttribute("llm.request.max_tokens", Number(maxTokens));
-  }
-
-  // Top P (handle both top_p and topP)
-  const topP = kwargs.top_p ?? kwargs.topP;
-  if (topP !== undefined) {
-    span.setAttribute("gen_ai.request.top_p", Number(topP));
-    span.setAttribute("llm.request.top_p", Number(topP));
-  }
-
-  // Frequency penalty (handle both snake_case and camelCase)
-  const frequencyPenalty = kwargs.frequency_penalty ?? kwargs.frequencyPenalty;
-  if (frequencyPenalty !== undefined) {
-    span.setAttribute("llm.request.frequency_penalty", Number(frequencyPenalty));
-  }
-
-  // Presence penalty (handle both snake_case and camelCase)
-  const presencePenalty = kwargs.presence_penalty ?? kwargs.presencePenalty;
-  if (presencePenalty !== undefined) {
-    span.setAttribute("llm.request.presence_penalty", Number(presencePenalty));
-  }
-
-  // Stream flag
-  if (kwargs.stream !== undefined) {
-    span.setAttribute("llm.request.stream", Boolean(kwargs.stream));
-  }
-
-  // Message count (for chat requests)
   if (Array.isArray(kwargs.messages)) {
     span.setAttribute("llm.request.message_count", kwargs.messages.length);
+  }
+
+  if (kwargs.reasoning !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_REQUEST_REASONING_EFFORT,
+      JSON.stringify(kwargs.reasoning)
+    );
   }
 
   // Input count (for embeddings - handle both input and inputs)
@@ -210,21 +220,24 @@ export function setRequestAttributes(
 
   // Content tracing (guarded by config/env)
   if (isTraceContentEnabled()) {
-    const maxLen = Config.CONVERSATION_MAX_LEN;
-
-    if (Array.isArray(kwargs.messages)) {
-      const promptJson = truncateAttribute(safeStringify(kwargs.messages), maxLen);
-      span.setAttribute("gen_ai.prompt", promptJson);
-      span.setAttribute("llm.request.messages", promptJson);
+    if (requestType === "chat") {
+      _setChatCompletionAPIAttributes(span, kwargs);
+    } else if (requestType === "response") {
+      _setResponseAPIAttributes(span, kwargs);
     } else if (kwargs.prompt !== undefined) {
-      const prompt = truncateAttribute(safeStringify(kwargs.prompt), maxLen);
-      span.setAttribute("gen_ai.prompt", prompt);
-      span.setAttribute("llm.request.prompt", prompt);
+      span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.role`, "user");
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.0.content`,
+        String(kwargs.prompt)
+      );
     } else {
-      // Embeddings / generic inputs
+      // Handles Embeddings / generic inputs
       const content = kwargs.input ?? kwargs.inputs;
       if (content !== undefined) {
-        const prompt = truncateAttribute(safeStringify(content), maxLen);
+        const prompt = truncateAttribute(
+          safeStringify(content),
+          Config.CONVERSATION_MAX_LEN
+        );
         span.setAttribute("gen_ai.prompt", prompt);
         span.setAttribute("llm.request.input", prompt);
       }
@@ -232,8 +245,105 @@ export function setRequestAttributes(
 
     // FIM suffix (if present)
     if (kwargs.suffix !== undefined) {
-      const suffix = truncateAttribute(safeStringify(kwargs.suffix), maxLen);
+      const suffix = truncateAttribute(
+        safeStringify(kwargs.suffix),
+        Config.CONVERSATION_MAX_LEN
+      );
       span.setAttribute("llm.request.suffix", suffix);
+    }
+  }
+}
+
+function _setAttributeMappings(span: Span, kwargs: Record<string, unknown>) {
+  const attributeMappings = {
+    model: SpanAttributes.LLM_REQUEST_MODEL,
+    temperature: SpanAttributes.LLM_REQUEST_TEMPERATURE,
+    max_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+    max_completion_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+    max_output_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+    max_tokens_to_sample: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+    frequency_penalty: SpanAttributes.LLM_FREQUENCY_PENALTY,
+    presence_penalty: SpanAttributes.LLM_PRESENCE_PENALTY,
+    reasoning_effort: SpanAttributes.LLM_REQUEST_REASONING_EFFORT,
+    stop: SpanAttributes.LLM_CHAT_STOP_SEQUENCES,
+    stream: SpanAttributes.LLM_IS_STREAMING,
+    top_p: SpanAttributes.LLM_REQUEST_TOP_P,
+  };
+
+  for (let [key, attribute] of Object.entries(attributeMappings)) {
+    const value: any = kwargs[key];
+    if (value !== undefined) {
+      span.setAttribute(attribute, value);
+    }
+  }
+}
+
+function _setChatCompletionAPIAttributes(
+  span: Span,
+  kwargs: Record<string, unknown>
+) {
+  const messages = kwargs.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (!isDict(message)) {
+      continue;
+    }
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
+      message?.role ?? "user"
+    );
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+      String(message?.content ?? "")
+    );
+  }
+}
+
+function _setResponseAPIAttributes(
+  span: Span,
+  kwargs: Record<string, unknown>
+) {
+  let messageIndex = 0;
+  if (kwargs.instructions !== undefined) {
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.role`,
+      "system"
+    );
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.content`,
+      kwargs.instructions as any
+    );
+    messageIndex++;
+  }
+
+  const inputData = kwargs.input;
+  if (inputData !== undefined) {
+    if (typeof inputData === "string") {
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.role`,
+        "user"
+      );
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.content`,
+        inputData
+      );
+    } else if (Array.isArray(inputData)) {
+      for (let message of inputData) {
+        if (!isDict(message)) {
+          continue;
+        }
+        span.setAttribute(
+          `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.role`,
+          message?.role ?? "user"
+        );
+        span.setAttribute(
+          `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.content`,
+          String(message?.content ?? "")
+        );
+      }
     }
   }
 }
@@ -246,53 +356,27 @@ export function setResponseAttributes(
   span: Span,
   response: Record<string, unknown>
 ): void {
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
+  }
+
   if (response.id) {
-    span.setAttribute("gen_ai.response.id", String(response.id));
     span.setAttribute("llm.response.id", String(response.id));
   }
 
   if (response.model) {
-    span.setAttribute("gen_ai.response.model", String(response.model));
-    span.setAttribute("llm.response.model", String(response.model));
+    span.setAttribute(
+      SpanAttributes.LLM_RESPONSE_MODEL,
+      String(response.model)
+    );
   }
 
-  // Handle usage - support both snake_case and camelCase
-  const usage = response.usage as Record<string, unknown> | undefined;
-  if (usage) {
-    // Prompt tokens (snake_case or camelCase)
-    const promptTokens = usage.prompt_tokens ?? usage.promptTokens;
-    if (promptTokens !== undefined) {
-      span.setAttribute("gen_ai.usage.prompt_tokens", Number(promptTokens));
-      span.setAttribute("llm.usage.prompt_tokens", Number(promptTokens));
-    }
+  _setUsageAttributes(span, response);
 
-    // Completion tokens (snake_case or camelCase)
-    const completionTokens = usage.completion_tokens ?? usage.completionTokens;
-    if (completionTokens !== undefined) {
-      span.setAttribute("gen_ai.usage.completion_tokens", Number(completionTokens));
-      span.setAttribute("llm.usage.completion_tokens", Number(completionTokens));
-    }
-
-    // Total tokens (snake_case or camelCase)
-    const totalTokens = usage.total_tokens ?? usage.totalTokens;
-    if (totalTokens !== undefined) {
-      span.setAttribute("gen_ai.usage.total_tokens", Number(totalTokens));
-      span.setAttribute("llm.usage.total_tokens", Number(totalTokens));
-    }
-
-    // Input/output tokens (for responses API)
-    if (usage.input_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.input_tokens", Number(usage.input_tokens));
-      span.setAttribute("llm.usage.input_tokens", Number(usage.input_tokens));
-    }
-    if (usage.output_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.output_tokens", Number(usage.output_tokens));
-      span.setAttribute("llm.usage.output_tokens", Number(usage.output_tokens));
-    }
-  }
-
-  // Handle choices - support both snake_case and camelCase finish reason
-  const choices = response.choices as Array<Record<string, unknown>> | undefined;
+  const choices = response.choices as
+    | Array<Record<string, unknown>>
+    | undefined;
   if (choices && choices.length > 0) {
     const firstChoice = choices[0];
     const finishReason = firstChoice.finish_reason ?? firstChoice.finishReason;
@@ -302,15 +386,8 @@ export function setResponseAttributes(
     }
   }
 
-  // Content tracing (guarded by config/env)
   if (isTraceContentEnabled()) {
-    const completion = extractFirstCompletionText(response);
-    if (completion) {
-      const maxLen = Config.CONVERSATION_MAX_LEN;
-      const value = truncateAttribute(String(completion), maxLen);
-      span.setAttribute("gen_ai.completion", value);
-      span.setAttribute("llm.response.completion", value);
-    }
+    _setResponseMessageAttributes(span, response);
   }
 
   // For embeddings - handle data array
@@ -322,7 +399,133 @@ export function setResponseAttributes(
       const firstItem = data[0] as Record<string, unknown>;
       const embedding = firstItem.embedding as number[] | undefined;
       if (embedding && Array.isArray(embedding)) {
-        span.setAttribute("llm.response.embedding_dimensions", embedding.length);
+        span.setAttribute(
+          "llm.response.embedding_dimensions",
+          embedding.length
+        );
+      }
+    }
+  }
+}
+
+function _setUsageAttributes(
+  span: Span,
+  response: Record<string, unknown>
+): void {
+  const usage = response.usage as Record<string, unknown> | undefined;
+  if (!usage) return;
+
+  const promptTokens = usage.prompt_tokens ?? usage.input_tokens;
+  if (promptTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
+      Number(promptTokens)
+    );
+  }
+
+  const completionTokens = usage.completion_tokens ?? usage.output_tokens;
+  if (completionTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
+      Number(completionTokens)
+    );
+  }
+
+  const totalTokens = usage.total_tokens;
+  if (totalTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
+      Number(totalTokens)
+    );
+  }
+
+  const cacheTokens = (
+    (usage.prompt_tokens_details ?? usage.input_tokens_details) as {
+      cached_tokens?: unknown;
+    }
+  )?.cached_tokens;
+  if (cacheTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS,
+      Number(cacheTokens)
+    );
+  }
+
+  const reasoningTokens = (
+    (usage.completion_tokens_details ?? usage.output_tokens_details) as {
+      reasoning_tokens?: unknown;
+    }
+  )?.reasoning_tokens;
+  if (reasoningTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_REASONING_TOKENS,
+      Number(reasoningTokens)
+    );
+  }
+}
+
+function _setResponseMessageAttributes(
+  span: Span,
+  response: Record<string, unknown>
+): void {
+  let messageIndex = 0;
+  if (response.output_text) {
+    span.setAttribute(
+      `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+      "assistant"
+    );
+    span.setAttribute(
+      `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+      String(response.output_text)
+    );
+  }
+
+  if (response.output !== undefined) {
+    for (let element of response.output as Array<Record<string, unknown>>) {
+      if (element.content === undefined) continue;
+      for (let chunk of element.content as Array<Record<string, unknown>>) {
+        if (chunk.text === undefined) continue;
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+          "assistant"
+        );
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+          String(chunk.text)
+        );
+        messageIndex += 1;
+      }
+    }
+  }
+
+  // Handle choices
+  const choices = response.choices as Array<Record<string, any>> | undefined;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      const message = choice.message;
+      if (message !== undefined) {
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+          message.role ?? "assistant"
+        );
+        span.setAttribute(
+          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+          String(message.content ?? "")
+        );
+        messageIndex++;
+      } else {
+        const delta = choice.delta;
+        if (delta !== undefined) {
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+            delta.role ?? "assistant"
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+            String(delta.content ?? "")
+          );
+          messageIndex++;
+        }
       }
     }
   }
