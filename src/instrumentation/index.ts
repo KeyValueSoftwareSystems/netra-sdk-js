@@ -103,10 +103,12 @@ export function initInstrumentations(
 
   initialize(traceloopOptions);
 
+  const tracerProvider = trace.getTracerProvider();
+
   // Initialize custom MistralAI instrumentation
   if (useCustomMistralAI && !blockInstruments?.has(NetraInstruments.MISTRAL)) {
     try {
-      mistralAIInstrumentor.instrument();
+      mistralAIInstrumentor.instrument({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom MistralAI instrumentation enabled");
       }
@@ -119,8 +121,6 @@ export function initInstrumentations(
       }
     }
   }
-
-  const tracerProvider = trace.getTracerProvider();
 
   // Initialize custom OpenAI instrumentation
   if (useCustomOpenAI && !blockInstruments?.has(NetraInstruments.OPENAI)) {
