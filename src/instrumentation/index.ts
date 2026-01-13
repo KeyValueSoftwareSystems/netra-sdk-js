@@ -29,8 +29,6 @@ export function initInstrumentations(
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
-  let useCustomMistralAI = false;
-
   // Track whether to use custom instrumentors
   let useCustomOpenAI = false;
   let useCustomGroq = false;
@@ -63,10 +61,6 @@ export function initInstrumentations(
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
       instrumentModules.google_vertexai = true;
     }
-    if (
-      instruments.has(NetraInstruments.LANGCHAIN) ||
-      instruments.has(NetraInstruments.LANGGRAPH)
-    ) {
     if (
       instruments.has(NetraInstruments.LANGCHAIN) ||
       instruments.has(NetraInstruments.LANGGRAPH)
@@ -105,10 +99,12 @@ export function initInstrumentations(
 
   initialize(traceloopOptions);
 
+  const tracerProvider = trace.getTracerProvider();
+
   // Initialize custom MistralAI instrumentation
   if (useCustomMistralAI && !blockInstruments?.has(NetraInstruments.MISTRAL)) {
     try {
-      mistralAIInstrumentor.instrument();
+      mistralAIInstrumentor.instrument({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom MistralAI instrumentation enabled");
       }
@@ -121,8 +117,6 @@ export function initInstrumentations(
       }
     }
   }
-
-  const tracerProvider = trace.getTracerProvider();
 
   // Initialize custom OpenAI instrumentation
   if (useCustomOpenAI && !blockInstruments?.has(NetraInstruments.OPENAI)) {

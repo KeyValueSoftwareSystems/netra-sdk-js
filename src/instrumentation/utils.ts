@@ -10,6 +10,24 @@ import { Config } from "../config";
 const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
 
 /**
+ * Check whether a value is Promise-like
+ */
+export function isPromise<T = unknown>(obj: unknown): obj is Promise<T> {
+  return (
+    obj !== null &&
+    typeof obj === "object" &&
+    typeof (obj as Promise<T>).then === "function"
+  );
+}
+
+/**
+ * Type guard for plain object records
+ */
+export function isDict(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
  * Check if instrumentation should be suppressed
  */
 export function shouldSuppressInstrumentation(): boolean {
