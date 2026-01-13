@@ -239,13 +239,13 @@ export class StreamingWrapper
 
       const result = await this.iterator.next();
       if (result.done) {
-        this.finalizeSpan();
+        this.finalizeSpan(SpanStatusCode.OK);
         return result;
       }
       this.processChunk(result.value);
       return result;
     } catch (error) {
-      this.finalizeSpan();
+      this.finalizeSpan(SpanStatusCode.ERROR);
       throw error;
     }
   }
@@ -321,12 +321,12 @@ export class StreamingWrapper
     this.span.addEvent("llm.content.completion.chunk");
   }
 
-  private finalizeSpan(): void {
+  private finalizeSpan(spanStatus: SpanStatusCode = SpanStatusCode.OK): void {
     const endTime = Date.now();
     const duration = (endTime - this.startTime) / 1000;
     setResponseAttributes(this.span, this.completeResponse);
     this.span.setAttribute("llm.response.duration", duration);
-    this.span.setStatus({ code: SpanStatusCode.OK });
+    this.span.setStatus({ code: spanStatus });
     this.span.end();
   }
 }
@@ -423,13 +423,13 @@ export class AsyncStreamingWrapper
 
       const result = await this.iterator.next();
       if (result.done) {
-        this.finalizeSpan();
+        this.finalizeSpan(SpanStatusCode.OK);
         return result;
       }
       this.processChunk(result.value);
       return result;
     } catch (error) {
-      this.finalizeSpan();
+      this.finalizeSpan(SpanStatusCode.ERROR);
       throw error;
     }
   }
@@ -505,12 +505,12 @@ export class AsyncStreamingWrapper
     this.span.addEvent("llm.content.completion.chunk");
   }
 
-  private finalizeSpan(): void {
+  private finalizeSpan(spanStatus: SpanStatusCode = SpanStatusCode.OK): void {
     const endTime = Date.now();
     const duration = (endTime - this.startTime) / 1000;
     setResponseAttributes(this.span, this.completeResponse);
     this.span.setAttribute("llm.response.duration", duration);
-    this.span.setStatus({ code: SpanStatusCode.OK });
+    this.span.setStatus({ code: spanStatus });
     this.span.end();
   }
 }
