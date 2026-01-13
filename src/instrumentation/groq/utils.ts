@@ -1,155 +1,28 @@
-import { Span, context } from "@opentelemetry/api";
-
-const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
-
-export function shouldSuppressInstrumentation(): boolean {
-  const ctx = context.active();
-  return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
-}
-
-export function modelAsDict(obj: unknown): Record<string, unknown> {
-  if (!obj || typeof obj !== "object") {
-    return {};
-  }
-
-  if ("toJSON" in obj && typeof (obj as any).toJSON === "function") {
-    return (obj as any).toJSON();
-  }
-
-  if (obj.constructor === Object) {
-    return { ...obj } as Record<string, unknown>;
-  }
-
-  try {
-    return JSON.parse(JSON.stringify(obj));
-  } catch {
-    return {};
-  }
-}
+import { Span } from "@opentelemetry/api";
+import {
+  setRequestAttributes as setBaseRequestAttributes,
+  setResponseAttributes as setBaseResponseAttributes,
+} from "../utils";
 
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
   requestType: string
 ): void {
-  span.setAttribute("llm.request.type", requestType);
-  span.setAttribute("gen_ai.system", "groq");
-
-  if (kwargs.model) {
-    span.setAttribute("gen_ai.request.model", String(kwargs.model));
-    span.setAttribute("llm.request.model", String(kwargs.model));
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
   }
-
-  if (kwargs.temperature !== undefined) {
-    span.setAttribute("gen_ai.request.temperature", Number(kwargs.temperature));
-    span.setAttribute("llm.request.temperature", Number(kwargs.temperature));
-  }
-
-  if (kwargs.max_tokens !== undefined) {
-    span.setAttribute("gen_ai.request.max_tokens", Number(kwargs.max_tokens));
-    span.setAttribute("llm.request.max_tokens", Number(kwargs.max_tokens));
-  }
-
-  if (kwargs.top_p !== undefined) {
-    span.setAttribute("gen_ai.request.top_p", Number(kwargs.top_p));
-    span.setAttribute("llm.request.top_p", Number(kwargs.top_p));
-  }
-
-  if (kwargs.frequency_penalty !== undefined) {
-    span.setAttribute("llm.request.frequency_penalty", Number(kwargs.frequency_penalty));
-  }
-
-  if (kwargs.presence_penalty !== undefined) {
-    span.setAttribute("llm.request.presence_penalty", Number(kwargs.presence_penalty));
-  }
-
-  if (kwargs.stream !== undefined) {
-    span.setAttribute("llm.request.stream", Boolean(kwargs.stream));
-  }
-
-  if (Array.isArray(kwargs.messages)) {
-    span.setAttribute("llm.request.message_count", kwargs.messages.length);
-    
-    //TODO: Need to confirm whether we need to add the prompt to the span
-    if (kwargs.messages.length > 0) {
-      try {
-        const messagesJson = JSON.stringify(kwargs.messages);
-        const maxLen = 50000;
-        const truncatedMessages = messagesJson.length > maxLen 
-          ? messagesJson.substring(0, maxLen) + "..."
-          : messagesJson;
-        
-        span.setAttribute("llm.request.messages", truncatedMessages);
-        
-        const userMessages = kwargs.messages.filter(
-          (msg: any) => msg.role === "user"
-        );
-        if (userMessages.length > 0) {
-          const lastUserMessage = userMessages[userMessages.length - 1];
-          if (lastUserMessage.content && typeof lastUserMessage.content === "string") {
-            const prompt = lastUserMessage.content.length > maxLen
-              ? lastUserMessage.content.substring(0, maxLen) + "..."
-              : lastUserMessage.content;
-            span.setAttribute("llm.prompt", prompt);
-          }
-        }
-      } catch (e) {
-      }
-    }
-  }
+  setBaseRequestAttributes(span, kwargs, requestType, "groq");
 }
-
 
 export function setResponseAttributes(
   span: Span,
   response: Record<string, unknown>
 ): void {
-  if (response.id) {
-    span.setAttribute("gen_ai.response.id", String(response.id));
-    span.setAttribute("llm.response.id", String(response.id));
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
   }
-
-  if (response.model) {
-    span.setAttribute("gen_ai.response.model", String(response.model));
-    span.setAttribute("llm.response.model", String(response.model));
-  }
-
-  const usage = response.usage as Record<string, unknown> | undefined;
-  if (usage) {
-    if (usage.prompt_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.prompt_tokens", Number(usage.prompt_tokens));
-      span.setAttribute("llm.usage.prompt_tokens", Number(usage.prompt_tokens));
-    }
-    if (usage.completion_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.completion_tokens", Number(usage.completion_tokens));
-      span.setAttribute("llm.usage.completion_tokens", Number(usage.completion_tokens));
-    }
-    if (usage.total_tokens !== undefined) {
-      span.setAttribute("gen_ai.usage.total_tokens", Number(usage.total_tokens));
-      span.setAttribute("llm.usage.total_tokens", Number(usage.total_tokens));
-    }
-  }
-
-  const choices = response.choices as Array<Record<string, unknown>> | undefined;
-  if (choices && choices.length > 0) {
-    const firstChoice = choices[0];
-    if (firstChoice.finish_reason) {
-      span.setAttribute("gen_ai.response.finish_reason", String(firstChoice.finish_reason));
-      span.setAttribute("llm.response.finish_reason", String(firstChoice.finish_reason));
-    }
-    
-    //TODO: Need to confirm whether we need to add the resonse to the span
-    try {
-      const message = firstChoice.message as Record<string, unknown> | undefined;
-      if (message && message.content && typeof message.content === "string") {
-        const maxLen = 50000;
-        const content = message.content.length > maxLen
-          ? message.content.substring(0, maxLen) + "..."
-          : message.content;
-        span.setAttribute("llm.response.content", content);
-      }
-    } catch (e) {
-    }
-  }
+  setBaseResponseAttributes(span, response);
 }
-
