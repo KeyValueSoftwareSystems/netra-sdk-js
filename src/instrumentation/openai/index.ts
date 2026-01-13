@@ -234,11 +234,6 @@ export {
 } from "./wrappers";
 
 // Re-export utilities
-export {
-  modelAsDict,
-  setRequestAttributes,
-  setResponseAttributes,
-  shouldSuppressInstrumentation,
-} from "./utils";
+export { setRequestAttributes, setResponseAttributes } from "./utils";
 
 export { __version__ } from "./version";
