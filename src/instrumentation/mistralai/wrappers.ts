@@ -134,7 +134,14 @@ function mistralStreamWrapper(
         return (async () => {
           try {
             const stream = await response;
-            return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
+            if (
+              stream &&
+              typeof stream === "object" &&
+              Symbol.asyncIterator in (stream as any)
+            ) {
+              return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
+            }
+            return new StreamingWrapper(span, stream, startTime, kwargs);
           } catch (error) {
             console.error("netra.instrumentation.mistralai:", error);
             span.setStatus({
@@ -146,6 +153,13 @@ function mistralStreamWrapper(
             throw error;
           }
         })();
+      }
+      if (
+        response &&
+        typeof response === "object" &&
+        Symbol.asyncIterator in (response as any)
+      ) {
+        return new AsyncStreamingWrapper(span, response, startTime, kwargs);
       }
       return new StreamingWrapper(span, response, startTime, kwargs);
     } catch (error) {
@@ -204,31 +218,22 @@ export const agentsStreamWrapper = (tracer: Tracer) =>
   mistralStreamWrapper(tracer, AGENTS_STREAM_SPAN_NAME, "agent");
 
 /**
- * Wrapper for streaming responses (handles AsyncIterable from MistralAI SDK)
+ * Wrapper for streaming responses when the SDK returns a sync Iterable/Iterator.
+ * (Matches the newer OpenAI/Groq wrapper behavior.)
  */
-export class StreamingWrapper
-  implements AsyncIterable<unknown>, AsyncIterator<unknown>
-{
-  private span: Span;
-  private response: unknown;
-  private resolvedResponse: AsyncIterable<unknown> | null = null;
-  private iterator: AsyncIterator<unknown> | null = null;
-  private startTime: number;
-  private requestKwargs: Record<string, unknown>;
-  private completeResponse: Record<string, unknown>;
+export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
+  private iterator: Iterator<unknown> | null = null;
+  private completeResponse: Record<string, unknown> = {
+    choices: [],
+    model: "",
+  };
 
   constructor(
-    span: Span,
-    response: unknown,
-    startTime: number,
-    requestKwargs: Record<string, unknown>
-  ) {
-    this.span = span;
-    this.response = response;
-    this.startTime = startTime;
-    this.requestKwargs = requestKwargs;
-    this.completeResponse = { choices: [], model: "" };
-  }
+    private span: Span,
+    private response: unknown,
+    private startTime: number,
+    private requestKwargs: Record<string, unknown>
+  ) {}
 
   private isChat(): boolean {
     return (
@@ -251,43 +256,32 @@ export class StreamingWrapper
     }
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+  [Symbol.iterator](): Iterator<unknown> {
     return this;
   }
 
-  async next(): Promise<IteratorResult<unknown>> {
+  next(): IteratorResult<unknown> {
     try {
-      // Initialize the iterator on first call
       if (!this.iterator) {
-        // If response is a Promise, await it first to get the actual stream
-        if (isPromise(this.response)) {
-          this.resolvedResponse = (await this
-            .response) as AsyncIterable<unknown>;
-        } else {
-          this.resolvedResponse = this.response as AsyncIterable<unknown>;
-        }
+        const isObject = this.response && typeof this.response === "object";
+        if (!isObject) throw new Error("Response is not an iterable");
 
-        // Now check if the resolved response is iterable
-        if (Symbol.asyncIterator in this.resolvedResponse) {
-          this.iterator = (this.resolvedResponse as AsyncIterable<unknown>)[
-            Symbol.asyncIterator
-          ]();
-        } else if (Symbol.iterator in (this.resolvedResponse as any)) {
-          // Handle sync iterables wrapped as async
-          const syncIterator = (this.resolvedResponse as Iterable<unknown>)[
+        if (typeof (this.response as any)[Symbol.iterator] === "function") {
+          this.iterator = (this.response as Iterable<unknown>)[
             Symbol.iterator
           ]();
-          this.iterator = {
-            async next() {
-              return syncIterator.next();
-            },
-          };
+        } else if (
+          typeof (this.response as Iterator<unknown>).next === "function"
+        ) {
+          this.iterator = this.response as Iterator<unknown>;
         } else {
-          throw new Error("Response is not iterable");
+          throw new Error("Response is not an iterable");
         }
       }
 
-      const result = await this.iterator.next();
+      if (!this.iterator) throw new Error("Iterator not initialized");
+
+      const result = this.iterator.next();
       if (result.done) {
         this.finalizeSpan();
         return result;
@@ -411,7 +405,7 @@ export class StreamingWrapper
 }
 
 /**
- * Async wrapper for streaming responses
+ * Async wrapper for streaming responses (AsyncIterable from MistralAI SDK)
  */
 export class AsyncStreamingWrapper
   implements AsyncIterable<unknown>, AsyncIterator<unknown>
