@@ -3,7 +3,11 @@
  */
 
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
-import { createRequire } from "module";
+// Some IDE/linter setups may not resolve optional deps from node_modules,
+// but the package is present at runtime when installed. Keep this as a normal
+// import so we can patch the public SDK surface (OpenAI/Groq pattern).
+// @ts-ignore
+import { Mistral } from "@mistralai/mistralai";
 import { __version__ } from "./version";
 import {
   agentsStreamWrapper,
@@ -14,9 +18,6 @@ import {
   fimStreamWrapper,
   fimWrapper,
 } from "./wrappers";
-
-// Create require function for ESM compatibility
-const require = createRequire(import.meta.url);
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.mistralai";
 const INSTRUMENTS = ["@mistralai/mistralai >= 1.0.0"];
@@ -31,12 +32,15 @@ export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
 }
 
+type MistralResourceName = "chat" | "embeddings" | "fim" | "agents";
+
 /**
  * Custom MistralAI instrumentor for Netra SDK
  */
 export class NetraMistralAIInstrumentor {
   private tracer: Tracer | null = null;
   private tracerProvider?: TracerProvider;
+  private resourceCtors: Partial<Record<MistralResourceName, any>> = {};
 
   constructor() {
     // Initialize without tracer - will be set during instrument()
@@ -127,12 +131,53 @@ export class NetraMistralAIInstrumentor {
     return isInstrumented;
   }
 
+  /**
+   * Resolve public resource constructors from the exported Mistral client.
+   * This avoids relying on internal "@mistralai/mistralai/sdk/*" paths.
+   *
+   * We create a temporary client instance purely for discovery; it should not
+   * make network calls.
+   */
+  private _ensureResourceCtors(): void {
+    if (
+      this.resourceCtors.chat &&
+      this.resourceCtors.embeddings &&
+      this.resourceCtors.fim &&
+      this.resourceCtors.agents
+    ) {
+      return;
+    }
+
+    // Some SDK versions require an apiKey at construction time.
+    // Use a dummy if none is provided; this is only for discovering constructors.
+    const apiKey = process.env.MISTRAL_API_KEY ?? "netra_dummy_api_key";
+
+    let client: any;
+    try {
+      client = new (Mistral as any)({ apiKey });
+    } catch {
+      // Fallback for alternate ctor signatures
+      client = new (Mistral as any)(apiKey);
+    }
+
+    for (const name of ["chat", "embeddings", "fim", "agents"] as const) {
+      const res = client?.[name];
+      if (res && res.constructor) {
+        this.resourceCtors[name] = res.constructor;
+      }
+    }
+  }
+
+  private _getCtor(name: MistralResourceName): any | null {
+    this._ensureResourceCtors();
+    return this.resourceCtors[name] ?? null;
+  }
+
   private _instrumentChat(): boolean {
     if (!this.tracer) return false;
 
     try {
-      const chatModule = require("@mistralai/mistralai/sdk/chat");
-      const ChatClass = chatModule.Chat;
+      const ChatClass = this._getCtor("chat");
       let didPatch = false;
 
       if (ChatClass?.prototype?.complete) {
@@ -192,8 +237,7 @@ export class NetraMistralAIInstrumentor {
     if (!this.tracer) return false;
 
     try {
-      const embeddingsModule = require("@mistralai/mistralai/sdk/embeddings");
-      const EmbeddingsClass = embeddingsModule.Embeddings;
+      const EmbeddingsClass = this._getCtor("embeddings");
       let didPatch = false;
 
       if (EmbeddingsClass?.prototype?.create) {
@@ -230,8 +274,7 @@ export class NetraMistralAIInstrumentor {
     if (!this.tracer) return false;
 
     try {
-      const fimModule = require("@mistralai/mistralai/sdk/fim");
-      const FimClass = fimModule.Fim;
+      const FimClass = this._getCtor("fim");
       let didPatch = false;
 
       if (FimClass?.prototype?.complete) {
@@ -291,8 +334,7 @@ export class NetraMistralAIInstrumentor {
     if (!this.tracer) return false;
 
     try {
-      const agentsModule = require("@mistralai/mistralai/sdk/agents");
-      const AgentsClass = agentsModule.Agents;
+      const AgentsClass = this._getCtor("agents");
       let didPatch = false;
 
       if (AgentsClass?.prototype?.complete) {
@@ -350,8 +392,7 @@ export class NetraMistralAIInstrumentor {
 
   private _uninstrumentChat(): void {
     try {
-      const chatModule = require("@mistralai/mistralai/sdk/chat");
-      const ChatClass = chatModule.Chat;
+      const ChatClass = this._getCtor("chat");
 
       const originalComplete = originalMethods.get("chat.complete");
       if (originalComplete && ChatClass?.prototype) {
@@ -369,8 +410,7 @@ export class NetraMistralAIInstrumentor {
 
   private _uninstrumentEmbeddings(): void {
     try {
-      const embeddingsModule = require("@mistralai/mistralai/sdk/embeddings");
-      const EmbeddingsClass = embeddingsModule.Embeddings;
+      const EmbeddingsClass = this._getCtor("embeddings");
 
       const originalCreate = originalMethods.get("embeddings.create");
       if (originalCreate && EmbeddingsClass?.prototype) {
@@ -383,8 +423,7 @@ export class NetraMistralAIInstrumentor {
 
   private _uninstrumentFIM(): void {
     try {
-      const fimModule = require("@mistralai/mistralai/sdk/fim");
-      const FimClass = fimModule.Fim;
+      const FimClass = this._getCtor("fim");
 
       const originalComplete = originalMethods.get("fim.complete");
       if (originalComplete && FimClass?.prototype) {
@@ -402,8 +441,7 @@ export class NetraMistralAIInstrumentor {
 
   private _uninstrumentAgents(): void {
     try {
-      const agentsModule = require("@mistralai/mistralai/sdk/agents");
-      const AgentsClass = agentsModule.Agents;
+      const AgentsClass = this._getCtor("agents");
 
       const originalComplete = originalMethods.get("agents.complete");
       if (originalComplete && AgentsClass?.prototype) {
