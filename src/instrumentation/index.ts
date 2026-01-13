@@ -29,6 +29,8 @@ export function initInstrumentations(
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
+  let useCustomMistralAI = false;
+
   // Track whether to use custom instrumentors
   let useCustomOpenAI = false;
   let useCustomGroq = false;
@@ -61,6 +63,10 @@ export function initInstrumentations(
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
       instrumentModules.google_vertexai = true;
     }
+    if (
+      instruments.has(NetraInstruments.LANGCHAIN) ||
+      instruments.has(NetraInstruments.LANGGRAPH)
+    ) {
     if (
       instruments.has(NetraInstruments.LANGCHAIN) ||
       instruments.has(NetraInstruments.LANGGRAPH)

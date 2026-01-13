@@ -71,7 +71,9 @@ function extractFirstCompletionText(
   response: Record<string, unknown>
 ): string | undefined {
   // Common: choices[0].message.content (chat) or choices[0].text (completion)
-  const choices = response.choices as Array<Record<string, unknown>> | undefined;
+  const choices = response.choices as
+    | Array<Record<string, unknown>>
+    | undefined;
   if (Array.isArray(choices) && choices.length > 0) {
     const first = choices[0];
     const message = first.message as Record<string, unknown> | undefined;
@@ -92,7 +94,9 @@ function extractFirstCompletionText(
   const output = response.output as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(output) && output.length > 0) {
     const firstOut = output[0];
-    const content = firstOut.content as Array<Record<string, unknown>> | undefined;
+    const content = firstOut.content as
+      | Array<Record<string, unknown>>
+      | undefined;
     if (Array.isArray(content) && content.length > 0) {
       const firstContent = content[0];
       if (firstContent.text !== undefined) {
@@ -197,7 +201,10 @@ export function setRequestAttributes(
     const maxLen = Config.CONVERSATION_MAX_LEN;
 
     if (Array.isArray(kwargs.messages)) {
-      const promptJson = truncateAttribute(safeStringify(kwargs.messages), maxLen);
+      const promptJson = truncateAttribute(
+        safeStringify(kwargs.messages),
+        maxLen
+      );
       span.setAttribute("gen_ai.prompt", promptJson);
       span.setAttribute("llm.request.messages", promptJson);
     } else if (kwargs.prompt !== undefined) {
