@@ -15,6 +15,7 @@ import {
 import { groqInstrumentor } from "./groq";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
+import { googleGenAIInstrumentor } from "./google-genai";
 import { typeORMInstrumentor } from "./typeorm";
 
 // Interface for TracerProvider with addSpanProcessor method
@@ -51,6 +52,7 @@ export function initInstrumentations(
   let useCustomOpenAI = false;
   let useCustomGroq = false;
   let useCustomMistralAI = false;
+  let useCustomGoogleGenAI = false;
 
   if (!instruments || instruments.size === 0) {
     // Enable all by default
@@ -58,7 +60,8 @@ export function initInstrumentations(
     useCustomOpenAI = true;
     useCustomGroq = true;
     useCustomMistralAI = true;
-    instrumentModules.google_vertexai = true;
+    useCustomGoogleGenAI = true;
+    instrumentModules.google_vertexai = false; // Use custom Google GenAI instead
     instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
     instrumentModules.pinecone = true;
@@ -76,11 +79,11 @@ export function initInstrumentations(
     if (instruments.has(NetraInstruments.GROQ)) {
       useCustomGroq = true;
     }
-    if (
-      instruments.has(NetraInstruments.GOOGLE_GENAI) ||
-      instruments.has(NetraInstruments.VERTEX_AI)
-    ) {
-      // Google GenAI (Gemini) is supported via VertexAI instrumentation
+    if (instruments.has(NetraInstruments.GOOGLE_GENAI)) {
+      useCustomGoogleGenAI = true;
+    }
+    if (instruments.has(NetraInstruments.VERTEX_AI)) {
+      // Vertex AI still uses Traceloop's vertexai module
       instrumentModules.google_vertexai = true;
     }
     if (
@@ -220,6 +223,29 @@ async function initCustomInstrumentationsAsync(
       }
     }
   }
+
+  // Initialize custom Google GenAI instrumentation
+  if (
+    useCustomGoogleGenAI &&
+    !blockInstruments?.has(NetraInstruments.GOOGLE_GENAI)
+  ) {
+    try {
+      googleGenAIInstrumentor.instrument({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom Google GenAI instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug(
+          "Failed to initialize custom Google GenAI instrumentation:",
+          e
+        );
+      }
+    }
+  }
+
+  // Initialize additional OpenTelemetry instrumentations
+  initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
 }
 
 function initOpenTelemetryInstrumentations(
@@ -419,6 +445,16 @@ export function uninstrumentAll(): void {
     }
   } catch (e) {
     console.debug("Failed to uninstrument Groq:", e);
+  }
+
+  // Uninstrument custom Google GenAI instrumentation
+  try {
+    if (googleGenAIInstrumentor.isInstrumented()) {
+      googleGenAIInstrumentor.uninstrument();
+      console.debug("Custom Google GenAI instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument Google GenAI:", e);
   }
 
   // Uninstrument custom TypeORM instrumentation
