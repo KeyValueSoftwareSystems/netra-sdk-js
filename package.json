@@ -51,6 +51,7 @@
     "@langchain/langgraph": "^1.1.1",
     "@langchain/ollama": "^1.2.1",
     "@mistralai/mistralai": ">=1.0.0",
+    "@google/generative-ai": "^0.24.1",
     "@opentelemetry/instrumentation-express": "^0.40.0",
     "@opentelemetry/instrumentation-http": "^0.52.1",
     "@prisma/instrumentation": "^5.0.0",
@@ -79,6 +80,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.0.0",
+    "@types/shimmer": "^1.2.0",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3"

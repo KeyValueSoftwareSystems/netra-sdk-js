@@ -24,6 +24,7 @@ export {
   SessionSpanProcessor,
 } from "./processors";
 export { ConversationType } from "./session-manager";
+export { SessionSpanProcessor } from "./session-span-processor";
 export { SpanType } from "./types";
 export type { ActionModel, UsageModel } from "./types";
 // Expose provider instrumentors for advanced usage/testing

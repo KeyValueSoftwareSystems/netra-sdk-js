@@ -13,11 +13,12 @@ import {
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "../processors";
+import { googleGenAIInstrumentor } from "./google-genai";
 import { groqInstrumentor } from "./groq";
+import { langgraphInstrumentor } from "./langgraph";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
-import { langgraphInstrumentor } from "./langgraph";
 
 // Interface for TracerProvider with addSpanProcessor method
 interface TracerProviderWithProcessors {
@@ -29,7 +30,7 @@ export {
   modelAsDict,
   setRequestAttributes,
   setResponseAttributes,
-  shouldSuppressInstrumentation,
+  shouldSuppressInstrumentation
 } from "./utils";
 
 const require = createRequire(import.meta.url);
@@ -55,6 +56,7 @@ export function initInstrumentations(
     groq: false,
     mistral: false,
     langgraph: false,
+    googleGenAI: false,
   };
 
   if (!instruments || instruments.size === 0) {
@@ -63,7 +65,9 @@ export function initInstrumentations(
     customInstrumentModules.groq = true;
     customInstrumentModules.mistral = true;
     customInstrumentModules.langgraph = true;
-    instrumentModules.google_vertexai = true;
+    customInstrumentModules.googleGenAI = true;
+    instrumentModules.google_vertexai = false;
+    instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
     instrumentModules.pinecone = true;
     instrumentModules.qdrant = true;
@@ -80,11 +84,11 @@ export function initInstrumentations(
     if (instruments.has(NetraInstruments.GROQ)) {
       customInstrumentModules.groq = true;
     }
-    if (
-      instruments.has(NetraInstruments.GOOGLE_GENAI) ||
-      instruments.has(NetraInstruments.VERTEX_AI)
-    ) {
-      // Google GenAI (Gemini) is supported via VertexAI instrumentation
+    if (instruments.has(NetraInstruments.GOOGLE_GENAI)) {
+      customInstrumentModules.googleGenAI = true;
+    }
+    if (instruments.has(NetraInstruments.VERTEX_AI)) {
+      // Vertex AI still uses Traceloop's vertexai module
       instrumentModules.google_vertexai = true;
     }
     if (instruments.has(NetraInstruments.LANGCHAIN)) {
@@ -229,6 +233,27 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
+  // Initialize custom Google GenAI instrumentation
+  if (
+    customInstrumentModules.googleGenAI &&
+    !blockInstruments?.has(NetraInstruments.GOOGLE_GENAI)
+  ) {
+    try {
+      googleGenAIInstrumentor.instrument({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom Google GenAI instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug(
+          "Failed to initialize custom Google GenAI instrumentation:",
+          e
+        );
+      }
+    }
+  }
+
+  
   // Initialize custom Langgraph instrumentation
   if (
     customInstrumentModules.langgraph &&
@@ -468,7 +493,17 @@ export function uninstrumentAll(): void {
     console.debug("Failed to uninstrument Groq:", e);
   }
 
-  // Uninstrument custom Groq instrumentation
+  // Uninstrument custom Google GenAI instrumentation
+  try {
+    if (googleGenAIInstrumentor.isInstrumented()) {
+      googleGenAIInstrumentor.uninstrument();
+      console.debug("Custom Google GenAI instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument Google GenAI:", e);
+  }
+
+  // Uninstrument custom Langgraph instrumentation
   try {
     if (langgraphInstrumentor.isInstrumented()) {
       langgraphInstrumentor.uninstrument();

@@ -1,0 +1,38 @@
+/**
+ * Utility functions for Google GenAI instrumentation
+ */
+
+import { Span } from "@opentelemetry/api";
+import {
+  setRequestAttributes as setBaseRequestAttributes,
+  setResponseAttributes as setBaseResponseAttributes,
+} from "../utils";
+
+export function setRequestAttributes(
+  span: Span,
+  kwargs: Record<string, unknown>,
+  requestType: string
+): void {
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
+  }
+
+  setBaseRequestAttributes(span, kwargs, requestType, "google_genai");
+
+  if (kwargs.dimensions !== undefined) {
+    span.setAttribute("gen_ai.request.dimensions", Number(kwargs.dimensions));
+  }
+}
+
+export function setResponseAttributes(
+  span: Span,
+  response: Record<string, unknown>
+): void {
+  if (!span.isRecording()) {
+    console.log("Span is not recording");
+    return;
+  }
+
+  setBaseResponseAttributes(span, response);
+}
