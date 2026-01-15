@@ -239,6 +239,30 @@ export class Config {
   private _setTraceContentEnv(): void {
     process.env.TRACELOOP_TRACE_CONTENT = this.traceContent ? "true" : "false";
   }
+
+  /**
+   * Set Traceloop environment variables based on Netra config.
+   * This ensures the Traceloop SDK picks up our configuration.
+   */
+  public setTraceloopEnv(): void {
+    // Set TRACELOOP_BASE_URL so Traceloop SDK uses our endpoint
+    if (this.otlpEndpoint && !process.env.TRACELOOP_BASE_URL) {
+      process.env.TRACELOOP_BASE_URL = this.otlpEndpoint;
+    }
+
+    // Set TRACELOOP_API_KEY if we have one
+    if (this.apiKey && !process.env.TRACELOOP_API_KEY) {
+      process.env.TRACELOOP_API_KEY = this.apiKey;
+    }
+
+    // Set headers for Traceloop
+    if (Object.keys(this.headers).length > 0 && !process.env.TRACELOOP_HEADERS) {
+      const headerStr = Object.entries(this.headers)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(",");
+      process.env.TRACELOOP_HEADERS = headerStr;
+    }
+  }
 }
 
 

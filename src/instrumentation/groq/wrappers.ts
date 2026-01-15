@@ -1,4 +1,4 @@
-import { Tracer, Span, SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { Tracer, Span, SpanKind, SpanStatusCode, context } from "@opentelemetry/api";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
   modelAsDict,
@@ -29,10 +29,16 @@ function groqWrapper(
 
     const isStreaming = kwargs.stream === true;
     if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
-      const span = tracer.startSpan(spanName, {
-        kind: SpanKind.CLIENT,
-        attributes: { "llm.request.type": requestType },
-      });
+      // IMPORTANT: Pass the active context to inherit parent span
+      const currentContext = context.active();
+      const span = tracer.startSpan(
+        spanName,
+        {
+          kind: SpanKind.CLIENT,
+          attributes: { "llm.request.type": requestType },
+        },
+        currentContext
+      );
 
       try {
         setRequestAttributes(span, kwargs, requestType);
