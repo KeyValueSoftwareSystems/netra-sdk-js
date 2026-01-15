@@ -18,6 +18,7 @@ import { groqInstrumentor } from "./groq";
 import { langgraphInstrumentor } from "./langgraph";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
+import { googleGenAIInstrumentor } from "./google-genai";
 import { typeORMInstrumentor } from "./typeorm";
 
 // Interface for TracerProvider with addSpanProcessor method

@@ -1,17 +1,15 @@
-import { Tracer, Span, SpanKind, SpanStatusCode } from "@opentelemetry/api";
-import { setRequestAttributes, setResponseAttributes } from "./utils";
+import { Span, SpanKind, SpanStatusCode, Tracer } from "@opentelemetry/api";
 import {
-  modelAsDict,
   isPromise,
+  modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
+import { setRequestAttributes, setResponseAttributes } from "./utils";
 
-type GoogleGenAIRequestType = "chat" | "embedding" | "video" | "image";
+type GoogleGenAIRequestType = "chat" | "embedding";
 
 const CHAT_SPAN_NAME = "google_genai.chat";
 const EMBEDDING_SPAN_NAME = "google_genai.embedding";
-const VIDEO_SPAN_NAME = "google_genai.video";
-const IMAGE_SPAN_NAME = "google_genai.image";
 
 function googleGenAIWrapper(
   tracer: Tracer,
@@ -98,12 +96,6 @@ export const chatWrapper = (tracer: Tracer) =>
 
 export const embeddingsWrapper = (tracer: Tracer) =>
   googleGenAIWrapper(tracer, EMBEDDING_SPAN_NAME, "embedding");
-
-export const videosWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, VIDEO_SPAN_NAME, "video");
-
-export const imagesWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, IMAGE_SPAN_NAME, "image");
 
 // Streaming wrapper for Google GenAI can be added later if needed.
 // Google GenAI's generateContentStream returns an object with a 'stream' property which is an AsyncIterable.
