@@ -1,14 +1,19 @@
 /**
  * Custom Google GenAI instrumentor for Netra SDK
  */
-import { GenerativeModel } from "@google/generative-ai";
+import { Models } from "@google/genai";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import shimmer from "shimmer";
 import { __version__ } from "./version";
-import { chatWrapper, embeddingsWrapper } from "./wrappers";
+import {
+  chatWrapper,
+  embeddingsWrapper,
+  imagesWrapper,
+  videosWrapper,
+} from "./wrappers";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.google-genai";
-const INSTRUMENTS = ["@google/generative-ai >= 0.1.0"];
+const INSTRUMENTS = ["@google/genai >= 0.1.0"];
 
 // Track instrumentation state
 let isInstrumented = false;
@@ -85,7 +90,7 @@ export class NetraGoogleGenAIInstrumentor {
     if (!this.tracer) return;
 
     try {
-      if (!GenerativeModel?.prototype?.generateContent) {
+      if (!Models) {
         console.error(
           "Failed to find Google GenAI GenerativeModel to instrument"
         );
@@ -95,15 +100,27 @@ export class NetraGoogleGenAIInstrumentor {
       const tracer = this.tracer;
 
       shimmer.wrap(
-        GenerativeModel.prototype,
+        Models.prototype,
         "generateContent",
         chatWrapper(tracer)
       );
 
       shimmer.wrap(
-        GenerativeModel.prototype,
+        Models.prototype,
         "embedContent",
         embeddingsWrapper(tracer)
+      );
+
+      shimmer.wrap(
+        Models.prototype,
+        "generateVideos",
+        videosWrapper(tracer)
+      );
+
+      shimmer.wrap(
+        Models.prototype,
+        "generateImages",
+        imagesWrapper(tracer)
       );
     } catch (error) {
       console.debug(
@@ -115,11 +132,17 @@ export class NetraGoogleGenAIInstrumentor {
   private _uninstrumentGenerativeModel(): void {
     try {
       // Verify methods before unwrapping
-      if (typeof GenerativeModel.prototype.generateContent === "function") {
-        shimmer.unwrap(GenerativeModel.prototype, "generateContent");
+      if (typeof Models.prototype.generateContent === "function") {
+        shimmer.unwrap(Models.prototype, "generateContent");
       }
-      if (typeof GenerativeModel.prototype.embedContent === "function") {
-        shimmer.unwrap(GenerativeModel.prototype, "embedContent");
+      if (typeof Models.prototype.embedContent === "function") {
+        shimmer.unwrap(Models.prototype, "embedContent");
+      }
+      if (typeof Models.prototype.generateVideos === "function") {
+        shimmer.unwrap(Models.prototype, "generateVideos");
+      }
+      if (typeof Models.prototype.generateImages === "function") {
+        shimmer.unwrap(Models.prototype, "generateImages");
       }
     } catch (error) {
       console.debug(`Failed to uninstrument Google GenAI: ${error}`);
