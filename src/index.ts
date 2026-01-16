@@ -5,6 +5,9 @@
  */
 
 import { context, Span, SpanKind, trace } from "@opentelemetry/api";
+import { Dashboard } from "./api/dashboard";
+import { Evaluation } from "./api/evaluation";
+import { Usage } from "./api/usage";
 import { Config, NetraConfig } from "./config";
 import {
   initInstrumentations,
@@ -29,6 +32,60 @@ export type { ActionModel, UsageModel } from "./types";
 // Expose provider instrumentors for advanced usage/testing
 export { mistralAIInstrumentor } from "./instrumentation/mistralai";
 
+// Export API types and classes
+export {
+  // Usage API
+  ListSpansParams,
+  ListTracesParams,
+  SessionUsageData,
+  SpansPage,
+  TenantUsageData,
+  TraceSpan,
+  TracesPage,
+  TraceSummary,
+  Usage,
+  // Evaluation API
+  CreateDatasetParams,
+  Dataset,
+  DatasetEntry,
+  DatasetItem,
+  EntryStatus,
+  Evaluation,
+  EvaluationScore,
+  EvaluatorFunction,
+  Run,
+  RunEntryContext,
+  RunStatus,
+  TaskFunction,
+  TestSuiteResult,
+  // Dashboard API
+  Aggregation,
+  CategoricalDataPoint,
+  ChartType,
+  Dashboard,
+  DashboardData,
+  Dimension,
+  DimensionField,
+  DimensionValue,
+  Filter,
+  FilterConfig,
+  FilterField,
+  FilterType,
+  GroupBy,
+  Measure,
+  metadataField,
+  Metrics,
+  NumberResponse,
+  Operator,
+  QueryDataParams,
+  QueryResponse,
+  Scope,
+  TimeRange,
+  TimeSeriesDataPoint,
+  TimeSeriesResponse,
+  TimeSeriesWithDimension,
+} from "./api";
+
 let _initialized = false;
 let _rootSpan: Span | undefined;
 let _config: Config | undefined;
@@ -36,6 +93,24 @@ let _config: Config | undefined;
 export class Netra {
   private static _initialized = false;
   private static _config: Config | undefined;
+
+  /**
+   * Usage API client for session/tenant usage and traces
+   * Available after calling Netra.init()
+   */
+  static usage: Usage;
+
+  /**
+   * Evaluation API client for datasets, runs, and test suites
+   * Available after calling Netra.init()
+   */
+  static evaluation: Evaluation;
+
+  /**
+   * Dashboard API client for querying metrics and time-series data
+   * Available after calling Netra.init()
+   */
+  static dashboard: Dashboard;
 
   /**
    * Check if Netra has been initialized
@@ -64,6 +139,11 @@ export class Netra {
 
     // Initialize instrumentations
     initInstrumentations(cfg, config.instruments, config.blockInstruments);
+
+    // Initialize API clients
+    this.usage = new Usage(cfg);
+    this.evaluation = new Evaluation(cfg);
+    this.dashboard = new Dashboard(cfg);
 
     this._initialized = true;
     console.info("Netra successfully initialized.");
