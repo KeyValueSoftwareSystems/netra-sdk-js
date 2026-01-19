@@ -32,7 +32,7 @@ export enum Aggregation {
   P90 = "p90",
   P95 = "p95",
   P99 = "p99",
-  MEDIAN = "Median",
+  MEDIAN = "Median (p50)",
   PERCENTAGE = "Percentage",
   TOTAL_COUNT = "Total Count",
 }
@@ -45,7 +45,6 @@ export enum GroupBy {
 
 export enum DimensionField {
   ENVIRONMENT = "environment",
-  USER_ID = "user_id",
   SERVICE = "service",
   MODEL_NAME = "model_name",
 }
@@ -83,6 +82,7 @@ export enum FilterField {
   LATENCY = "latency",
   MODEL_NAME = "model_name",
   MODELS = "models",
+  METADATA = "metadata",
 }
 
 /**
