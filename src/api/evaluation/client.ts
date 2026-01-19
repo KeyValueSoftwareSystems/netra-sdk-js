@@ -17,7 +17,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
   async getDataset(datasetId: string): Promise<any[]> {
     if (!this.isInitialized()) {
       console.error(
-        `netra.evaluation: Evaluation client is not initialized; cannot fetch dataset '${datasetId}'`
+        `netra.evaluation: Evaluation client is not initialized; cannot fetch dataset '${datasetId}'`,
       );
       return [];
     }
@@ -29,17 +29,24 @@ export class EvaluationHttpClient extends NetraHttpClient {
   /**
    * Create a run for a dataset
    */
-  async createRun(datasetId: string, name: string): Promise<any> {
+  async createRun(
+    name: string,
+    datasetId?: string,
+    evaluatorsConfig?: Record<string, any>[],
+  ): Promise<any> {
     if (!this.isInitialized()) {
       console.error(
-        `netra.evaluation: Evaluation client is not initialized; cannot create run for dataset '${datasetId}'`
+        `netra.evaluation: Evaluation client is not initialized; cannot create run for dataset '${datasetId}'`,
       );
       return { success: false };
     }
 
-    const response = await this.post(`/evaluations/run/dataset/${datasetId}`, {
+    const payload = {
       name,
-    });
+      datasetId,
+      localEvaluators: evaluatorsConfig,
+    };
+    const response = await this.post("/evaluations/test_run", payload);
 
     if (!response.ok) {
       return { success: false };
@@ -51,14 +58,10 @@ export class EvaluationHttpClient extends NetraHttpClient {
   /**
    * Create an empty dataset and return backend data
    */
-  async createDataset(
-    name: string,
-    tags?: string[],
-    policyIds?: string[]
-  ): Promise<any> {
+  async createDataset(name: string, tags?: string[]): Promise<any> {
     if (!this.isInitialized()) {
       console.error(
-        "netra.evaluation: Evaluation client is not initialized; cannot create dataset"
+        "netra.evaluation: Evaluation client is not initialized; cannot create dataset",
       );
       return { success: false };
     }
@@ -66,10 +69,10 @@ export class EvaluationHttpClient extends NetraHttpClient {
     const payload = {
       name,
       tags: tags ?? [],
-      policyIds: policyIds ?? [],
     };
 
     const response = await this.post("/evaluations/dataset", payload);
+    console.log("Response:", response);
 
     if (!response.ok) {
       return { success: false };
@@ -81,20 +84,20 @@ export class EvaluationHttpClient extends NetraHttpClient {
   /**
    * Add a single item to an existing dataset
    */
-  async addDatasetEntry(
+  async addDatasetItem(
     datasetId: string,
-    itemPayload: Record<string, any>
+    itemPayload: Record<string, any>,
   ): Promise<any> {
     if (!this.isInitialized()) {
       console.error(
-        `netra.evaluation: Evaluation client is not initialized; cannot add item to dataset '${datasetId}'`
+        `netra.evaluation: Evaluation client is not initialized; cannot add item to dataset '${datasetId}'`,
       );
       return { success: false };
     }
 
     const response = await this.post(
       `/evaluations/dataset/${datasetId}/items`,
-      itemPayload
+      itemPayload,
     );
 
     if (!response.ok) {
@@ -105,76 +108,139 @@ export class EvaluationHttpClient extends NetraHttpClient {
   }
 
   /**
-   * Post per-entry status
+   * Submit a new run item to the backend
    */
-  async postEntryStatus(
-    runId: string,
-    testId: string,
-    status: EntryStatus,
-    traceId?: string,
-    sessionId?: string,
-    scores?: EvaluationScore[]
-  ): Promise<void> {
+  async postRunItem(runId: string, payload: Record<string, any>): Promise<any> {
     if (!this.isInitialized()) {
       console.error(
-        `netra.evaluation: Evaluation client is not initialized; cannot post status '${status}' for run '${runId}' test '${testId}'`
+        "netra.evaluation: Evaluation client is not initialized; cannot post run item",
       );
-      return;
+      return { success: false };
     }
 
-    const payload: Record<string, any> = {
-      status,
-      traceId: traceId ?? null,
-      sessionId: sessionId ?? null,
-    };
+    const response = await this.post(`/evaluations/run/${runId}/item`, payload);
 
-    // Include score objects when provided
-    if (scores && scores.length > 0) {
-      const normalizedScores: Array<{ metric: string; score: number }> = [];
-      for (const score of scores) {
-        if (score && score.metricType && score.score !== undefined) {
-          normalizedScores.push({
-            metric: score.metricType,
-            score: score.score,
-          });
-        }
+    if (!response.ok) {
+      return { success: false };
+    }
+
+    const data = this.extractData(response, { success: false });
+    if (data && typeof data === "object" && "item" in data) {
+      const runItem = data.item;
+      if (runItem && typeof runItem === "object" && "id" in runItem) {
+        return runItem.id;
       }
-      payload.metrics = normalizedScores;
-    } else {
-      payload.metrics = [];
+    }
+    return data;
+  }
+
+  /**
+   * Submit local evaluations result
+   */
+  async submitLocalEvaluations(
+    runId: string,
+    testRunItemId: string,
+    evaluatorResults: Array<Record<string, any>>,
+  ): Promise<any> {
+    if (!this.isInitialized()) {
+      console.error(
+        "netra.evaluation: Evaluation client is not initialized; cannot submit local evaluations",
+      );
+      return { success: false };
     }
 
+    const payload = { evaluatorResults };
     const response = await this.post(
-      `/evaluations/run/${runId}/test/${testId}`,
-      payload
+      `/evaluations/run/${runId}/item/${testRunItemId}/local-evaluations`,
+      payload,
     );
 
     if (!response.ok) {
+      return { success: false };
+    }
+
+    return this.extractData(response, { success: false });
+  }
+
+  /**
+   * Submit the run status
+   */
+  async postRunStatus(runId: string, status: string): Promise<any> {
+    if (!this.isInitialized()) {
       console.error(
-        `netra.evaluation: Failed to post status '${status}' for run '${runId}' test '${testId}'`
+        "netra.evaluation: Evaluation client is not initialized; cannot post run status",
       );
+      return { success: false };
+    }
+
+    const payload = { status };
+    const response = await this.post(
+      `/evaluations/run/${runId}/status`,
+      payload,
+    );
+
+    if (!response.ok) {
+      return { success: false };
+    }
+
+    const data = this.extractData(response, { success: false });
+    if (data && typeof data === "object") {
+      console.info("netra.evaluation: Completed test run successfully");
+    }
+    return data;
+  }
+
+  /**
+   * Check if a span exists in the backend
+   */
+  async getSpanById(spanId: string): Promise<any> {
+    if (!this.isInitialized()) {
+      console.error(
+        "netra.evaluation: Evaluation client is not initialized; cannot get span",
+      );
+      return null;
+    }
+
+    try {
+      const response = await this.get(`sdk/traces/spans/${spanId}`);
+      if (!response.ok) {
+        return null;
+      }
+      return this.extractData(response, null);
+    } catch {
+      return null;
     }
   }
 
   /**
-   * Post final run status
+   * Wait until a span is available in the backend
+   * Polls the GET /spans/:id endpoint to verify span availability before running evaluators
    */
-  async postRunStatus(runId: string, status: RunStatus): Promise<void> {
-    if (!this.isInitialized()) {
-      console.error(
-        `netra.evaluation: Evaluation client is not initialized; cannot post run status '${status}' for run '${runId}'`
-      );
-      return;
+  async waitForSpanIngestion(
+    spanId?: string,
+    timeoutSeconds: number = 60.0,
+    pollIntervalSeconds: number = 1.0,
+    initialDelaySeconds: number = 0.5,
+  ): Promise<boolean> {
+    if (!spanId) {
+      return false;
     }
 
-    const response = await this.post(`/evaluations/run/${runId}/status`, {
-      status,
-    });
+    await new Promise((resolve) =>
+      setTimeout(resolve, initialDelaySeconds * 1000),
+    );
 
-    if (!response.ok) {
-      console.error(
-        `netra.evaluation: Failed to post run status '${status}' for run '${runId}'`
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (Date.now() < deadline) {
+      const spanData = await this.getSpanById(spanId);
+      if (spanData !== null) {
+        return true;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, pollIntervalSeconds * 1000),
       );
     }
+
+    return false;
   }
 }

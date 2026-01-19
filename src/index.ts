@@ -19,7 +19,7 @@ import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
-export { NetraInstruments } from "./config";
+export { NetraInstruments, Config } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
   InstrumentationSpanProcessor,
@@ -128,7 +128,7 @@ export class Netra {
   static init(config: NetraConfig = {}): void {
     if (this._initialized) {
       console.warn(
-        "Netra.init() called more than once; ignoring subsequent calls."
+        "Netra.init() called more than once; ignoring subsequent calls.",
       );
       return;
     }
@@ -178,7 +178,7 @@ export class Netra {
       }
 
       console.info(
-        "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it."
+        "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
       );
     }
   }
@@ -253,14 +253,16 @@ export class Netra {
   /**
    * Run a function with the root span as the active parent context.
    * All spans created within this function will be children of the root span.
-   * 
+   *
    * @param fn The function to run within the root span context
    * @returns The result of the function
    */
   static runWithRootSpan<T>(fn: () => T): T {
     const rootSpan = SessionManager.getRootSpan();
     if (!rootSpan) {
-      console.warn("runWithRootSpan: No root span available. Running function without parent context.");
+      console.warn(
+        "runWithRootSpan: No root span available. Running function without parent context.",
+      );
       return fn();
     }
 
@@ -272,14 +274,16 @@ export class Netra {
   /**
    * Run an async function with the root span as the active parent context.
    * All spans created within this function will be children of the root span.
-   * 
+   *
    * @param fn The async function to run within the root span context
    * @returns A promise that resolves with the result of the function
    */
   static async runWithRootSpanAsync<T>(fn: () => Promise<T>): Promise<T> {
     const rootSpan = SessionManager.getRootSpan();
     if (!rootSpan) {
-      console.warn("runWithRootSpanAsync: No root span available. Running function without parent context.");
+      console.warn(
+        "runWithRootSpanAsync: No root span available. Running function without parent context.",
+      );
       return fn();
     }
 
@@ -294,7 +298,7 @@ export class Netra {
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
       console.error(
-        `setSessionId: sessionId must be a string, got ${typeof sessionId}`
+        `setSessionId: sessionId must be a string, got ${typeof sessionId}`,
       );
       return;
     }
@@ -304,7 +308,7 @@ export class Netra {
       SessionManager.setSessionContext("session_id", sessionId);
     } else {
       console.warn(
-        "setSessionId: Session ID must be provided for setting session_id."
+        "setSessionId: Session ID must be provided for setting session_id.",
       );
     }
   }
@@ -332,7 +336,7 @@ export class Netra {
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
       console.error(
-        `setTenantId: tenantId must be a string, got ${typeof tenantId}`
+        `setTenantId: tenantId must be a string, got ${typeof tenantId}`,
       );
       return;
     }
@@ -342,7 +346,7 @@ export class Netra {
       SessionManager.setSessionContext("tenant_id", tenantId);
     } else {
       console.warn(
-        "setTenantId: Tenant ID must be provided for setting tenant_id."
+        "setTenantId: Tenant ID must be provided for setting tenant_id.",
       );
     }
   }
@@ -354,11 +358,11 @@ export class Netra {
     if (key && value !== undefined && value !== null) {
       SessionManager.setAttributeOnActiveSpan(
         `${Config.LIBRARY_NAME}.custom.${key}`,
-        value
+        value,
       );
     } else {
       console.warn(
-        "Both key and value must be provided for custom attributes."
+        "Both key and value must be provided for custom attributes.",
       );
     }
   }
@@ -368,13 +372,13 @@ export class Netra {
    */
   static setCustomEvent(
     eventName: string,
-    attributes: Record<string, any>
+    attributes: Record<string, any>,
   ): void {
     if (eventName && attributes) {
       SessionManager.setCustomEvent(eventName, attributes);
     } else {
       console.warn(
-        "Both eventName and attributes must be provided for custom events."
+        "Both eventName and attributes must be provided for custom events.",
       );
     }
   }
@@ -385,7 +389,7 @@ export class Netra {
   static addConversation(
     conversationType: ConversationType,
     role: string,
-    content: string | Record<string, any>
+    content: string | Record<string, any>,
   ): void {
     SessionManager.addConversation(conversationType, role, content);
   }
@@ -397,7 +401,7 @@ export class Netra {
     name: string,
     attributes: Record<string, string> = {},
     moduleName: string = "netra_sdk",
-    asType: SpanType = SpanType.SPAN
+    asType: SpanType = SpanType.SPAN,
   ): SpanWrapper {
     return new SpanWrapper(name, attributes, moduleName, asType);
   }

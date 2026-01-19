@@ -3,16 +3,16 @@
  * Provides context management for evaluation run entries
  */
 
-import { context, Span, SpanKind, trace } from "@opentelemetry/api";
+import { Span, SpanKind, trace } from "@opentelemetry/api";
 import { Config } from "../../config";
 import { EvaluationHttpClient } from "./client";
-import { DatasetItem, EntryStatus, EvaluationScore, Run } from "./models";
+import { DatasetEntry, EntryStatus, EvaluationScore, Run } from "./models";
 
 export class RunEntryContext {
   private client: EvaluationHttpClient;
   private config: Config;
   readonly evaluationRun: Run;
-  readonly entry: DatasetItem;
+  readonly entry: DatasetEntry;
   traceId?: string;
   private span?: Span;
   private startTime?: Date;
@@ -21,7 +21,7 @@ export class RunEntryContext {
     client: EvaluationHttpClient,
     config: Config,
     run: Run,
-    entry: DatasetItem
+    entry: DatasetEntry,
   ) {
     this.client = client;
     this.config = config;
@@ -46,26 +46,30 @@ export class RunEntryContext {
 
     // Create a span for this entry
     const tracer = trace.getTracer("netra.evaluation");
-    this.span = tracer.startSpan(`evaluation.run.${this.evaluationRun.id}.entry.${this.entry.id}`, {
-      kind: SpanKind.INTERNAL,
-      attributes: {
-        "netra.evaluation.run_id": this.evaluationRun.id,
-        "netra.evaluation.entry_id": this.entry.id,
-        "netra.evaluation.dataset_id": this.evaluationRun.datasetId,
+    this.span = tracer.startSpan(
+      `evaluation.run.${this.evaluationRun.id}.entry.${this.entry.id}`,
+      {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          "netra.evaluation.runId": this.evaluationRun.id,
+          "netra.evaluation.entryId": this.entry.id,
+          "netra.evaluation.datasetId": this.evaluationRun.datasetId,
+        },
       },
-    });
+    );
 
     // Get trace ID from the span
     const spanContext = this.span.spanContext();
     this.traceId = spanContext.traceId;
 
-    // Post agent_triggered status
-    await this.client.postEntryStatus(
-      this.evaluationRun.id,
-      this.entry.id,
-      EntryStatus.AGENT_TRIGGERED,
-      this.traceId
-    );
+    // Post agent_triggered status using postRunItem
+    const payload = {
+      traceId: this.traceId,
+      datasetItemId: this.entry.id,
+      status: EntryStatus.AGENT_TRIGGERED,
+    };
+
+    await this.client.postRunItem(this.evaluationRun.id, payload);
   }
 
   /**
@@ -73,17 +77,24 @@ export class RunEntryContext {
    * @param success Whether the entry completed successfully
    * @param scores Optional scores to record
    */
-  async end(success: boolean = true, scores?: EvaluationScore[]): Promise<void> {
+  async end(
+    success: boolean = true,
+    scores?: EvaluationScore[],
+  ): Promise<void> {
     const status = success ? EntryStatus.AGENT_COMPLETED : EntryStatus.FAILED;
 
-    await this.client.postEntryStatus(
-      this.evaluationRun.id,
-      this.entry.id,
-      status,
-      this.traceId,
-      undefined, // sessionId
-      scores
-    );
+    // Post completed/failed status using postRunItem
+    const payload: Record<string, any> = {
+      traceId: this.traceId,
+      datasetItemId: this.entry.id,
+      status: status,
+    };
+
+    if (scores) {
+      payload.scores = scores;
+    }
+
+    await this.client.postRunItem(this.evaluationRun.id, payload);
 
     if (this.span) {
       this.span.end();
@@ -103,7 +114,7 @@ export class RunEntryContext {
    */
   async execute<T>(
     fn: (ctx: RunEntryContext) => Promise<T>,
-    scores?: EvaluationScore[]
+    scores?: EvaluationScore[],
   ): Promise<T> {
     await this.start();
 

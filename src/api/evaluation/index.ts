@@ -10,6 +10,7 @@ export {
   DatasetEntry,
   DatasetItem,
   EntryStatus,
+  ScoreType,
   EvaluationScore,
   EvaluatorFunction,
   Run,
