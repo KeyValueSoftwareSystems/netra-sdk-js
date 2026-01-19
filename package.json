@@ -45,20 +45,17 @@
     "@opentelemetry/resources": "^2.0.1",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
     "@traceloop/node-server-sdk": "^0.22.5",
-    "dotenv": "^17.2.3",
-    "groq-sdk": "^0.37.0",
-    "openai": "^6.15.0"
+    "dotenv": "^17.2.3"
   },
   "peerDependencies": {
-    "@mistralai/mistralai": ">=1.0.0",
     "@opentelemetry/instrumentation-express": "^0.40.0",
     "@opentelemetry/instrumentation-http": "^0.52.1",
-    "@prisma/instrumentation": "^5.0.0"
+    "@prisma/instrumentation": "^5.0.0",
+    "openai": "^4.0.0 || ^5.0.0 || ^6.0.0",
+    "groq-sdk": ">=0.3.0",
+    "@mistralai/mistralai": ">=1.0.0"
   },
   "peerDependenciesMeta": {
-    "@mistralai/mistralai": {
-      "optional": true
-    },
     "@opentelemetry/instrumentation-http": {
       "optional": true
     },
@@ -66,6 +63,15 @@
       "optional": true
     },
     "@prisma/instrumentation": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    },
+    "groq-sdk": {
+      "optional": true
+    },
+    "@mistralai/mistralai": {
       "optional": true
     }
   },

@@ -4,15 +4,25 @@
  * Built on top of OpenTelemetry and Traceloop
  */
 
-import { Span, SpanKind, trace } from "@opentelemetry/api";
+import { context, Span, SpanKind, trace } from "@opentelemetry/api";
 import { Config, NetraConfig } from "./config";
-import { initInstrumentations, uninstrumentAll } from "./instrumentation";
+import {
+  initInstrumentations,
+  instrumentationsReady,
+  uninstrumentAll,
+} from "./instrumentation";
+import { setSessionBaggage } from "./processors/session-span-processor";
 import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
 export { NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
+export {
+  InstrumentationSpanProcessor,
+  ScrubbingSpanProcessor,
+  SessionSpanProcessor,
+} from "./processors";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
 export type { ActionModel, UsageModel } from "./types";
@@ -36,6 +46,9 @@ export class Netra {
 
   /**
    * Initialize the Netra SDK
+   * Note: Custom instrumentations (OpenAI, Groq, MistralAI) are initialized
+   * asynchronously. Use initAsync() or await Netra.ready() to ensure
+   * instrumentations are complete before using instrumented modules.
    */
   static init(config: NetraConfig = {}): void {
     if (this._initialized) {
@@ -64,6 +77,8 @@ export class Netra {
     if (cfg.enableRootSpan) {
       const tracer = trace.getTracer("netra.root.span");
       const rootName = `${Config.LIBRARY_NAME}.root.span`;
+
+      // Create the root span
       _rootSpan = tracer.startSpan(rootName, {
         kind: SpanKind.INTERNAL,
       });
@@ -76,12 +91,45 @@ export class Netra {
 
       try {
         SessionManager.setCurrentSpan(_rootSpan);
+        // Also store the root span in SessionManager for access by SpanWrapper/decorators
+        SessionManager.setRootSpan(_rootSpan);
       } catch (e) {
         // Ignore
       }
 
-      console.info("Netra root span created and attached to context.");
+      console.info(
+        "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it."
+      );
     }
+  }
+
+  /**
+   * Initialize the Netra SDK and wait for all instrumentations to be ready.
+   * This is the recommended way to initialize Netra when using ES modules,
+   * as it ensures all async instrumentations (OpenAI, Groq, MistralAI) are
+   * complete before the application starts using the instrumented modules.
+   *
+   * @example
+   * await Netra.initAsync({ appName: 'my-app', instruments: new Set([NetraInstruments.OPENAI]) });
+   * // Now OpenAI is fully instrumented
+   * const openai = new OpenAI();
+   */
+  static async initAsync(config: NetraConfig = {}): Promise<void> {
+    this.init(config);
+    await instrumentationsReady;
+  }
+
+  /**
+   * Returns a promise that resolves when all async instrumentations are ready.
+   * Can be called after init() to wait for instrumentations.
+   *
+   * @example
+   * Netra.init({ appName: 'my-app' });
+   * await Netra.ready();
+   * // Now all instrumentations are complete
+   */
+  static async ready(): Promise<void> {
+    await instrumentationsReady;
   }
 
   /**
@@ -123,6 +171,44 @@ export class Netra {
   }
 
   /**
+   * Run a function with the root span as the active parent context.
+   * All spans created within this function will be children of the root span.
+   * 
+   * @param fn The function to run within the root span context
+   * @returns The result of the function
+   */
+  static runWithRootSpan<T>(fn: () => T): T {
+    const rootSpan = SessionManager.getRootSpan();
+    if (!rootSpan) {
+      console.warn("runWithRootSpan: No root span available. Running function without parent context.");
+      return fn();
+    }
+
+    // Create a context with the root span and run the function within it
+    const ctxWithRoot = trace.setSpan(context.active(), rootSpan);
+    return context.with(ctxWithRoot, fn);
+  }
+
+  /**
+   * Run an async function with the root span as the active parent context.
+   * All spans created within this function will be children of the root span.
+   * 
+   * @param fn The async function to run within the root span context
+   * @returns A promise that resolves with the result of the function
+   */
+  static async runWithRootSpanAsync<T>(fn: () => Promise<T>): Promise<T> {
+    const rootSpan = SessionManager.getRootSpan();
+    if (!rootSpan) {
+      console.warn("runWithRootSpanAsync: No root span available. Running function without parent context.");
+      return fn();
+    }
+
+    // Create a context with the root span and run the function within it
+    const ctxWithRoot = trace.setSpan(context.active(), rootSpan);
+    return context.with(ctxWithRoot, fn);
+  }
+
+  /**
    * Set session_id context attributes for all spans
    */
   static setSessionId(sessionId: string): void {
@@ -133,6 +219,8 @@ export class Netra {
       return;
     }
     if (sessionId) {
+      // Store in baggage for span processors to pick up
+      setSessionBaggage("session_id", sessionId);
       SessionManager.setSessionContext("session_id", sessionId);
     } else {
       console.warn(
@@ -150,6 +238,8 @@ export class Netra {
       return;
     }
     if (userId) {
+      // Store in baggage for span processors to pick up
+      setSessionBaggage("user_id", userId);
       SessionManager.setSessionContext("user_id", userId);
     } else {
       console.warn("setUserId: User ID must be provided for setting user_id.");
@@ -167,6 +257,8 @@ export class Netra {
       return;
     }
     if (tenantId) {
+      // Store in baggage for span processors to pick up
+      setSessionBaggage("tenant_id", tenantId);
       SessionManager.setSessionContext("tenant_id", tenantId);
     } else {
       console.warn(

@@ -12,6 +12,7 @@ export enum ConversationType {
 
 export class SessionManager {
   private static _currentSpan: Span | undefined;
+  private static _rootSpan: Span | undefined;
   private static _workflowStack: string[] = [];
   private static _taskStack: string[] = [];
   private static _agentStack: string[] = [];
@@ -25,6 +26,14 @@ export class SessionManager {
 
   static getCurrentSpan(): Span | undefined {
     return this._currentSpan;
+  }
+
+  static setRootSpan(span: Span | undefined): void {
+    this._rootSpan = span;
+  }
+
+  static getRootSpan(): Span | undefined {
+    return this._rootSpan;
   }
 
   static registerSpan(name: string, span: Span): void {

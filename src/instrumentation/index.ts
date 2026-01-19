@@ -3,13 +3,24 @@
  */
 
 import { trace } from "@opentelemetry/api";
+import { SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { createRequire } from "module";
 import { Config, NetraInstruments } from "../config";
+import {
+  InstrumentationSpanProcessor,
+  ScrubbingSpanProcessor,
+  SessionSpanProcessor,
+} from "../processors";
 import { groqInstrumentor } from "./groq";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
+
+// Interface for TracerProvider with addSpanProcessor method
+interface TracerProviderWithProcessors {
+  addSpanProcessor(processor: SpanProcessor): void;
+}
 
 // Re-export shared utilities for use across instrumentations
 export {
@@ -20,6 +31,13 @@ export {
 } from "./utils";
 
 const require = createRequire(import.meta.url);
+
+/**
+ * Promise that resolves when custom instrumentations are initialized.
+ * Can be awaited after calling initInstrumentations() to ensure
+ * all async instrumentations are complete.
+ */
+export let instrumentationsReady: Promise<void> = Promise.resolve();
 
 export function initInstrumentations(
   config: Config,
@@ -89,6 +107,26 @@ export function initInstrumentations(
     }
   }
 
+  // Set Traceloop environment variables before initializing
+  // This ensures the SDK picks up our configuration
+  config.setTraceloopEnv();
+
+  // Debug: Log configuration being used
+  if (config.debugMode) {
+    console.debug("Netra SDK Configuration:");
+    console.debug(`  App Name: ${config.appName}`);
+    console.debug(
+      `  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`
+    );
+    console.debug(
+      `  API Key: ${
+        config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"
+      }`
+    );
+    console.debug(`  Trace Content: ${config.traceContent}`);
+    console.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
+  }
+
   // Initialize Traceloop SDK
   const traceloopOptions: InitializeOptions = {
     appName: config.appName,
@@ -105,10 +143,43 @@ export function initInstrumentations(
 
   const tracerProvider = trace.getTracerProvider();
 
+  // Add custom span processors to the TracerProvider
+  // The Traceloop SDK creates a BasicTracerProvider internally
+  addCustomSpanProcessors(tracerProvider, config);
+
+  // Initialize custom instrumentations asynchronously
+  // We use async initialization to ensure we get the same ES module instances
+  // that the application uses (important for ESM/CJS dual package handling)
+  instrumentationsReady = initCustomInstrumentationsAsync(
+    config,
+    tracerProvider,
+    useCustomOpenAI,
+    useCustomGroq,
+    useCustomMistralAI,
+    blockInstruments
+  );
+
+  // Initialize additional OpenTelemetry instrumentations
+  initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
+}
+
+/**
+ * Initialize custom instrumentations asynchronously
+ * This uses dynamic import() to ensure we patch the same ES module instances
+ * that the application uses.
+ */
+async function initCustomInstrumentationsAsync(
+  config: Config,
+  tracerProvider: ReturnType<typeof trace.getTracerProvider>,
+  useCustomOpenAI: boolean,
+  useCustomGroq: boolean,
+  useCustomMistralAI: boolean,
+  blockInstruments?: Set<NetraInstruments>
+): Promise<void> {
   // Initialize custom MistralAI instrumentation
   if (useCustomMistralAI && !blockInstruments?.has(NetraInstruments.MISTRAL)) {
     try {
-      mistralAIInstrumentor.instrument({ tracerProvider });
+      await mistralAIInstrumentor.instrumentAsync({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom MistralAI instrumentation enabled");
       }
@@ -125,7 +196,7 @@ export function initInstrumentations(
   // Initialize custom OpenAI instrumentation
   if (useCustomOpenAI && !blockInstruments?.has(NetraInstruments.OPENAI)) {
     try {
-      openAIInstrumentor.instrument({ tracerProvider });
+      await openAIInstrumentor.instrumentAsync({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom OpenAI instrumentation enabled");
       }
@@ -139,7 +210,7 @@ export function initInstrumentations(
   // Initialize custom Groq instrumentation
   if (useCustomGroq && !blockInstruments?.has(NetraInstruments.GROQ)) {
     try {
-      groqInstrumentor.instrument({ tracerProvider });
+      await groqInstrumentor.instrumentAsync({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom Groq instrumentation enabled");
       }
@@ -149,9 +220,6 @@ export function initInstrumentations(
       }
     }
   }
-
-  // Initialize additional OpenTelemetry instrumentations
-  initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
 }
 
 function initOpenTelemetryInstrumentations(
@@ -235,6 +303,85 @@ function initOpenTelemetryInstrumentations(
       if (config.debugMode) {
         console.debug("Express instrumentation not available:", e);
       }
+    }
+  }
+}
+
+/**
+ * Add custom span processors to the TracerProvider
+ * These processors add session context, instrumentation metadata, and scrubbing
+ */
+function addCustomSpanProcessors(
+  tracerProvider: ReturnType<typeof trace.getTracerProvider>,
+  config: Config
+): void {
+  try {
+    // The TracerProvider from Traceloop is a ProxyTracerProvider
+    // We need to find the actual provider with addSpanProcessor method
+    let provider: TracerProviderWithProcessors | null = null;
+
+    // Try to access the delegate/underlying provider
+    const providerAny = tracerProvider as any;
+
+    // Check if it's a ProxyTracerProvider with a delegate
+    if (
+      providerAny._delegate &&
+      typeof providerAny._delegate.addSpanProcessor === "function"
+    ) {
+      provider = providerAny._delegate as TracerProviderWithProcessors;
+    }
+    // Check if it has getDelegate method
+    else if (typeof providerAny.getDelegate === "function") {
+      const delegate = providerAny.getDelegate();
+      if (delegate && typeof delegate.addSpanProcessor === "function") {
+        provider = delegate as TracerProviderWithProcessors;
+      }
+    }
+    // Check if it directly has addSpanProcessor
+    else if (typeof providerAny.addSpanProcessor === "function") {
+      provider = providerAny as TracerProviderWithProcessors;
+    }
+    // Try accessing via global registry (NodeTracerProvider stores itself)
+    else {
+      try {
+        // Try to get the active provider from the SDK
+        const { NodeTracerProvider } = require("@opentelemetry/sdk-trace-node");
+        // The provider might be accessible via other means
+      } catch {
+        // SDK not available
+      }
+    }
+
+    if (!provider) {
+      if (config.debugMode) {
+        console.debug(
+          "Could not access TracerProvider for adding span processors. " +
+            "Session context will still be propagated via baggage."
+        );
+      }
+      return;
+    }
+
+    // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name
+    const instrumentationProcessor = new InstrumentationSpanProcessor();
+    provider.addSpanProcessor(instrumentationProcessor);
+
+    // 2. Session Span Processor - adds session context (session_id, user_id, etc.)
+    const sessionProcessor = new SessionSpanProcessor();
+    provider.addSpanProcessor(sessionProcessor);
+
+    // 3. Scrubbing Span Processor - scrubs sensitive data (if enabled)
+    if (config.enableScrubbing) {
+      const scrubbingProcessor = new ScrubbingSpanProcessor();
+      provider.addSpanProcessor(scrubbingProcessor);
+    }
+
+    if (config.debugMode) {
+      console.debug("Custom span processors registered successfully");
+    }
+  } catch (e) {
+    if (config.debugMode) {
+      console.debug("Failed to add custom span processors:", e);
     }
   }
 }

@@ -2,7 +2,13 @@
  * Wrapper functions for MistralAI instrumentation
  */
 
-import { Span, SpanKind, SpanStatusCode, Tracer } from "@opentelemetry/api";
+import {
+  Span,
+  SpanKind,
+  SpanStatusCode,
+  Tracer,
+  context,
+} from "@opentelemetry/api";
 import { isPromise } from "../utils";
 import {
   modelAsDict,
@@ -117,13 +123,19 @@ function mistralStreamWrapper(
       return isPromise(result) ? result.then((value) => value) : result;
     }
 
-    const span = tracer.startSpan(spanName, {
-      kind: SpanKind.CLIENT,
-      attributes: {
-        "llm.request.type": requestType,
-        "llm.request.stream": true,
+    // IMPORTANT: Pass the active context to inherit parent span
+    const currentContext = context.active();
+    const span = tracer.startSpan(
+      spanName,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          "llm.request.type": requestType,
+          "llm.request.stream": true,
+        },
       },
-    });
+      currentContext
+    );
 
     try {
       // Force stream=true for attribution

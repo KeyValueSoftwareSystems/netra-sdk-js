@@ -61,6 +61,8 @@ examples/**/package-lock.json
 examples/**/.env
 examples/**/.env.*
 
+examples
+
 # Package manager locks (optional - uncomment if you want to ignore)
 # package-lock.json
 # yarn.lock
