@@ -13,12 +13,11 @@ import {
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "../processors";
-import { googleGenAIInstrumentor } from "./google-genai";
+import { googleGenerativeAIInstrumentor } from "./google-genai";
 import { groqInstrumentor } from "./groq";
 import { langgraphInstrumentor } from "./langgraph";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
-import { googleGenAIInstrumentor } from "./google-genai";
 import { typeORMInstrumentor } from "./typeorm";
 
 // Interface for TracerProvider with addSpanProcessor method
@@ -46,7 +45,7 @@ export let instrumentationsReady: Promise<void> = Promise.resolve();
 export function initInstrumentations(
   config: Config,
   instruments?: Set<NetraInstruments>,
-  blockInstruments?: Set<NetraInstruments>
+  blockInstruments?: Set<NetraInstruments>,
 ): void {
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
@@ -85,7 +84,7 @@ export function initInstrumentations(
     if (instruments.has(NetraInstruments.GROQ)) {
       customInstrumentModules.groq = true;
     }
-    if (instruments.has(NetraInstruments.GOOGLE_GENAI)) {
+    if (instruments.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) {
       customInstrumentModules.googleGenAI = true;
     }
     if (instruments.has(NetraInstruments.VERTEX_AI)) {
@@ -124,12 +123,12 @@ export function initInstrumentations(
     console.debug("Netra SDK Configuration:");
     console.debug(`  App Name: ${config.appName}`);
     console.debug(
-      `  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`
+      `  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`,
     );
     console.debug(
       `  API Key: ${
         config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"
-      }`
+      }`,
     );
     console.debug(`  Trace Content: ${config.traceContent}`);
     console.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
@@ -194,7 +193,7 @@ async function initCustomInstrumentationsAsync(
       if (config.debugMode) {
         console.debug(
           "Failed to initialize custom MistralAI instrumentation:",
-          e
+          e,
         );
       }
     }
@@ -237,10 +236,10 @@ async function initCustomInstrumentationsAsync(
   // Initialize custom Google GenAI instrumentation
   if (
     customInstrumentModules.googleGenAI &&
-    !blockInstruments?.has(NetraInstruments.GOOGLE_GENAI)
+    !blockInstruments?.has(NetraInstruments.GOOGLE_GENERATIVE_AI)
   ) {
     try {
-      googleGenAIInstrumentor.instrument({ tracerProvider });
+      await googleGenerativeAIInstrumentor.instrumentAsync({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom Google GenAI instrumentation enabled");
       }
@@ -248,7 +247,7 @@ async function initCustomInstrumentationsAsync(
       if (config.debugMode) {
         console.debug(
           "Failed to initialize custom Google GenAI instrumentation:",
-          e
+          e,
         );
       }
     }
@@ -367,7 +366,7 @@ function initOpenTelemetryInstrumentations(
  */
 function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
-  config: Config
+  config: Config,
 ): void {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
@@ -425,7 +424,7 @@ function addCustomSpanProcessors(
       if (config.debugMode) {
         console.debug(
           "Could not access TracerProvider for adding span processors. " +
-            "Session context will still be propagated via baggage."
+            "Session context will still be propagated via baggage.",
         );
       }
       return;
@@ -496,8 +495,8 @@ export function uninstrumentAll(): void {
 
   // Uninstrument custom Google GenAI instrumentation
   try {
-    if (googleGenAIInstrumentor.isInstrumented()) {
-      googleGenAIInstrumentor.uninstrument();
+    if (googleGenerativeAIInstrumentor.isInstrumented()) {
+      googleGenerativeAIInstrumentor.uninstrument();
       console.debug("Custom Google GenAI instrumentation disabled");
     }
   } catch (e) {

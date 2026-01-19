@@ -1,4 +1,14 @@
-import { Span, SpanKind, SpanStatusCode, Tracer } from "@opentelemetry/api";
+import {
+  GenerateContentRequest,
+  Part
+} from "@google/generative-ai";
+import {
+  Span,
+  SpanKind,
+  SpanStatusCode,
+  Tracer,
+  context,
+} from "@opentelemetry/api";
 import {
   isPromise,
   modelAsDict,
@@ -6,32 +16,73 @@ import {
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
-type GoogleGenAIRequestType = "chat" | "embedding" | "video" | "image";
+type GoogleGenAIRequestType = "chat" | "embedding";
 
 const CHAT_SPAN_NAME = "google_genai.chat";
 const EMBEDDING_SPAN_NAME = "google_genai.embedding";
-const VIDEO_SPAN_NAME = "google_genai.video";
-const IMAGE_SPAN_NAME = "google_genai.image";
 
+function getRequestFromArgs(args: any[], kwargs: Record<string, unknown>) {
+  const firstArg = args[0];
+  if (typeof firstArg === "string") {
+    kwargs.request = firstArg;
+  } else if (Array.isArray(firstArg)) {
+    const parts: Array<string | Part> = firstArg;
+    if (typeof parts[0] === "string") {
+      kwargs.request = parts[0];
+    } else {
+      kwargs.request = parts[0]["text"];
+    }
+  } else {
+    const request: GenerateContentRequest = firstArg;
+  }
+}
+
+// (
+//  request: GenerateContentRequest | string | Array<string | Part>,
+//  requestOptions?: SingleRequestOptions,
+//  ) => Promise<GenerateContentResult>,
 function googleGenAIWrapper(
   tracer: Tracer,
   spanName: string,
-  requestType: GoogleGenAIRequestType
+  requestType: GoogleGenAIRequestType,
 ) {
   return function wrapper<F extends (...args: any[]) => any>(original: F): F {
     return function (this: unknown, ...args: Parameters<F>): any {
       if (shouldSuppressInstrumentation()) {
         return original.apply(this, args);
       }
+      let kwargs: Record<string, unknown> = {};
 
-      const kwargs = (args[0] || {}) as Record<string, unknown>;
+      const modelInstance = this as Record<string, unknown>;
+      const modelName = modelInstance.model as string | undefined;
+      const systemInstruction = modelInstance.systemInstruction as
+        | unknown
+        | undefined;
 
+      if (modelName) {
+        kwargs.model = modelName;
+      }
+      if (systemInstruction) {
+        kwargs.systemInstruction = systemInstruction;
+      }
+      // Build kwargs - for generateContent, first arg could be string or GenerateContentRequest or Array<Part>
+      const firstArg = args[0];
+      if (typeof firstArg === "string") {
+        kwargs.prompt = firstArg;
+      } else if (Array.isArray(firstArg)) {
+        kwargs.parts = firstArg;
+      } else {
+        kwargs = firstArg || {};
+      }
+
+      const currentContext = context.active();
       return tracer.startActiveSpan(
         spanName,
         {
           kind: SpanKind.CLIENT,
           attributes: { "llm.request.type": requestType },
         },
+        currentContext,
         (span: Span) => {
           try {
             setRequestAttributes(span, kwargs, requestType);
@@ -47,7 +98,7 @@ function googleGenAIWrapper(
                   setResponseAttributes(span, responseDict);
                   span.setAttribute(
                     "llm.response.duration",
-                    (endTime - startTime) / 1000
+                    (endTime - startTime) / 1000,
                   );
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
@@ -70,7 +121,7 @@ function googleGenAIWrapper(
               setResponseAttributes(span, responseDict);
               span.setAttribute(
                 "llm.response.duration",
-                (endTime - startTime) / 1000
+                (endTime - startTime) / 1000,
               );
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
@@ -86,7 +137,7 @@ function googleGenAIWrapper(
             span.end();
             throw error;
           }
-        }
+        },
       );
     } as unknown as F;
   };
@@ -98,12 +149,6 @@ export const chatWrapper = (tracer: Tracer) =>
 
 export const embeddingsWrapper = (tracer: Tracer) =>
   googleGenAIWrapper(tracer, EMBEDDING_SPAN_NAME, "embedding");
-
-export const videosWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, VIDEO_SPAN_NAME, "video");
-
-export const imagesWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, IMAGE_SPAN_NAME, "image");
 
 // Streaming wrapper for Google GenAI can be added later if needed.
 // Google GenAI's generateContentStream returns an object with a 'stream' property which is an AsyncIterable.
