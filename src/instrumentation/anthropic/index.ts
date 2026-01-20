@@ -48,7 +48,7 @@ export class NetraAnthropicInstrumentor {
           return this;
         }
 
-        const Anthropic = await resolveAnthropic();
+        const Anthropic = await resolveAnthropicAsync();
         if (!Anthropic) {
           return this;
         }
