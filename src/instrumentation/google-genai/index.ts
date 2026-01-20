@@ -3,7 +3,7 @@
  */
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { __version__ } from "./version";
-import { chatWrapper, embeddingsWrapper } from "./wrappers";
+import { chatStreamWrapper, chatWrapper, embeddingsWrapper } from "./wrappers";
 // Cache the resolved GenerativeModel class
 let GenerativeModel: any = null;
 
@@ -186,6 +186,12 @@ export class NetraGoogleGenerativeAIInstrumentor {
 
       shimmer.wrap(
         GenerativeModel.prototype,
+        "generateContentStream",
+        chatStreamWrapper(tracer),
+      );
+
+      shimmer.wrap(
+        GenerativeModel.prototype,
         "embedContent",
         embeddingsWrapper(tracer),
       );
@@ -202,6 +208,11 @@ export class NetraGoogleGenerativeAIInstrumentor {
       if (typeof GenerativeModel.prototype.generateContent === "function") {
         shimmer.unwrap(GenerativeModel.prototype, "generateContent");
       }
+      if (
+        typeof GenerativeModel.prototype.generateContentStream === "function"
+      ) {
+        shimmer.unwrap(GenerativeModel.prototype, "generateContentStream");
+      }
       if (typeof GenerativeModel.prototype.embedContent === "function") {
         shimmer.unwrap(GenerativeModel.prototype, "embedContent");
       }
@@ -216,7 +227,7 @@ export const googleGenerativeAIInstrumentor =
   new NetraGoogleGenerativeAIInstrumentor();
 
 // Re-export wrappers for advanced usage
-export { chatWrapper, embeddingsWrapper } from "./wrappers";
+export { chatWrapper, chatStreamWrapper, embeddingsWrapper } from "./wrappers";
 
 // Re-export utilities
 export { setRequestAttributes, setResponseAttributes } from "./utils";
