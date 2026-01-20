@@ -68,6 +68,7 @@ export function initInstrumentations(
     customInstrumentModules.mistral = true;
     customInstrumentModules.langgraph = true;
     customInstrumentModules.googleGenAI = true;
+    customInstrumentModules.anthropic = true;
     instrumentModules.google_vertexai = false;
     instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
