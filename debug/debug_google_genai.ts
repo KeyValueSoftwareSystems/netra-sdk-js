@@ -77,9 +77,10 @@ async function main() {
   console.log("   📤 Sending request to Google GenAI...\n");
 
   try {
-    const result = await model.generateContent(
-      "Say 'Hello Debug!' in exactly 2 words",
-    );
+    const result = await model.generateContent([
+      { text: "System Instruction: You are a helpful assistant" },
+      { text: "Say 'Hello Debug!' in exactly 2 words" },
+    ]);
     const response = result.response;
     const text = response.text();
 
