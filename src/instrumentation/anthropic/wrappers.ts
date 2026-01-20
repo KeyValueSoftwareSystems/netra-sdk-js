@@ -249,7 +249,6 @@ export class MessageStreamWrapper {
   async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
     try {
       for await (const chunk of this.messageStream) {
-        console.log("MessageStreamWrapper chunk:", chunk);
         this.processChunk(chunk);
         yield chunk;
       }

@@ -139,7 +139,6 @@ private _instrumentMessages(): void {
 
     if (MessagesClass?.prototype?.create) {
       const originalCreate = MessagesClass.prototype.create as Function;
-      console.log("Original client.messages.create:", originalCreate.toString());
       originalMethods.set("messages.create", originalCreate);
       const tracer = this.tracer;
       const wrapper = chatWrapper(tracer);
@@ -181,7 +180,6 @@ private _instrumentBetaMessages(): void {
 
     if (BetaMessagesClass?.prototype?.create) {
       const originalCreate = BetaMessagesClass.prototype.create as Function;
-      console.log("Original client.beta.messages.create:", originalCreate.toString());
       originalMethods.set("beta.messages.create", originalCreate);
       const tracer = this.tracer;
       const wrapper = betaWrapper(tracer);
@@ -223,7 +221,6 @@ private _instrumentBatchMessages():void {
 
     if (BatchMessageClass?.prototype?.create) {
       const originalCreate = BatchMessageClass.prototype.create as Function;
-      console.log("Original client.batch.messages.create:", originalCreate.toString());
       originalMethods.set("batch.messages.create", originalCreate);
       const tracer = this.tracer;
       const wrapper = batchesWrapper(tracer);
