@@ -136,15 +136,6 @@ function googleGenAIStreamWrapper(
       if (modelName) kwargs.model = modelName;
       if (systemInstruction) kwargs.systemInstruction = systemInstruction;
 
-      const firstArg = args[0];
-      if (typeof firstArg === "string") {
-        kwargs.prompt = firstArg;
-      } else if (Array.isArray(firstArg)) {
-        kwargs.parts = firstArg;
-      } else {
-        kwargs = firstArg || {};
-      }
-
       const currentContext = context.active();
 
       return tracer.startActiveSpan(
@@ -211,12 +202,25 @@ function googleGenAIStreamWrapper(
                           if (res?.done) {
                             const endTime = Date.now();
 
-                            // Attach whatever we collected from chunks
-                            if (finalText) {
-                              span.setAttribute(
-                                `${SpanAttributes.LLM_COMPLETIONS}.0.content`,
-                                finalText,
-                              );
+                            // Await the response promise if available to get full metadata (token counts, etc.)
+                            if (
+                              streamResult.response &&
+                              isPromise(streamResult.response)
+                            ) {
+                              try {
+                                const finalResponse =
+                                  await streamResult.response;
+                                const responseDict = modelAsDict(finalResponse);
+                                setResponseAttributes(span, responseDict);
+                              } catch {
+                                // If response promise fails, still set what we have from stream
+                                const responseDict = modelAsDict(streamResult);
+                                setResponseAttributes(span, responseDict);
+                              }
+                            } else {
+                              // Fallback: set attributes from streamResult
+                              const responseDict = modelAsDict(streamResult);
+                              setResponseAttributes(span, responseDict);
                             }
 
                             span.setAttribute(
