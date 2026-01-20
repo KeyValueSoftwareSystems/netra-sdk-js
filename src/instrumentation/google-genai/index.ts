@@ -10,7 +10,7 @@ let GenerativeModel: any = null;
 import shimmer from "shimmer";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.google-genai";
-const INSTRUMENTS = ["@google/genai >= 0.1.0"];
+const INSTRUMENTS = ["@google/genai >= 0.24.1"];
 
 // Track instrumentation state
 let isInstrumented = false;

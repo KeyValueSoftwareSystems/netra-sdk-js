@@ -5,7 +5,6 @@ import {
   Tracer,
   context,
 } from "@opentelemetry/api";
-import { SpanAttributes } from "../span-attributes";
 import {
   isPromise,
   modelAsDict,
@@ -17,10 +16,6 @@ type GoogleGenAIRequestType = "chat" | "embedding";
 const CHAT_SPAN_NAME = "google_genai.chat";
 const EMBEDDING_SPAN_NAME = "google_genai.embedding";
 
-// (
-//  request: GenerateContentRequest | string | Array<string | Part>,
-//  requestOptions?: SingleRequestOptions,
-//  ) => Promise<GenerateContentResult>,
 function googleGenAIWrapper(
   tracer: Tracer,
   spanName: string,
