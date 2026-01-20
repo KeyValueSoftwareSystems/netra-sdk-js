@@ -14,18 +14,14 @@
  *
  * - src/instrumentation/google-genai/wrappers.ts:
  *   - Line (googleGenAIWrapper function)
+ *   - Line (googleGenAIStreamWrapper function)
  *   - Line (shouldSuppressInstrumentation check)
  *   - Line (tracer.startActiveSpan)
  *   - Line (setRequestAttributes)
  *   - Line (setResponseAttributes)
  */
 
-import {
-  trace,
-  DiagConsoleLogger,
-  DiagLogLevel,
-  diag,
-} from "@opentelemetry/api";
+import { DiagConsoleLogger, DiagLogLevel, diag } from "@opentelemetry/api";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import {
   SimpleSpanProcessor,
@@ -72,7 +68,7 @@ async function main() {
   });
   console.log("   ✅ Client created\n");
 
-  // STEP 4: Make an API call (SET BREAKPOINT IN wrappers.ts)
+  // STEP 4: Make a NON-STREAM API call (SET BREAKPOINT IN wrappers.ts)
   console.log("4️⃣ Making generateContent request...");
   console.log("   📤 Sending request to Google GenAI...\n");
 
@@ -87,11 +83,38 @@ async function main() {
     console.log("\n   📥 Response received:");
     console.log("   Content:", text);
   } catch (error) {
-    console.error("   ❌ API Error:", error);
+    console.error("   ❌ API Error (generateContent):", error);
   }
 
-  // STEP 5: Uninstrument
-  console.log("\n5️⃣ Uninstrumenting...");
+  // STEP 5: Make a STREAMING API call (SET BREAKPOINT IN googleGenAIStreamWrapper)
+  console.log("\n5️⃣ Making generateContentStream request...");
+  console.log("   📤 Streaming request to Google GenAI...\n");
+
+  try {
+    const streamResult = await model.generateContentStream(
+      "Write exactly 1 short line about observability.",
+    );
+
+    let fullText = "";
+
+    // This is the key part: consume the async iterable
+    for await (const chunk of streamResult.stream) {
+      const t = typeof chunk?.text === "function" ? chunk.text() : chunk?.text;
+
+      if (typeof t === "string") {
+        process.stdout.write(t);
+        fullText += t;
+      }
+    }
+
+    console.log("\n\n   ✅ Stream complete");
+    console.log("   Full streamed content:", fullText);
+  } catch (error) {
+    console.error("   ❌ API Error (generateContentStream):", error);
+  }
+
+  // STEP 6: Uninstrument
+  console.log("\n6️⃣ Uninstrumenting...");
   googleGenerativeAIInstrumentor.uninstrument();
   console.log(
     "   ✅ Google GenAI uninstrumented:",
