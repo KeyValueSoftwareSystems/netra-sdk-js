@@ -483,6 +483,22 @@ function _setResponseMessageAttributes(
     );
   }
 
+  if (response.content && Array.isArray(response.content)) {
+      response.content.forEach((contentBlock, blockIndex) => {
+        if (contentBlock.type === 'text' && contentBlock.text) {
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+            "assistant"
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+            String(contentBlock.text)
+          );
+          messageIndex += 1;
+        }
+      });
+    }
+
   if (response.output !== undefined) {
     for (let element of response.output as Array<Record<string, unknown>>) {
       if (element.content === undefined) continue;
