@@ -72,8 +72,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
     };
 
     const response = await this.post("/evaluations/dataset", payload);
-    console.log("Response:", response);
-
+    
     if (!response.ok) {
       return { success: false };
     }
