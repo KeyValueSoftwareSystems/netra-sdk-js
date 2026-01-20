@@ -9,142 +9,9 @@
 
 import { Span } from "@opentelemetry/api";
 import { SpanAttributes } from "../span-attributes";
+import * as dotenv from "dotenv";
 
-interface ConversationMessage {
-  type: "input" | "output";
-  role: string;
-  content: string;
-  format: string;
-}
-
-// Config for content tracing
-function isTraceContentEnabled(): boolean {
-  return true;
-}
-
-/**
- * Build conversation attribute array from request and response
- */
-function buildConversationAttribute(
-  kwargs: Record<string, unknown>,
-  response: Record<string, unknown>,
-): ConversationMessage[] {
-  const conversation: ConversationMessage[] = [];
-
-  // 1. Add system instruction if present
-  if (kwargs.systemInstruction !== undefined) {
-    const systemInstruction = kwargs.systemInstruction as any;
-    let systemContent = "";
-
-    if (typeof systemInstruction === "string") {
-      systemContent = systemInstruction;
-    } else if (
-      systemInstruction.parts &&
-      Array.isArray(systemInstruction.parts)
-    ) {
-      systemContent = systemInstruction.parts
-        .filter((p: any) => p.text !== undefined)
-        .map((p: any) => String(p.text))
-        .join("");
-    } else if (systemInstruction.text) {
-      systemContent = String(systemInstruction.text);
-    } else {
-      systemContent = JSON.stringify(systemInstruction);
-    }
-
-    if (systemContent) {
-      conversation.push({
-        type: "input",
-        role: "System",
-        content: systemContent,
-        format: "text",
-      });
-    }
-  }
-
-  // 2. Add user messages
-  if (typeof kwargs.prompt === "string") {
-    conversation.push({
-      type: "input",
-      role: "User",
-      content: kwargs.prompt,
-      format: "text",
-    });
-  } else if (Array.isArray(kwargs.contents)) {
-    for (const content of kwargs.contents as Array<Record<string, unknown>>) {
-      const role = String(content.role ?? "user");
-      const parts = content.parts as Array<Record<string, unknown>> | undefined;
-
-      if (Array.isArray(parts)) {
-        const textParts = parts
-          .filter((p) => p.text !== undefined)
-          .map((p) => String(p.text))
-          .join("");
-
-        if (textParts) {
-          conversation.push({
-            type: "input",
-            role: role === "user" ? "User" : role,
-            content: textParts,
-            format: "text",
-          });
-        }
-      }
-    }
-  } else if (kwargs.parts && Array.isArray(kwargs.parts)) {
-    // Handle case where parts is passed directly (Array<string | Part>)
-    const textParts = kwargs.parts
-      .map((p: any) => {
-        if (typeof p === "string") return p;
-        if (p && typeof p.text === "string") return p.text;
-        return "";
-      })
-      .filter(Boolean)
-      .join("");
-
-    if (textParts) {
-      conversation.push({
-        type: "input",
-        role: "User",
-        content: textParts,
-        format: "text",
-      });
-    }
-  }
-
-  // 3. Add assistant response from candidates
-  const actualResponse =
-    (response.response as Record<string, unknown>) ?? response;
-  const candidates = actualResponse.candidates as
-    | Array<Record<string, unknown>>
-    | undefined;
-
-  if (Array.isArray(candidates) && candidates.length > 0) {
-    for (const candidate of candidates) {
-      const content = candidate.content as Record<string, unknown> | undefined;
-      if (!content) continue;
-
-      const parts = content.parts as Array<Record<string, unknown>> | undefined;
-      if (!Array.isArray(parts)) continue;
-
-      const textContent = parts
-        .filter((p) => p.text !== undefined)
-        .map((p) => String(p.text))
-        .join("");
-
-      if (textContent) {
-        conversation.push({
-          type: "output",
-          role: "Assistant",
-          content: textContent,
-          format: "text",
-        });
-      }
-    }
-  }
-
-  return conversation;
-}
+dotenv.config();
 
 function safeStringify(value: unknown): string {
   try {
@@ -159,6 +26,7 @@ export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
   requestType: string,
+  args: Record<string, unknown>,
 ): void {
   // Use a private property on the span to store kwargs temporarily for setResponseAttributes
   (span as any)._netra_kwargs = kwargs;
@@ -276,8 +144,16 @@ export function setRequestAttributes(
 
   // Content tracing - prompts
   if (isTraceContentEnabled()) {
-    _setPromptAttributes(span, kwargs);
+    _setPromptAttributes(span, kwargs, args);
   }
+}
+
+function isTraceContentEnabled(): boolean {
+  const raw =
+    process.env.TRACELOOP_TRACE_CONTENT ??
+    process.env.NETRA_TRACE_CONTENT ??
+    "";
+  return ["1", "true"].includes(String(raw).toLowerCase());
 }
 
 /**
@@ -286,31 +162,93 @@ export function setRequestAttributes(
 function _setPromptAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
+  args: any,
 ): void {
   // For generateContent, the prompt can be:
   // 1. A string (simple prompt)
-  // 2. An array of Parts
+  // 2. An array of Parts (Array<string | Part>)
   // 3. A GenerateContentRequest object with contents array
 
   let promptIndex = 0;
 
+  // 1. Add system instruction if present (from getGenerativeModel)
+  if (kwargs.systemInstruction !== undefined) {
+    const systemInstruction = kwargs.systemInstruction as any;
+    let systemContent = "";
+
+    if (typeof systemInstruction === "string") {
+      systemContent = systemInstruction;
+    } else if (
+      systemInstruction.parts &&
+      Array.isArray(systemInstruction.parts)
+    ) {
+      systemContent = systemInstruction.parts
+        .filter((p: any) => p.text !== undefined)
+        .map((p: any) => String(p.text))
+        .join("");
+    } else if (systemInstruction.text) {
+      systemContent = String(systemInstruction.text);
+    } else {
+      systemContent = JSON.stringify(systemInstruction);
+    }
+
+    if (systemContent) {
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
+        "system",
+      );
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
+        systemContent,
+      );
+      promptIndex++;
+    }
+  }
+
+  // 2. Add prompts from args (generateContent/embedContent call)
+  if (!args) return;
+
   // Handle string prompt
-  if (typeof kwargs === "string") {
+  if (typeof args === "string") {
     span.setAttribute(
       `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
       "user",
     );
     span.setAttribute(
       `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-      kwargs,
+      args,
     );
+    promptIndex++;
     return;
   }
 
-  // Handle contents array (standard format)
-  const contents = kwargs.contents as
-    | Array<Record<string, unknown>>
-    | undefined;
+  // Handle Array<string | Part>
+  if (Array.isArray(args)) {
+    const textParts = args
+      .map((p: any) => {
+        if (typeof p === "string") return p;
+        if (p && typeof p.text === "string") return p.text;
+        return "";
+      })
+      .filter(Boolean)
+      .join(" ");
+
+    if (textParts) {
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
+        "user",
+      );
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
+        textParts,
+      );
+      promptIndex++;
+    }
+    return;
+  }
+
+  // Handle GenerateContentRequest object { contents: [...] }
+  const contents = args.contents as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(contents)) {
     for (const content of contents) {
       const role = String(content.role ?? "user");
@@ -350,11 +288,15 @@ function _setPromptAttributes(
     }
   }
 
-  // For embedContent, handle content differently
-  if (kwargs.content !== undefined) {
-    const content = kwargs.content as Record<string, unknown> | string;
+  // For embedContent, handle content object { parts: [...] } or string
+  if (args.content !== undefined) {
+    const content = args.content as Record<string, unknown> | string;
     if (typeof content === "string") {
-      span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.content`, content);
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
+        content,
+      );
+      promptIndex++;
     } else if (content.parts !== undefined) {
       const parts = content.parts as Array<Record<string, unknown>>;
       const textContent = parts
@@ -363,9 +305,10 @@ function _setPromptAttributes(
         .join("");
       if (textContent) {
         span.setAttribute(
-          `${SpanAttributes.LLM_PROMPTS}.0.content`,
+          `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
           textContent,
         );
+        promptIndex++;
       }
     }
   }
@@ -404,15 +347,6 @@ export function setResponseAttributes(
 
   // Handle embedding response
   _setEmbeddingResponseAttributes(span, actualResponse);
-
-  // Build and set conversation attribute
-  if (isTraceContentEnabled()) {
-    const kwargs = (span as any)._netra_kwargs || {};
-    const conversation = buildConversationAttribute(kwargs, response);
-    span.setAttribute("conversation", JSON.stringify(conversation));
-    // Clean up
-    delete (span as any)._netra_kwargs;
-  }
 }
 
 /**
@@ -603,7 +537,10 @@ function _setCompletionAttributes(
 
     if (textContent) {
       span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.${i}.role`, role);
-      // Content is removed here as it is redundant with the 'conversation' attribute
+      span.setAttribute(
+        `${SpanAttributes.LLM_COMPLETIONS}.${i}.content`,
+        textContent,
+      );
     }
 
     // Track function calls

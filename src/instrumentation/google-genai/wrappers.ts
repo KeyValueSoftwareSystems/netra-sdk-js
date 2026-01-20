@@ -1,8 +1,4 @@
 import {
-  GenerateContentRequest,
-  Part
-} from "@google/generative-ai";
-import {
   Span,
   SpanKind,
   SpanStatusCode,
@@ -20,22 +16,6 @@ type GoogleGenAIRequestType = "chat" | "embedding";
 
 const CHAT_SPAN_NAME = "google_genai.chat";
 const EMBEDDING_SPAN_NAME = "google_genai.embedding";
-
-function getRequestFromArgs(args: any[], kwargs: Record<string, unknown>) {
-  const firstArg = args[0];
-  if (typeof firstArg === "string") {
-    kwargs.request = firstArg;
-  } else if (Array.isArray(firstArg)) {
-    const parts: Array<string | Part> = firstArg;
-    if (typeof parts[0] === "string") {
-      kwargs.request = parts[0];
-    } else {
-      kwargs.request = parts[0]["text"];
-    }
-  } else {
-    const request: GenerateContentRequest = firstArg;
-  }
-}
 
 // (
 //  request: GenerateContentRequest | string | Array<string | Part>,
@@ -65,15 +45,6 @@ function googleGenAIWrapper(
       if (systemInstruction) {
         kwargs.systemInstruction = systemInstruction;
       }
-      // Build kwargs - for generateContent, first arg could be string or GenerateContentRequest or Array<Part>
-      const firstArg = args[0];
-      if (typeof firstArg === "string") {
-        kwargs.prompt = firstArg;
-      } else if (Array.isArray(firstArg)) {
-        kwargs.parts = firstArg;
-      } else {
-        kwargs = firstArg || {};
-      }
 
       const currentContext = context.active();
       return tracer.startActiveSpan(
@@ -85,7 +56,7 @@ function googleGenAIWrapper(
         currentContext,
         (span: Span) => {
           try {
-            setRequestAttributes(span, kwargs, requestType);
+            setRequestAttributes(span, kwargs, requestType, args[0]);
             const startTime = Date.now();
             const response = original.apply(this, args);
 
