@@ -13,6 +13,7 @@ import {
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "../processors";
+import { anthropicInstrumentor } from "./anthropic";
 import { googleGenerativeAIInstrumentor } from "./google-genai";
 import { groqInstrumentor } from "./groq";
 import { langgraphInstrumentor } from "./langgraph";
@@ -57,6 +58,7 @@ export function initInstrumentations(
     mistral: false,
     langgraph: false,
     googleGenAI: false,
+    anthropic: false,
   };
 
   if (!instruments || instruments.size === 0) {
@@ -111,6 +113,9 @@ export function initInstrumentations(
     }
     if (instruments.has(NetraInstruments.TOGETHER)) {
       instrumentModules.together = true;
+    }
+    if (instruments.has(NetraInstruments.ANTHROPIC)) {
+      customInstrumentModules.anthropic = true;
     }
   }
 
@@ -270,6 +275,22 @@ async function initCustomInstrumentationsAsync(
           "Failed to initialize custom Langgraph instrumentation:",
           e,
         );
+      }
+    }
+  }
+
+  if (
+    customInstrumentModules.anthropic && 
+    !blockInstruments?.has(NetraInstruments.ANTHROPIC)
+  ) {
+    try {
+      await anthropicInstrumentor.instrumentAsync({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom Anthropic instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug("Failed to initialize custom Groq instrumentation:", e);
       }
     }
   }
