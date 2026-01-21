@@ -20,7 +20,7 @@ export interface NetraConfig {
 export enum NetraInstruments {
   // LLM Providrs
   OPENAI = "openai",
-  GOOGLE_GENERATIVE_AI = "google_generative_ai",
+  GOOGLE_GENERATIVE_AI = "google_genai",
   MISTRAL = "mistral",
   GROQ = "groq",
   VERTEX_AI = "vertexai",
