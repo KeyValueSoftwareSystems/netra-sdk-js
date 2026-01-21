@@ -77,6 +77,9 @@
     },
     "@mistralai/mistralai": {
       "optional": true
+    },
+    "@google/generative-ai": {
+      "optional": true
     }
   },
   "devDependencies": {
