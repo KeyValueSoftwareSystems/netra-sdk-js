@@ -7,7 +7,7 @@ type AnthropicRequestType = "chat" | "beta" | "batches";
 const CHAT_SPAN_NAME = "anthropic.chat";
 const BETA_SPAN_NAME = "anthropic.beta";
 const BATCHES_SPAN_NAME = "anthropic.batches";
-const STREAM_ENABLED_REQUESTS: AnthropicRequestType[] = ["chat"];
+const STREAM_ENABLED_REQUESTS: AnthropicRequestType[] = ["chat", "beta"];
 
 function anthropicWrapper(
   tracer: Tracer,
@@ -31,7 +31,7 @@ function anthropicWrapper(
         kind: SpanKind.CLIENT,
         attributes: { 
           "llm.request.type": requestType,
-          "llm.streaming": true 
+          "llm.request.stream": true 
         },
       },
     currentContext);
@@ -42,30 +42,33 @@ function anthropicWrapper(
         
         // Call the original function and get the APIPromise
         const response = wrapped.call(instance, ...args);
+        
         if (isPromise(response)) {
-          response.then(() => {
-            const endTime = Date.now();
-            span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
-            span.setStatus({ code: SpanStatusCode.OK });
-            span.addEvent("stream.started");
-            span.end();
-          }).catch((error) => {
-            console.error("netra.instrumentation.anthropic:", error);
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: error instanceof Error ? error.message : String(error),
-            });
-            span.recordException(error as Error);
-            span.end();
-          });
+          return (async () => {
+            try {
+              const stream = await response;
+              // Check if it's the helper method returning a Stream object (which is also AsyncIterable)
+              // or just a raw AsyncIterable.
+              // For anthropic, messages.create({stream: true}) returns a Stream object which is AsyncIterable.
+              return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
+            } catch (error) {
+               console.error("netra.instrumentation.anthropic:", error);
+                span.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message: error instanceof Error ? error.message : String(error),
+                });
+                span.recordException(error as Error);
+                span.end();
+                throw error;
+            }
+          })();
         } else {
-          span.setStatus({ code: SpanStatusCode.OK });
-          span.end();
+             // Should usually be a promise, but just in case
+             return new AsyncStreamingWrapper(span, response, startTime, kwargs);
         }
-        return response;
         
       } catch (error) {
-        console.error("netra.instrumentation.groq:", error);
+        console.error("netra.instrumentation.anthropic:", error);
         span.setStatus({
           code: SpanStatusCode.ERROR,
           message: error instanceof Error ? error.message : String(error),
@@ -389,6 +392,137 @@ export class MessageStreamWrapper {
       content: this.completeResponse.content,
       usage: this.completeResponse.usage,
     });
+
+    this.span.setAttribute("llm.response.duration", duration);
+    this.span.setStatus({ code });
+    this.span.end();
+  }
+}
+
+export class AsyncStreamingWrapper
+  implements AsyncIterable<unknown>, AsyncIterator<unknown>
+{
+  private iterator: AsyncIterator<unknown> | null = null;
+  private completeResponse: Record<string, unknown> = {
+    choices: [],
+    model: "",
+  };
+
+  constructor(
+    private span: Span,
+    private response: any,
+    private startTime: number,
+    private requestKwargs: Record<string, any>
+  ) {}
+
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+    return this;
+  }
+
+  async next(): Promise<IteratorResult<unknown>> {
+    try {
+      if (!this.iterator) {
+          // Anthropic Stream is AsyncIterable
+        if (Symbol.asyncIterator in this.response) {
+          this.iterator = (this.response as AsyncIterable<unknown>)[
+            Symbol.asyncIterator
+          ]();
+        } else if (
+          typeof (this.response as AsyncIterator<unknown>).next === "function"
+        ) {
+          this.iterator = this.response as AsyncIterator<unknown>;
+        } else {
+          throw new Error("Response is not iterable");
+        }
+      }
+
+      const result = await this.iterator!.next();
+      if (result.done) {
+        this.finalizeSpan(SpanStatusCode.OK);
+        return result;
+      }
+      this.processChunk(result.value);
+      return result;
+    } catch (error) {
+      this.finalizeSpan(SpanStatusCode.ERROR);
+      throw error;
+    }
+  }
+
+  private processChunk(chunk: any): void {
+     // Reusing the same chunk processing logic as MessageStreamWrapper, but adapted for this context
+     // The raw chunks from messages.create({stream:true}) are the same as what MessageStreamWrapper handles.
+     
+     switch (chunk.type) {
+      case "message_start": {
+        if (chunk.message?.model) {
+          this.completeResponse.model = chunk.message.model;
+        }
+        if (chunk.message?.usage) {
+          this.completeResponse.usage = chunk.message.usage;
+        }
+        break;
+      }
+
+      case "content_block_start": {
+        const content = this.completeResponse.content as any[] || [];
+        this.completeResponse.content = content;
+        content.push({
+          type: chunk.content_block.type,
+          text: "",
+        });
+        break;
+      }
+
+      case "content_block_delta": {
+        const content = this.completeResponse.content as any[] || [];
+        if (content.length === 0) {
+            content.push({ type: 'text', text: '' });
+            this.completeResponse.content = content;
+        }
+        
+        const lastBlock = content[content.length - 1];
+
+        if (lastBlock && chunk.delta?.text) {
+          lastBlock.text += chunk.delta.text;
+        }
+        break;
+      }
+
+      case "message_delta": {
+        if (chunk.delta?.usage) {
+            const currentUsage = this.completeResponse.usage as any || {};
+          this.completeResponse.usage = {
+            ...currentUsage,
+            ...chunk.delta.usage,
+          };
+        }
+        break;
+      }
+
+      case "message_stop": {
+        if (chunk.usage) {
+          this.completeResponse.usage = chunk.usage;
+        }
+        break;
+      }
+    }
+
+    this.span.addEvent("llm.content.completion.chunk", {
+      "chunk.type": chunk.type,
+    });
+  }
+
+  private finalizeSpan(code: SpanStatusCode): void {
+    const endTime = Date.now();
+    const duration = (endTime - this.startTime) / 1000;
+    
+    // We match the format expected by setResponseAttributes
+    setResponseAttributes(this.span, {
+        model: this.completeResponse.model,
+        content: this.completeResponse.content,
+        usage: this.completeResponse.usage,
+      });
 
     this.span.setAttribute("llm.response.duration", duration);
     this.span.setStatus({ code });

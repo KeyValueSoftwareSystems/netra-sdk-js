@@ -19,12 +19,12 @@ import { ConversationType, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
-export { NetraInstruments, Config } from "./config";
+export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
     InstrumentationSpanProcessor,
     ScrubbingSpanProcessor,
-    SessionSpanProcessor,
+    SessionSpanProcessor
 } from "./processors";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
@@ -34,62 +34,41 @@ export { mistralAIInstrumentor } from "./instrumentation/mistralai";
 
 // Export API types and classes
 export {
-    // Usage API
-    Usage,
-    // Evaluation API
-    Evaluation,
-    EntryStatus,
-    RunStatus,
-    RunEntryContext,
-    // Dashboard API
-    Dashboard,
     Aggregation,
     ChartType,
-    DimensionField,
-    FilterField,
+    // Dashboard API
+    Dashboard, DimensionField, EntryStatus,
+    // Evaluation API
+    Evaluation, FilterField,
     FilterType,
     GroupBy,
     Measure,
     metadataField,
-    Operator,
-    Scope,
+    Operator, RunEntryContext, RunStatus, Scope,
+    // Usage API
+    Usage
 } from "./api";
 
 export type {
-    // Usage API
-    ListSpansParams,
-    ListTracesParams,
-    SessionUsageData,
-    SpansPage,
-    TenantUsageData,
-    TraceSpan,
-    TracesPage,
-    TraceSummary,
-    // Evaluation API
-    CreateDatasetParams,
-    Dataset,
-    DatasetEntry,
-    DatasetItem,
-    EvaluationScore,
-    EvaluatorFunction,
-    Run,
-    TaskFunction,
-    TestSuiteResult,
     // Dashboard API
     CategoricalDataPoint,
-    DashboardData,
-    Dimension,
-    DimensionValue,
-    Filter,
+    // Evaluation API
+    CreateDatasetParams, DashboardData, Dataset,
+    DatasetEntry,
+    DatasetItem, Dimension,
+    DimensionValue, EvaluationScore,
+    EvaluatorFunction, Filter,
     FilterConfig,
-    Metrics,
+    // Usage API
+    ListSpansParams,
+    ListTracesParams, Metrics,
     NumberResponse,
     QueryDataParams,
-    QueryResponse,
-    TimeRange,
+    QueryResponse, Run, SessionUsageData,
+    SpansPage, TaskFunction, TenantUsageData, TestSuiteResult, TimeRange,
     TimeSeriesDataPoint,
     TimeSeriesResponse,
-    TimeSeriesWithDimension,
+    TimeSeriesWithDimension, TracesPage, TraceSpan, TraceSummary
 } from "./api";
 
 let _initialized = false;

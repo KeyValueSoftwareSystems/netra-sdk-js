@@ -1,8 +1,7 @@
 import { SpanKind, trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { setRequestAttributes } from "./utils";
 import { __version__ } from "./version";
 import { batchesWrapper, betaWrapper, chatWrapper, MessageStreamWrapper } from "./wrappers";
-import { Anthropic } from "@anthropic-ai/sdk";
-import { setRequestAttributes } from "./utils";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.anthropic";
 const INSTRUMENTS = ["anthropic >= 0.71.2"];
@@ -69,7 +68,7 @@ export class NetraAnthropicInstrumentor {
         }
 
     this._instrumentMessages();
-    this._instrumentBetaMessages()
+    this._instrumentBetaMessages();
     this._instrumentBatchMessages();
 
     isInstrumented = true;
@@ -100,7 +99,12 @@ private _instrumentMessages(): void {
     return;
   }
   try {
-    const MessagesClass = Anthropic.Messages;
+    const AnthropicSDK = resolveAnthropic();
+    if (!AnthropicSDK) {
+      console.warn("Anthropic instrumentation: Anthropic SDK not available");
+      return;
+    }
+    const MessagesClass = AnthropicSDK.Messages;
     if (!MessagesClass) {
       console.error(
         "Anthropic instrumentation: Could not find Anthropic Messages class to instrument",
@@ -143,7 +147,6 @@ private _instrumentMessages(): void {
       const tracer = this.tracer;
       const wrapper = chatWrapper(tracer);
 
-
       MessagesClass.prototype.create = function (
         this: unknown,
         ...args: unknown[]
@@ -170,7 +173,12 @@ private _instrumentBetaMessages(): void {
     return;
   }
   try {
-    const BetaMessagesClass = Anthropic.Beta.Messages;
+    const AnthropicSDK = resolveAnthropic();
+    if (!AnthropicSDK) {
+      console.warn("Anthropic instrumentation: Anthropic SDK not available");
+      return;
+    }
+    const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
     if (!BetaMessagesClass) {
       console.error(
         "Anthropic instrumentation: Could not find Anthropic Beta Messages class to instrument",
@@ -211,7 +219,12 @@ private _instrumentBatchMessages():void {
     return;
   }
   try {
-    const BatchMessageClass = Anthropic.Messages.Batches;
+    const AnthropicSDK = resolveAnthropic();
+    if (!AnthropicSDK) {
+      console.warn("Anthropic instrumentation: Anthropic SDK not available");
+      return;
+    }
+    const BatchMessageClass = AnthropicSDK.Messages?.Batches;
     if (!BatchMessageClass) {
       console.error(
         "Anthropic instrumentation: Could not find Anthropic Batches class to instrument",
@@ -247,7 +260,9 @@ private _instrumentBatchMessages():void {
 }
   private _uninstrumentMessages(): void {
     try {
-      const MessagesClass = Anthropic.Messages;
+      const AnthropicSDK = resolveAnthropic();
+      if (!AnthropicSDK) return;
+      const MessagesClass = AnthropicSDK.Messages;
 
       const originalCreate = originalMethods.get("messages.create");
       if (originalCreate && MessagesClass?.prototype) {
@@ -260,7 +275,9 @@ private _instrumentBatchMessages():void {
   }
   private _uninstrumentBetaMessages(): void {
     try {
-      const BetaMessagesClass = Anthropic.Beta.Messages;
+      const AnthropicSDK = resolveAnthropic();
+      if (!AnthropicSDK) return;
+      const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
 
       const originalCreate = originalMethods.get("beta.messages.create");
       if (originalCreate && BetaMessagesClass?.prototype) {
@@ -273,7 +290,9 @@ private _instrumentBatchMessages():void {
   }
   private _uninstrumentBatchMessages(): void {
     try {
-      const BatchMessagesClass = Anthropic.Messages.Batches;
+      const AnthropicSDK = resolveAnthropic();
+      if (!AnthropicSDK) return;
+      const BatchMessagesClass = AnthropicSDK.Messages?.Batches;
 
       const originalCreate = originalMethods.get("batch.messages.create");
       if (originalCreate && BatchMessagesClass?.prototype) {
@@ -288,7 +307,7 @@ private _instrumentBatchMessages():void {
 
 export const anthropicInstrumentor = new NetraAnthropicInstrumentor();
 
-export { chatWrapper } from "./wrappers";
+export { AsyncStreamingWrapper, chatWrapper } from "./wrappers";
 
 export { setRequestAttributes, setResponseAttributes } from "./utils";
 

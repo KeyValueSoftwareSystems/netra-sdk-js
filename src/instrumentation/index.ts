@@ -291,7 +291,7 @@ async function initCustomInstrumentationsAsync(
       }
     } catch (e) {
       if (config.debugMode) {
-        console.debug("Failed to initialize custom Groq instrumentation:", e);
+        console.debug("Failed to initialize custom Anthropic instrumentation:", e);
       }
     }
   }
@@ -514,6 +514,16 @@ export function uninstrumentAll(): void {
   } catch (e) {
     console.debug("Failed to uninstrument Groq:", e);
   }
+
+   // Uninstrument custom Anthropic instrumentation
+  try {
+    if (anthropicInstrumentor.isInstrumented()) {
+        anthropicInstrumentor.uninstrument();
+      console.debug("Custom Anthropic instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument Anthropic:", e);
+  } 
 
   // Uninstrument custom Google GenAI instrumentation
   try {
