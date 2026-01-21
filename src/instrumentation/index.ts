@@ -333,8 +333,23 @@ function addCustomSpanProcessors(
     // Check if it has getDelegate method
     else if (typeof providerAny.getDelegate === "function") {
       const delegate = providerAny.getDelegate();
-      if (delegate && typeof delegate.addSpanProcessor === "function") {
-        provider = delegate as TracerProviderWithProcessors;
+      if (delegate) {
+        if (typeof delegate.addSpanProcessor === "function") {
+          provider = delegate as TracerProviderWithProcessors;
+        } else if (
+          delegate._activeSpanProcessor &&
+          delegate._activeSpanProcessor.constructor.name ===
+            "MultiSpanProcessor" &&
+          Array.isArray(delegate._activeSpanProcessor._spanProcessors)
+        ) {
+          // Fallback for OTel SDKs where addSpanProcessor is removed/protected
+          // and MultiSpanProcessor is used (e.g. created by Traceloop)
+          provider = {
+            addSpanProcessor: (processor: SpanProcessor) => {
+              delegate._activeSpanProcessor._spanProcessors.push(processor);
+            },
+          } as TracerProviderWithProcessors;
+        }
       }
     }
     // Check if it directly has addSpanProcessor
