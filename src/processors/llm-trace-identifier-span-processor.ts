@@ -45,7 +45,6 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
       const traceId = spanContext.traceId;
       const spanId = spanContext.spanId;
 
-      // JS is single threaded event loop, so we don't need locks like Python
       this._rootSpansByTrace.set(traceId, span);
       this._rootSpanIdsByTrace.set(traceId, spanId);
     } catch (e) {
@@ -127,7 +126,7 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
     if (!rootSpan) return;
 
     if (!rootSpan.isRecording()) {
-      // debug log maybe?
+      console.warn("Root span is not recording, cannot mark it.");
       return;
     }
 
