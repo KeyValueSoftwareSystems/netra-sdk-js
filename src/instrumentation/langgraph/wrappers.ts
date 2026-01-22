@@ -171,10 +171,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 export class LanggraphWrapper {
   private spanName: string;
 
-  constructor(
-    private tracer: Tracer,
-    private originalFunc: AnyFunc,
-  ) {
+  constructor(private tracer: Tracer) {
     this.spanName = "Langgraph.workflow";
   }
 
@@ -194,13 +191,14 @@ export class LanggraphWrapper {
   }
 
   async invoke(
+    originalFunc: AnyFunc,
     instance: unknown,
     input: any,
     config?: RunnableConfig,
     ...rest: any[]
   ): Promise<unknown> {
     if (shouldSuppressInstrumentation()) {
-      return await this.originalFunc.call(instance, input, config, ...rest);
+      return await originalFunc.call(instance, input, config, ...rest);
     }
 
     return NetraLanggraphContextManager.runWithContext(async () => {
@@ -211,12 +209,7 @@ export class LanggraphWrapper {
       try {
         setNetraAttributes(span, "langgraph");
         const updatedConfig = this.getUpdatedConfig(config);
-        return await this.originalFunc.call(
-          instance,
-          input,
-          updatedConfig,
-          ...rest,
-        );
+        return await originalFunc.call(instance, input, updatedConfig, ...rest);
       } finally {
         span.end();
         NetraLanggraphContextManager.removeContext();

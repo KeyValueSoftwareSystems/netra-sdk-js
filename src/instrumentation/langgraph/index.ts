@@ -94,7 +94,7 @@ export class NetraLanggraphInstrumentor {
       originalMethods.set("langgraph.graph.invoke", originalInvoke);
 
       const tracer = this.tracer;
-      const wrapper = new LanggraphWrapper(tracer, originalInvoke);
+      const wrapper = new LanggraphWrapper(tracer);
 
       Langgraph.prototype.invoke = async function (
         this: unknown,
@@ -102,7 +102,13 @@ export class NetraLanggraphInstrumentor {
         config?: RunnableConfig,
         ...rest: any[]
       ): Promise<any> {
-        return await wrapper.invoke(this, input, config, ...rest);
+        return await wrapper.invoke(
+          originalInvoke,
+          this,
+          input,
+          config,
+          ...rest,
+        );
       };
     } catch (error) {
       console.error(`Failed to instrument langgraph invoke: ${error}`);
