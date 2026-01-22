@@ -43,7 +43,6 @@ const SENSITIVE_KEYS = new Set([
   "passwd",
   "pwd",
   "secret",
-  "token",
   "key",
   "api_key",
   "auth",
