@@ -1,4 +1,5 @@
 import { context, Context, Span } from "@opentelemetry/api";
+import { ChainValues } from "@langchain/core/utils/types";
 import { SpanAttributes } from "../span-attributes";
 
 export function runWithContext(func: () => any, spanContext?: Context) {
@@ -56,4 +57,62 @@ function setLlmPrompts(span: Span, prompts: string[]) {
       content,
     );
   });
+}
+
+export function setChainInputAttributes(
+  span: Span,
+  inputs: ChainValues,
+  tags?: string[],
+  metadata?: Record<string, unknown>,
+) {
+  const entityInputs: Record<string, any> = { inputs };
+
+  if (tags) {
+    const filteredTags = filterTags(tags);
+    if (filteredTags.length > 0) {
+      entityInputs["tags"] = filteredTags;
+    }
+  }
+
+  if (metadata) {
+    const filteredMetadata: Record<string, any> = {};
+    const kwargs: Record<string, any> = {};
+
+    for (let [key, value] of Object.entries(metadata)) {
+      if (key.startsWith("langgraph")) {
+        filteredMetadata[key] = value;
+      }
+      if (key === "langgraph_node") {
+        kwargs["name"] = value;
+      }
+    }
+
+    entityInputs["metadata"] = filteredMetadata;
+    if (Object.keys(kwargs).length > 0) {
+      entityInputs["kwargs"] = kwargs;
+    }
+  }
+  span.setAttribute("netra.entity.input", JSON.stringify(entityInputs));
+}
+
+export function setChainOutputAttributes(
+  span: Span,
+  outputs: ChainValues,
+  tags?: string[],
+) {
+  const entityOutputs: Record<string, any> = { outputs };
+  if (tags) {
+    const filteredTags = filterTags(tags);
+    if (filteredTags.length > 0) {
+      console.log("FILTERED TAGS:", filteredTags);
+      entityOutputs["kwargs"] = { tags: filteredTags };
+    }
+  }
+  span.setAttribute("netra.entity.ouput", JSON.stringify(entityOutputs));
+}
+
+function filterTags(tags: string[]): string[] {
+  const TAGS_TO_FILTER = ["langsmith:hidden"];
+  const filteredTags = tags.filter((tag) => !TAGS_TO_FILTER.includes(tag));
+  return filteredTags;
 }

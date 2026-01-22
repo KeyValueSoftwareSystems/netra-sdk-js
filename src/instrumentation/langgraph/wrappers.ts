@@ -16,7 +16,11 @@ import {
 } from "../utils";
 import { Serialized } from "@langchain/core/load/serializable";
 import { ChainValues } from "@langchain/core/utils/types";
-import { setLlmRequestAttributes } from "./utils";
+import {
+  setChainInputAttributes,
+  setChainOutputAttributes,
+  setLlmRequestAttributes,
+} from "./utils";
 
 type AnyFunc = (...args: any[]) => any;
 
@@ -106,6 +110,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       const span = this.tracer.startSpan(`${nodeName}.task`);
       NetraLanggraphContextManager.createSpanContext(span);
       setNetraAttributes(span, "langgraph");
+      setChainInputAttributes(span, inputs, tags, metadata);
       this.addNode(runId, nodeName, span);
     });
   }
@@ -120,7 +125,9 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     const nodeInfo = this.currentNode;
     if (nodeInfo === null || nodeInfo?.id !== parentRunId) return;
     NetraLanggraphContextManager.runWithContext(() => {
-      nodeInfo.span.end();
+      const span: Span = nodeInfo.span;
+      setChainOutputAttributes(span, outputs, tags);
+      span.end();
     });
     this.removeNode();
     NetraLanggraphContextManager.removeContext();
@@ -208,8 +215,22 @@ export class LanggraphWrapper {
       NetraLanggraphContextManager.createSpanContext(span);
       try {
         setNetraAttributes(span, "langgraph");
+        span.setAttribute(
+          "netra.entity.input",
+          JSON.stringify({ inputs: input }),
+        );
         const updatedConfig = this.getUpdatedConfig(config);
-        return await originalFunc.call(instance, input, updatedConfig, ...rest);
+        const output = await originalFunc.call(
+          instance,
+          input,
+          updatedConfig,
+          ...rest,
+        );
+        span.setAttribute(
+          "netra.entity.output",
+          JSON.stringify({ outputs: output }),
+        );
+        return output;
       } finally {
         span.end();
         NetraLanggraphContextManager.removeContext();
