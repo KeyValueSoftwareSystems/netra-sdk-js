@@ -62,7 +62,8 @@ export class NetraLanggraphInstrumentor {
       return this;
     }
 
-    this._instrumentInvoke(Langgraph);
+    // this._instrumentInvoke(Langgraph);
+    this._instrumentStream(Langgraph);
     isInstrumented = true;
     return this;
   }
@@ -76,6 +77,7 @@ export class NetraLanggraphInstrumentor {
     const Langgraph = await resolveLanggraph();
     if (Langgraph) {
       this._uninstrumentInvoke(Langgraph);
+      this._uninstrumentStream(Langgraph);
     }
 
     originalMethods.clear();
@@ -115,6 +117,39 @@ export class NetraLanggraphInstrumentor {
     }
   }
 
+  private _instrumentStream(Langgraph: any): void {
+    if (!this.tracer) return;
+
+    try {
+      if (!Langgraph?.prototype?.stream) {
+        console.error("Failed to find langgraph stream function to instrument");
+        return;
+      }
+      const originalStream = Langgraph.prototype.stream;
+      originalMethods.set("langgraph.graph.stream", originalStream);
+
+      const tracer = this.tracer;
+      const wrapper = new LanggraphWrapper(tracer);
+
+      Langgraph.prototype.stream = async function (
+        this: unknown,
+        input: any,
+        config?: RunnableConfig,
+        ...rest: any[]
+      ): Promise<any> {
+        return await wrapper.stream(
+          originalStream,
+          this,
+          input,
+          config,
+          ...rest,
+        );
+      };
+    } catch (error) {
+      console.error(`Failed to instrument langgraph stream: ${error}`);
+    }
+  }
+
   private _uninstrumentInvoke(Langgraph: any): void {
     try {
       const originalInvoke = originalMethods.get("langgraph.graph.invoke");
@@ -123,6 +158,18 @@ export class NetraLanggraphInstrumentor {
       }
     } catch (error) {
       console.error(`Failed to uninstrument langgraph invoke: ${error}`);
+    }
+    return;
+  }
+
+  private _uninstrumentStream(Langgraph: any): void {
+    try {
+      const originalStream = originalMethods.get("langgraph.graph.stream");
+      if (originalStream && Langgraph?.prototype?.stream) {
+        Langgraph.prototype.stream = originalStream;
+      }
+    } catch (error) {
+      console.error(`Failed to uninstrument langgraph stream: ${error}`);
     }
     return;
   }

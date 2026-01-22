@@ -1,5 +1,8 @@
 import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import { RunnableConfig } from "@langchain/core/runnables";
+import { LLMResult } from "@langchain/core/outputs";
+import { Serialized } from "@langchain/core/load/serializable";
+import { ChainValues } from "@langchain/core/utils/types";
 import {
   Context,
   Span,
@@ -8,17 +11,15 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { shouldSuppressInstrumentation } from "../utils";
-import { LLMResult } from "@langchain/core/outputs";
 import {
-  setResponseAttributes as setBaseResponseAttributes,
+  shouldSuppressInstrumentation,
   setNetraAttributes,
+  setResponseAttributes as setBaseResponseAttributes,
 } from "../utils";
-import { Serialized } from "@langchain/core/load/serializable";
-import { ChainValues } from "@langchain/core/utils/types";
 import { setLlmRequestAttributes } from "./utils";
 
 type AnyFunc = (...args: any[]) => any;
+type AsyncIterableFunc = (...args: any[]) => Promise<AsyncIterable<any>>;
 
 class NetraLanggraphContextManager {
   private static _currentContext: Context | null = null;
@@ -168,6 +169,39 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
   }
 }
 
+class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
+  private iterable?: AsyncIterable<any>;
+  private responses: any[] = [];
+
+  constructor(private originalFunc: AsyncIterableFunc) {}
+
+  async startStream(
+    instance: unknown,
+    input: any,
+    config?: RunnableConfig,
+    ...rest: any[]
+  ) {
+    await NetraLanggraphContextManager.runWithContext(async () => {
+      this.iterable = await this.originalFunc.call(
+        instance,
+        input,
+        config,
+        ...rest,
+      );
+      for await (let response of this.iterable) {
+        this.responses.push(response);
+      }
+    });
+    return this;
+  }
+
+  async *[Symbol.asyncIterator]() {
+    for await (const response of this.responses) {
+      yield response;
+    }
+  }
+}
+
 export class LanggraphWrapper {
   private spanName: string;
 
@@ -210,6 +244,42 @@ export class LanggraphWrapper {
         setNetraAttributes(span, "langgraph");
         const updatedConfig = this.getUpdatedConfig(config);
         return await originalFunc.call(instance, input, updatedConfig, ...rest);
+      } finally {
+        span.end();
+        NetraLanggraphContextManager.removeContext();
+      }
+    });
+  }
+
+  async stream(
+    originalFunc: AsyncIterableFunc,
+    instance: unknown,
+    input: any,
+    config?: RunnableConfig,
+    ...rest: any[]
+  ): Promise<AsyncIterable<unknown>> {
+    if (shouldSuppressInstrumentation()) {
+      return await originalFunc.call(instance, input, config, ...rest);
+    }
+
+    return NetraLanggraphContextManager.runWithContext(async () => {
+      const span = this.tracer.startSpan(this.spanName, {
+        kind: SpanKind.CLIENT,
+      });
+      NetraLanggraphContextManager.createSpanContext(span);
+      try {
+        setNetraAttributes(span, "langgraph");
+        const updatedConfig = this.getUpdatedConfig(config);
+        const streamingWrapper = new LanggraphStreamingWrapper(originalFunc);
+        return await streamingWrapper.startStream(
+          instance,
+          input,
+          updatedConfig,
+          ...rest,
+        );
+      } catch (error) {
+        span.recordException(error as Error);
+        throw error;
       } finally {
         span.end();
         NetraLanggraphContextManager.removeContext();
