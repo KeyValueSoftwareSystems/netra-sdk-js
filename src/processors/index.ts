@@ -8,3 +8,4 @@
 export { SessionSpanProcessor } from "./session-span-processor";
 export { InstrumentationSpanProcessor } from "./instrumentation-span-processor";
 export { ScrubbingSpanProcessor } from "./scrubbing-span-processor";
+export { LlmTraceIdentifierSpanProcessor } from "./llm-trace-identifier-span-processor";
