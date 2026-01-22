@@ -122,22 +122,35 @@ private _instrumentMessages(): void {
       ): unknown {
         const original = originalStream.bind(this);
         const kwargs = (args[0] || {}) as Record<string, unknown>;
-        
+
         const span = tracer.startSpan("anthropic" + ".stream", {
           kind: SpanKind.CLIENT,
-          attributes: { 
-            "llm.request.type": "chat", 
+          attributes: {
+            "llm.request.type": "chat",
             "llm.streaming": true,
             "llm.operation": "stream"
           },
         });
-        
+
         setRequestAttributes(span, kwargs, "chat");
         const startTime = Date.now();
-        
-        const messageStream = original(...args);
-        
-        return new MessageStreamWrapper(span, messageStream, startTime, kwargs);
+
+        // Temporarily restore the original create method so stream() can use it
+        const instrumentedCreate = (this as any).create;
+        const originalCreate = originalMethods.get("messages.create");
+        if (originalCreate) {
+          (this as any).create = originalCreate;
+        }
+
+        try {
+          const messageStream = original(...args);
+          return new MessageStreamWrapper(span, messageStream, startTime, kwargs);
+        } finally {
+          // Restore the instrumented create method
+          if (originalCreate) {
+            (this as any).create = instrumentedCreate;
+          }
+        }
       } as typeof MessagesClass.prototype.stream;
     }
 

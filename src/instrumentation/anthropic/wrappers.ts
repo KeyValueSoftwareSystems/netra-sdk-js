@@ -92,7 +92,8 @@ function anthropicWrapper(
             const startTime = Date.now();
             const response = wrapped.call(instance, ...args);
             if (isPromise(response)) {
-              return (async () => {
+              // Create a new promise that handles instrumentation
+              const instrumentedPromise = (async () => {
                 try {
                   const value = await response;
                   const endTime = Date.now();
@@ -117,6 +118,38 @@ function anthropicWrapper(
                   throw error;
                 }
               })();
+
+              // Use a Proxy to preserve all methods from the original APIPromise
+              // This includes withResponse(), asResponse(), etc.
+              return new Proxy(instrumentedPromise, {
+                get(target, prop, receiver) {
+                  // Special handling for then/catch/finally - use our instrumented promise
+                  if (prop === 'then' || prop === 'catch' || prop === 'finally') {
+                    const value = Reflect.get(target, prop, receiver);
+                    if (typeof value === 'function') {
+                      return value.bind(target);
+                    }
+                    return value;
+                  }
+
+                  // For all other properties, first check the original response object
+                  // This ensures methods like withResponse() are available
+                  const responseValue = (response as any)[prop];
+                  if (responseValue !== undefined) {
+                    if (typeof responseValue === 'function') {
+                      return responseValue.bind(response);
+                    }
+                    return responseValue;
+                  }
+
+                  // Fall back to the instrumented promise
+                  const value = Reflect.get(target, prop, receiver);
+                  if (typeof value === 'function') {
+                    return value.bind(target);
+                  }
+                  return value;
+                }
+              });
             } else {
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
