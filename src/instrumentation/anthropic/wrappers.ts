@@ -29,9 +29,9 @@ function anthropicWrapper(
       const currentContext = context.active();
       const span = tracer.startSpan(spanName + ".create", {
         kind: SpanKind.CLIENT,
-        attributes: { 
+        attributes: {
           "llm.request.type": requestType,
-          "llm.request.stream": true 
+          "llm.streaming": true
         },
       },
     currentContext);
@@ -39,17 +39,16 @@ function anthropicWrapper(
       try {
         setRequestAttributes(span, kwargs, requestType);
         const startTime = Date.now();
-        
+
         // Call the original function and get the APIPromise
         const response = wrapped.call(instance, ...args);
-        
+
         if (isPromise(response)) {
           return (async () => {
             try {
               const stream = await response;
-              // Check if it's the helper method returning a Stream object (which is also AsyncIterable)
-              // or just a raw AsyncIterable.
-              // For anthropic, messages.create({stream: true}) returns a Stream object which is AsyncIterable.
+              // For messages.create({stream: true}), return AsyncStreamingWrapper
+              // which will track streaming events and finalize the span when done
               return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
             } catch (error) {
                console.error("netra.instrumentation.anthropic:", error);
@@ -66,7 +65,7 @@ function anthropicWrapper(
              // Should usually be a promise, but just in case
              return new AsyncStreamingWrapper(span, response, startTime, kwargs);
         }
-        
+
       } catch (error) {
         console.error("netra.instrumentation.anthropic:", error);
         span.setStatus({
