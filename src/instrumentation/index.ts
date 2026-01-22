@@ -16,6 +16,7 @@ import { groqInstrumentor } from "./groq";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
+import { langgraphInstrumentor } from "./langgraph";
 
 // Interface for TracerProvider with addSpanProcessor method
 interface TracerProviderWithProcessors {
@@ -48,18 +49,20 @@ export function initInstrumentations(
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
   // Track whether to use custom instrumentors
-  let useCustomOpenAI = false;
-  let useCustomGroq = false;
-  let useCustomMistralAI = false;
+  const customInstrumentModules: Record<string, boolean> = {
+    openai: false,
+    groq: false,
+    mistral: false,
+    langgraph: false,
+  };
 
   if (!instruments || instruments.size === 0) {
     // Enable all by default
-    // Don't set OpenAI/Groq/Mistral modules - we use custom instrumentors instead
-    useCustomOpenAI = true;
-    useCustomGroq = true;
-    useCustomMistralAI = true;
+    customInstrumentModules.openai = true;
+    customInstrumentModules.groq = true;
+    customInstrumentModules.mistral = true;
+    customInstrumentModules.langgraph = true;
     instrumentModules.google_vertexai = true;
-    instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
     instrumentModules.pinecone = true;
     instrumentModules.qdrant = true;
@@ -68,13 +71,13 @@ export function initInstrumentations(
   } else if (instruments.size) {
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {
-      useCustomOpenAI = true;
+      customInstrumentModules.openai = true;
     }
     if (instruments.has(NetraInstruments.MISTRAL)) {
-      useCustomMistralAI = true;
+      customInstrumentModules.mistral = true;
     }
     if (instruments.has(NetraInstruments.GROQ)) {
-      useCustomGroq = true;
+      customInstrumentModules.groq = true;
     }
     if (
       instruments.has(NetraInstruments.GOOGLE_GENAI) ||
@@ -83,12 +86,11 @@ export function initInstrumentations(
       // Google GenAI (Gemini) is supported via VertexAI instrumentation
       instrumentModules.google_vertexai = true;
     }
-    if (
-      instruments.has(NetraInstruments.LANGCHAIN) ||
-      instruments.has(NetraInstruments.LANGGRAPH)
-    ) {
-      // LangGraph is supported via LangChain instrumentation
+    if (instruments.has(NetraInstruments.LANGCHAIN)) {
       instrumentModules.langchain = true;
+    }
+    if (instruments.has(NetraInstruments.LANGGRAPH)) {
+      customInstrumentModules.langgraph = true;
     }
     if (instruments.has(NetraInstruments.LLAMA_INDEX)) {
       instrumentModules.llamaIndex = true;
@@ -153,9 +155,7 @@ export function initInstrumentations(
   instrumentationsReady = initCustomInstrumentationsAsync(
     config,
     tracerProvider,
-    useCustomOpenAI,
-    useCustomGroq,
-    useCustomMistralAI,
+    customInstrumentModules,
     blockInstruments
   );
 
@@ -171,13 +171,14 @@ export function initInstrumentations(
 async function initCustomInstrumentationsAsync(
   config: Config,
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
-  useCustomOpenAI: boolean,
-  useCustomGroq: boolean,
-  useCustomMistralAI: boolean,
+  customInstrumentModules: Record<string, boolean>,
   blockInstruments?: Set<NetraInstruments>
 ): Promise<void> {
   // Initialize custom MistralAI instrumentation
-  if (useCustomMistralAI && !blockInstruments?.has(NetraInstruments.MISTRAL)) {
+  if (
+    customInstrumentModules.mistral &&
+    !blockInstruments?.has(NetraInstruments.MISTRAL)
+  ) {
     try {
       await mistralAIInstrumentor.instrumentAsync({ tracerProvider });
       if (config.debugMode) {
@@ -194,7 +195,10 @@ async function initCustomInstrumentationsAsync(
   }
 
   // Initialize custom OpenAI instrumentation
-  if (useCustomOpenAI && !blockInstruments?.has(NetraInstruments.OPENAI)) {
+  if (
+    customInstrumentModules.openai &&
+    !blockInstruments?.has(NetraInstruments.OPENAI)
+  ) {
     try {
       await openAIInstrumentor.instrumentAsync({ tracerProvider });
       if (config.debugMode) {
@@ -208,7 +212,10 @@ async function initCustomInstrumentationsAsync(
   }
 
   // Initialize custom Groq instrumentation
-  if (useCustomGroq && !blockInstruments?.has(NetraInstruments.GROQ)) {
+  if (
+    customInstrumentModules.groq &&
+    !blockInstruments?.has(NetraInstruments.GROQ)
+  ) {
     try {
       await groqInstrumentor.instrumentAsync({ tracerProvider });
       if (config.debugMode) {
@@ -220,12 +227,32 @@ async function initCustomInstrumentationsAsync(
       }
     }
   }
+
+  // Initialize custom Langgraph instrumentation
+  if (
+    customInstrumentModules.langgraph &&
+    !blockInstruments?.has(NetraInstruments.LANGGRAPH)
+  ) {
+    try {
+      await langgraphInstrumentor.instrument({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom Langgraph instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug(
+          "Failed to initialize custom Langgraph instrumentation:",
+          e,
+        );
+      }
+    }
+  }
 }
 
 function initOpenTelemetryInstrumentations(
   config: Config,
   instruments?: Set<NetraInstruments>,
-  blockInstruments?: Set<NetraInstruments>
+  blockInstruments?: Set<NetraInstruments>,
 ): void {
   // HTTP/HTTPS instrumentation
   if (
@@ -434,6 +461,16 @@ export function uninstrumentAll(): void {
     }
   } catch (e) {
     console.debug("Failed to uninstrument Groq:", e);
+  }
+
+  // Uninstrument custom Groq instrumentation
+  try {
+    if (langgraphInstrumentor.isInstrumented()) {
+      langgraphInstrumentor.uninstrument();
+      console.debug("Custom Langgraph instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument Langgraph:", e);
   }
 
   // Uninstrument custom TypeORM instrumentation
