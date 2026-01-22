@@ -62,9 +62,11 @@ function googleGenAIWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
+                  const duration = (endTime - startTime) / 1000;
+                  span.setAttribute("llm.response.duration", duration);
                   span.setAttribute(
-                    "llm.response.duration",
-                    (endTime - startTime) / 1000,
+                    "gen_ai.performance.time_to_first_token",
+                    duration,
                   );
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
@@ -173,9 +175,11 @@ function googleGenAIStreamWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(streamResult);
                   setResponseAttributes(span, responseDict);
+                  const duration = (endTime - startTime) / 1000;
+                  span.setAttribute("llm.response.duration", duration);
                   span.setAttribute(
-                    "llm.response.duration",
-                    (endTime - startTime) / 1000,
+                    "gen_ai.performance.time_to_first_token",
+                    duration,
                   );
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
@@ -184,6 +188,7 @@ function googleGenAIStreamWrapper(
 
                 let chunkIndex = 0;
                 let finalText = "";
+                let firstTokenRecorded = false;
 
                 const wrappedStream: AsyncIterable<any> = {
                   [Symbol.asyncIterator]() {
@@ -218,9 +223,10 @@ function googleGenAIStreamWrapper(
                               setResponseAttributes(span, responseDict);
                             }
 
+                            const duration = (endTime - startTime) / 1000;
                             span.setAttribute(
                               "llm.response.duration",
-                              (endTime - startTime) / 1000,
+                              duration,
                             );
                             span.setStatus({ code: SpanStatusCode.OK });
                             span.end();
@@ -229,6 +235,9 @@ function googleGenAIStreamWrapper(
 
                           const chunk = res.value;
 
+                          // Optional: store chunk-by-chunk attributes if you want
+                          // span.setAttribute(`llm.stream.chunk.${chunkIndex}`, ...)
+                          
                           // Best-effort: accumulate chunk.text() if available
                           try {
                             const t =
@@ -236,14 +245,18 @@ function googleGenAIStreamWrapper(
                                 ? chunk.text()
                                 : chunk?.text;
                             if (typeof t === "string") {
+                              if (t && !firstTokenRecorded) {
+                                span.setAttribute(
+                                  "gen_ai.performance.time_to_first_token",
+                                  (Date.now() - startTime) / 1000,
+                                );
+                                firstTokenRecorded = true;
+                              }
                               finalText += t;
                             }
                           } catch {
                             // ignore chunk parsing issues
                           }
-
-                          // Optional: store chunk-by-chunk attributes if you want
-                          // span.setAttribute(`llm.stream.chunk.${chunkIndex}`, ...)
 
                           chunkIndex += 1;
                           return res;
@@ -264,10 +277,8 @@ function googleGenAIStreamWrapper(
                       async return() {
                         // Called if consumer stops early (break)
                         const endTime = Date.now();
-                        span.setAttribute(
-                          "llm.response.duration",
-                          (endTime - startTime) / 1000,
-                        );
+                        const duration = (endTime - startTime) / 1000;
+                        span.setAttribute("llm.response.duration", duration);
                         span.setStatus({ code: SpanStatusCode.OK });
                         span.end();
                         return { value: undefined, done: true };
