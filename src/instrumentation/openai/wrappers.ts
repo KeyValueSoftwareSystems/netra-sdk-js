@@ -4,7 +4,10 @@ import {
   SpanStatusCode,
   Tracer,
   context,
+  trace,
 } from "@opentelemetry/api";
+import { ContextStore } from "../../context-store";
+import { SessionManager } from "../../session-manager";
 import {
   isPromise,
   modelAsDict,
@@ -38,7 +41,17 @@ function openAIWrapper(
     const isStreaming = kwargs.stream === true;
     if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
       // IMPORTANT: Pass the active context to inherit parent span
-      const currentContext = context.active();
+      // Context Bridge: If active context is lost (Root) but LangGraph stack exists, use stack
+      const sessionCtx = ContextStore.getOrCreateContext();
+      const langGraphContext = sessionCtx.langgraph?.otelContextStack;
+      const activeSpan = trace.getSpan(context.active());
+      const rootSpan = SessionManager.getRootSpan();
+
+      let currentContext = context.active();
+      if ((!activeSpan || (rootSpan && activeSpan === rootSpan)) && langGraphContext && langGraphContext.length > 0) {
+        currentContext = langGraphContext[langGraphContext.length - 1];
+      }
+
       const span = tracer.startSpan(
         spanName,
         {
@@ -82,12 +95,24 @@ function openAIWrapper(
         throw error;
       }
     } else {
+      // Context Bridge: If active context is lost (Root) but LangGraph stack exists, use stack
+      const sessionCtx = ContextStore.getOrCreateContext();
+      const langGraphContext = sessionCtx.langgraph?.otelContextStack;
+      const activeSpan = trace.getSpan(context.active());
+      const rootSpan = SessionManager.getRootSpan();
+
+      let currentContext = context.active();
+      if ((!activeSpan || (rootSpan && activeSpan === rootSpan)) && langGraphContext && langGraphContext.length > 0) {
+        currentContext = langGraphContext[langGraphContext.length - 1];
+      }
+
       return tracer.startActiveSpan(
         spanName,
         {
           kind: SpanKind.CLIENT,
           attributes: { "llm.request.type": requestType },
         },
+        currentContext,
         (span: Span) => {
           try {
             setRequestAttributes(span, kwargs, requestType);

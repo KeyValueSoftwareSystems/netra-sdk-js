@@ -1,9 +1,14 @@
 /**
  * Session Manager for tracking user sessions and context
+ *
+ * This module provides concurrency-safe session management using ContextStore.
+ * Each concurrent request gets its own isolated session context, preventing
+ * data leakage between parallel operations (e.g., in LangGraph apps).
  */
 
 import { Span, context, trace } from "@opentelemetry/api";
 import { Config } from "./config";
+import { ContextStore, SessionContext } from "./context-store";
 
 export enum ConversationType {
   INPUT = "input",
@@ -11,37 +16,36 @@ export enum ConversationType {
 }
 
 export class SessionManager {
-  private static _currentSpan: Span | undefined;
-  private static _rootSpan: Span | undefined;
-  private static _workflowStack: string[] = [];
-  private static _taskStack: string[] = [];
-  private static _agentStack: string[] = [];
-  private static _spanStack: string[] = [];
-  private static _spansByName: Map<string, Span[]> = new Map();
-  private static _activeSpans: Span[] = [];
+  /**
+   * Gets the current session context (or creates a fallback for backward compatibility).
+   */
+  private static getCtx(): SessionContext {
+    return ContextStore.getOrCreateContext();
+  }
 
   static setCurrentSpan(span: Span | undefined): void {
-    this._currentSpan = span;
+    this.getCtx().currentSpan = span;
   }
 
   static getCurrentSpan(): Span | undefined {
-    return this._currentSpan;
+    return this.getCtx().currentSpan;
   }
 
   static setRootSpan(span: Span | undefined): void {
-    this._rootSpan = span;
+    this.getCtx().rootSpan = span;
   }
 
   static getRootSpan(): Span | undefined {
-    return this._rootSpan;
+    return this.getCtx().rootSpan;
   }
 
   static registerSpan(name: string, span: Span): void {
     try {
-      const stack = this._spansByName.get(name) || [];
+      const ctx = this.getCtx();
+      const stack = ctx.spansByName.get(name) || [];
       stack.push(span);
-      this._spansByName.set(name, stack);
-      this._activeSpans.push(span);
+      ctx.spansByName.set(name, stack);
+      ctx.activeSpans.push(span);
     } catch (e) {
       console.error(`Failed to register span '${name}':`, e);
     }
@@ -49,7 +53,8 @@ export class SessionManager {
 
   static unregisterSpan(name: string, span: Span): void {
     try {
-      const stack = this._spansByName.get(name);
+      const ctx = this.getCtx();
+      const stack = ctx.spansByName.get(name);
       if (!stack) {
         return;
       }
@@ -63,13 +68,13 @@ export class SessionManager {
       }
 
       if (stack.length === 0) {
-        this._spansByName.delete(name);
+        ctx.spansByName.delete(name);
       }
 
-      // Remove from global active list
-      for (let i = this._activeSpans.length - 1; i >= 0; i--) {
-        if (this._activeSpans[i] === span) {
-          this._activeSpans.splice(i, 1);
+      // Remove from active list
+      for (let i = ctx.activeSpans.length - 1; i >= 0; i--) {
+        if (ctx.activeSpans[i] === span) {
+          ctx.activeSpans.splice(i, 1);
           break;
         }
       }
@@ -79,73 +84,78 @@ export class SessionManager {
   }
 
   static getSpanByName(name: string): Span | undefined {
-    const stack = this._spansByName.get(name);
+    const ctx = this.getCtx();
+    const stack = ctx.spansByName.get(name);
     return stack && stack.length > 0 ? stack[stack.length - 1] : undefined;
   }
 
   static pushEntity(entityType: string, entityName: string): void {
+    const ctx = this.getCtx();
     switch (entityType) {
       case "workflow":
-        this._workflowStack.push(entityName);
+        ctx.workflowStack.push(entityName);
         break;
       case "task":
-        this._taskStack.push(entityName);
+        ctx.taskStack.push(entityName);
         break;
       case "agent":
-        this._agentStack.push(entityName);
+        ctx.agentStack.push(entityName);
         break;
       case "span":
-        this._spanStack.push(entityName);
+        ctx.spanStack.push(entityName);
         break;
     }
   }
 
   static popEntity(entityType: string): string | undefined {
+    const ctx = this.getCtx();
     switch (entityType) {
       case "workflow":
-        return this._workflowStack.pop();
+        return ctx.workflowStack.pop();
       case "task":
-        return this._taskStack.pop();
+        return ctx.taskStack.pop();
       case "agent":
-        return this._agentStack.pop();
+        return ctx.agentStack.pop();
       case "span":
-        return this._spanStack.pop();
+        return ctx.spanStack.pop();
       default:
         return undefined;
     }
   }
 
   static getCurrentEntityAttributes(): Record<string, string> {
+    const ctx = this.getCtx();
     const attributes: Record<string, string> = {};
 
-    if (this._workflowStack.length > 0) {
+    if (ctx.workflowStack.length > 0) {
       attributes[`${Config.LIBRARY_NAME}.workflow.name`] =
-        this._workflowStack[this._workflowStack.length - 1];
+        ctx.workflowStack[ctx.workflowStack.length - 1];
     }
 
-    if (this._taskStack.length > 0) {
+    if (ctx.taskStack.length > 0) {
       attributes[`${Config.LIBRARY_NAME}.task.name`] =
-        this._taskStack[this._taskStack.length - 1];
+        ctx.taskStack[ctx.taskStack.length - 1];
     }
 
-    if (this._agentStack.length > 0) {
+    if (ctx.agentStack.length > 0) {
       attributes[`${Config.LIBRARY_NAME}.agent.name`] =
-        this._agentStack[this._agentStack.length - 1];
+        ctx.agentStack[ctx.agentStack.length - 1];
     }
 
-    if (this._spanStack.length > 0) {
+    if (ctx.spanStack.length > 0) {
       attributes[`${Config.LIBRARY_NAME}.span.name`] =
-        this._spanStack[this._spanStack.length - 1];
+        ctx.spanStack[ctx.spanStack.length - 1];
     }
 
     return attributes;
   }
 
   static clearEntityStacks(): void {
-    this._workflowStack = [];
-    this._taskStack = [];
-    this._agentStack = [];
-    this._spanStack = [];
+    const ctx = this.getCtx();
+    ctx.workflowStack.length = 0;
+    ctx.taskStack.length = 0;
+    ctx.agentStack.length = 0;
+    ctx.spanStack.length = 0;
   }
 
   static setSessionContext(
@@ -259,5 +269,3 @@ export class SessionManager {
     }
   }
 }
-
-

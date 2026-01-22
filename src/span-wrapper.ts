@@ -1,5 +1,9 @@
 /**
  * Span Wrapper for custom span tracking
+ *
+ * SpanWrapper now uses ContextStore for concurrency-safe session management.
+ * If no context exists when start() is called, a new isolated context
+ * will be created automatically.
  */
 
 import {
@@ -12,6 +16,7 @@ import {
 import { Config } from "./config";
 import { SessionManager } from "./session-manager";
 import { SpanType, UsageModel, ActionModel } from "./types";
+import { ContextStore } from "./context-store";
 
 export class SpanWrapper {
   private name: string;
@@ -23,6 +28,7 @@ export class SpanWrapper {
   private errorMessage?: string;
   private span?: Span;
   private activeContext?: ReturnType<typeof context.active>;
+  private contextCreatedByUs: boolean = false;
 
   constructor(
     name: string,
@@ -37,10 +43,18 @@ export class SpanWrapper {
   }
 
   start(): this {
+    // Ensure we have a context for session isolation
+    // If no context exists, we'll track that we need to be careful
+    // Note: We can't create a context that persists after start() returns,
+    // so we just ensure SessionManager uses the fallback context
+    if (!ContextStore.hasContext()) {
+      this.contextCreatedByUs = true;
+    }
+
     this.startTime = Date.now();
     const tracer = trace.getTracer(this.moduleName);
     this.activeContext = context.active();
-    
+
     this.span = tracer.startSpan(this.name, {
       kind: SpanKind.CLIENT,
       attributes: this.attributes,
@@ -161,4 +175,3 @@ export class SpanWrapper {
     return this.span;
   }
 }
-

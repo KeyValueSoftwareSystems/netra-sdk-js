@@ -1,27 +1,34 @@
-import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { RunnableConfig } from "@langchain/core/runnables";
-import { LanggraphWrapper } from "./wrappers";
+import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { __version__ } from "./version";
+import { LanggraphWrapper, wrapNode } from "./wrappers";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.langgraph";
 const INSTRUMENTS = ["langgraph >= 1.1.1"];
 
 let isInstrumented = false;
 let LanggraphClass: any = null;
+let StateGraphClass: any = null;
 const originalMethods: Map<string, Function> = new Map();
 
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
 }
 
-async function resolveLanggraph(): Promise<any> {
-  if (LanggraphClass) return LanggraphClass;
+async function resolveLanggraph(): Promise<{
+  Langgraph: any;
+  StateGraph: any;
+}> {
+  if (LanggraphClass && StateGraphClass) {
+    return { Langgraph: LanggraphClass, StateGraph: StateGraphClass };
+  }
   try {
     const langgraphModule = await import("@langchain/langgraph");
     LanggraphClass = langgraphModule.CompiledStateGraph;
-    return LanggraphClass;
+    StateGraphClass = langgraphModule.StateGraph;
+    return { Langgraph: LanggraphClass, StateGraph: StateGraphClass };
   } catch {
-    return null;
+    return { Langgraph: null, StateGraph: null };
   }
 }
 
@@ -47,8 +54,8 @@ export class NetraLanggraphInstrumentor {
       return this;
     }
 
-    const Langgraph = await resolveLanggraph();
-    if (!Langgraph) {
+    const { Langgraph, StateGraph } = await resolveLanggraph();
+    if (!Langgraph || !StateGraph) {
       return this;
     }
 
@@ -63,19 +70,24 @@ export class NetraLanggraphInstrumentor {
     }
 
     this._instrumentInvoke(Langgraph);
+    this._instrumentStateGraph(StateGraph);
+    
     isInstrumented = true;
     return this;
   }
 
   async uninstrument(): Promise<void> {
     if (!isInstrumented) {
-      console.warn("OpenAI is not instrumented");
+      console.warn("Langgraph is not instrumented");
       return;
     }
 
-    const Langgraph = await resolveLanggraph();
+    const { Langgraph, StateGraph } = await resolveLanggraph();
     if (Langgraph) {
       this._uninstrumentInvoke(Langgraph);
+    }
+    if (StateGraph) {
+      this._uninstrumentStateGraph(StateGraph);
     }
 
     originalMethods.clear();
@@ -119,6 +131,77 @@ export class NetraLanggraphInstrumentor {
       console.error(`Failed to uninstrument langgraph invoke: ${error}`);
     }
     return;
+  }
+
+  private _instrumentStateGraph(StateGraph: any): void {
+    if (!this.tracer) return;
+
+    try {
+      if (!StateGraph?.prototype?.addNode) {
+        console.error("Failed to find StateGraph.addNode to instrument");
+        return;
+      }
+
+      // cache original
+      const originalAddNode = StateGraph.prototype.addNode;
+      const originalAddConditionalEdges = StateGraph.prototype.addConditionalEdges;
+      
+      originalMethods.set("langgraph.StateGraph.addNode", originalAddNode);
+      originalMethods.set("langgraph.StateGraph.addConditionalEdges", originalAddConditionalEdges);
+
+      const tracer = this.tracer;
+
+      StateGraph.prototype.addNode = function (
+        node: string,
+        action: any, // Runnable or function
+        ...rest: any[]
+      ) {
+        // We wrap the action.
+        // We call wrapNode(tracer, action, node)
+        const wrappedAction = wrapNode(tracer, action, node);
+        
+        return originalAddNode.call(this, node, wrappedAction, ...rest);
+      };
+
+      StateGraph.prototype.addConditionalEdges = function (
+        source: string,
+        path: any, // Runnable or function
+        ...rest: any[]
+      ) {
+        // The path condition is essentially a node-like task "router"
+         // Just name it based on source + ".condition" or use function name?
+         // In python example the trace node name is "route_question.task" because the function name is "route_question".
+         // Let's use the function name if available, or "condition".
+         let name = "condition";
+         if (typeof path === 'function' && path.name) {
+             name = path.name;
+         }
+         
+         const wrappedPath = wrapNode(tracer, path, name);
+         
+         return originalAddConditionalEdges.call(this, source, wrappedPath, ...rest);
+      };
+
+    } catch (error) {
+      console.error(`Failed to instrument StateGraph: ${error}`);
+    }
+  }
+
+  private _uninstrumentStateGraph(StateGraph: any): void {
+    try {
+      const originalAddNode = originalMethods.get("langgraph.StateGraph.addNode");
+      if (originalAddNode) {
+        StateGraph.prototype.addNode = originalAddNode;
+      }
+      
+      const originalAddConditionalEdges = originalMethods.get("langgraph.StateGraph.addConditionalEdges");
+      if (originalAddConditionalEdges) {
+        StateGraph.prototype.addConditionalEdges = originalAddConditionalEdges;
+      }
+
+    } catch (error) {
+      console.error(`Failed to uninstrument StateGraph: ${error}`);
+    }
   }
 }
 

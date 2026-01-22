@@ -1,45 +1,63 @@
-import { Tracer, Span, SpanKind, SpanStatusCode, context } from "@opentelemetry/api";
-import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
-  modelAsDict,
+  Span,
+  SpanKind,
+  SpanStatusCode,
+  Tracer,
+  context,
+  trace,
+} from "@opentelemetry/api";
+import { ContextStore } from "../../context-store";
+import { SessionManager } from "../../session-manager";
+import {
   isPromise,
+  modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
+import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type GroqRequestType = "chat";
 
 const CHAT_SPAN_NAME = "groq.chat";
 const STREAM_ENABLED_REQUESTS: GroqRequestType[] = ["chat"];
 
-function groqWrapper(
+export const groqWrapper = (
   tracer: Tracer,
   spanName: string,
   requestType: GroqRequestType
-) {
+) => {
   return function wrapper<F extends (...args: any[]) => any>(
     wrapped: F,
     instance: unknown,
     args: Parameters<F>,
-    kwargs: Record<string, unknown> & { stream?: boolean }
+    kwargs: Record<string, unknown>
   ): unknown {
     if (shouldSuppressInstrumentation()) {
       const result = wrapped.call(instance, ...args);
       return isPromise(result) ? result.then((value) => value) : result;
     }
 
-    const isStreaming = kwargs.stream === true;
-    if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
-      // IMPORTANT: Pass the active context to inherit parent span
-      const currentContext = context.active();
-      const span = tracer.startSpan(
-        spanName,
-        {
-          kind: SpanKind.CLIENT,
-          attributes: { "llm.request.type": requestType },
-        },
-        currentContext
-      );
+    // Context Bridge: If active context is lost (Root) but LangGraph stack exists, use stack
+    const sessionCtx = ContextStore.getOrCreateContext();
+    const langGraphContext = sessionCtx.langgraph?.otelContextStack;
+    const activeSpan = trace.getSpan(context.active());
+    const rootSpan = SessionManager.getRootSpan();
 
+    let currentContext = context.active();
+    if ((!activeSpan || (rootSpan && activeSpan === rootSpan)) && langGraphContext && langGraphContext.length > 0) {
+      currentContext = langGraphContext[langGraphContext.length - 1];
+    }
+
+    const span = tracer.startSpan(
+      spanName,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: { "llm.request.type": requestType },
+      },
+      currentContext
+    );
+
+    const isStreaming = kwargs.stream === true;
+    if (isStreaming) {
       try {
         setRequestAttributes(span, kwargs, requestType);
         const startTime = Date.now();
@@ -74,12 +92,20 @@ function groqWrapper(
         throw error;
       }
     } else {
+      const sessionCtx = ContextStore.getOrCreateContext();
+      const langGraphContext = sessionCtx.langgraph?.otelContextStack;
+      const currentContext =
+        langGraphContext && langGraphContext.length > 0
+          ? langGraphContext[langGraphContext.length - 1]
+          : context.active();
+
       return tracer.startActiveSpan(
         spanName,
         {
           kind: SpanKind.CLIENT,
           attributes: { "llm.request.type": requestType },
         },
+        currentContext,
         (span: Span) => {
           try {
             setRequestAttributes(span, kwargs, requestType);

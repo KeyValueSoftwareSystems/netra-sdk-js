@@ -45,4 +45,19 @@ export interface DecoratorOptions {
   asType?: SpanType;
 }
 
+/**
+ * Options for running a function with isolated session context.
+ * Used with Netra.runWithSession().
+ */
+export interface RunInContextOptions {
+  /** Session ID to set for this context */
+  sessionId?: string;
+  /** User ID to set for this context */
+  userId?: string;
+  /** Tenant ID to set for this context */
+  tenantId?: string;
+  /** Custom attributes to set on spans in this context */
+  customAttributes?: Record<string, string>;
+}
+
 

@@ -1,11 +1,16 @@
 /**
  * Decorators for easy instrumentation
+ *
+ * These decorators automatically establish isolated context for concurrent requests.
+ * When a decorated function is called, if no context exists, one is created.
+ * Nested decorated calls reuse the existing context, ensuring proper isolation.
  */
 
-import { trace, Span } from "@opentelemetry/api";
+import { context, Span, trace } from "@opentelemetry/api";
 import { Config } from "./config";
+import { ContextStore } from "./context-store";
 import { SessionManager } from "./session-manager";
-import { SpanType, DecoratorOptions } from "./types";
+import { DecoratorOptions, SpanType } from "./types";
 
 type AnyFunction = (...args: any[]) => any;
 type AsyncFunction = (...args: any[]) => Promise<any>;
@@ -93,6 +98,14 @@ function getParameterNames(func: AnyFunction): string[] {
     .filter((p) => p);
 }
 
+/**
+ * Core function wrapper that handles both sync and async functions.
+ * Automatically establishes context if none exists (for concurrency safety).
+ */
+/**
+ * Core function wrapper that handles both sync and async functions.
+ * Automatically establishes context if none exists (for concurrency safety).
+ */
 function createFunctionWrapper<T extends AnyFunction>(
   func: T,
   entityType: string,
@@ -105,68 +118,115 @@ function createFunctionWrapper<T extends AnyFunction>(
 
   if (isAsync) {
     return (async function (this: any, ...args: any[]) {
-      SessionManager.pushEntity(entityType, spanName);
+      // Check if we already have a context (nested call)
+      const hasExistingContext = ContextStore.hasContext();
 
-      const tracer = trace.getTracer(moduleName);
-      return tracer.startActiveSpan(spanName, async span => {
-        span.setAttribute("netra.span.type", asType);
-  
-        SessionManager.registerSpan(spanName, span);
-        SessionManager.setCurrentSpan(span);
-  
-        try {
-          const kwargs: Record<string, any> = {};
-          addSpanAttributes(span, func, args, kwargs, entityType);
-          
-          const result = await (func as AsyncFunction).call(this, ...args);
+      // The actual execution logic
+      const executeWithTracking = async () => {
+        SessionManager.pushEntity(entityType, spanName);
+        const tracer = trace.getTracer(moduleName);
 
-          addOutputAttributes(span, result);
-          return result;
-        } catch (e: any) {
-          span.setAttribute(
-            `${Config.LIBRARY_NAME}.entity.error`,
-            String(e)
-          );
-          span.recordException(e);
-          throw e;
-        } finally {
-          span.end();
-          SessionManager.unregisterSpan(spanName, span);
-          SessionManager.popEntity(entityType);
+        // Context Bridge: If active context is lost (Root) but LangGraph stack exists, use stack
+        const sessionCtx = ContextStore.getOrCreateContext();
+        const lgStack = sessionCtx.langgraph?.otelContextStack;
+        const activeSpan = trace.getSpan(context.active());
+        const rootSpan = SessionManager.getRootSpan();
+        
+        let parentCtx = context.active();
+        if ((!activeSpan || (rootSpan && activeSpan === rootSpan)) && lgStack && lgStack.length > 0) {
+             parentCtx = lgStack[lgStack.length - 1];
         }
-      });
+
+        return tracer.startActiveSpan(spanName, { attributes: { "netra.span.type": asType } }, parentCtx, async span => {
+          SessionManager.registerSpan(spanName, span);
+          SessionManager.setCurrentSpan(span);
+
+          try {
+            const kwargs: Record<string, any> = {};
+            addSpanAttributes(span, func, args, kwargs, entityType);
+
+            const result = await (func as AsyncFunction).call(this, ...args);
+
+            addOutputAttributes(span, result);
+            return result;
+          } catch (e: any) {
+            span.setAttribute(
+              `${Config.LIBRARY_NAME}.entity.error`,
+              String(e)
+            );
+            span.recordException(e);
+            throw e;
+          } finally {
+            span.end();
+            SessionManager.unregisterSpan(spanName, span);
+            SessionManager.popEntity(entityType);
+          }
+        });
+      };
+
+      // If we already have a context, just execute
+      // Otherwise, create a new isolated context (this is the entry point)
+      if (hasExistingContext) {
+        return executeWithTracking();
+      } else {
+        return ContextStore.runWithNewContext(() => executeWithTracking());
+      }
     }) as T;
   } else {
     return (function (this: any, ...args: any[]) {
-      SessionManager.pushEntity(entityType, spanName);
+      // Check if we already have a context (nested call)
+      const hasExistingContext = ContextStore.hasContext();
 
-      const tracer = trace.getTracer(moduleName);
-      return tracer.startActiveSpan(spanName, span => {
-        span.setAttribute("netra.span.type", asType);
-        SessionManager.registerSpan(spanName, span);
-        SessionManager.setCurrentSpan(span);
-  
-        try {
-          const kwargs: Record<string, any> = {};
-          addSpanAttributes(span, func, args, kwargs, entityType);
+      // The actual execution logic
+      const executeWithTracking = () => {
+        SessionManager.pushEntity(entityType, spanName);
+        const tracer = trace.getTracer(moduleName);
 
-          const result = (func as AnyFunction).call(this, ...args);
-          addOutputAttributes(span, result);
+        // Context Bridge: If active context is lost (Root) but LangGraph stack exists, use stack
+        const sessionCtx = ContextStore.getOrCreateContext();
+        const lgStack = sessionCtx.langgraph?.otelContextStack;
+        const activeSpan = trace.getSpan(context.active());
+        const rootSpan = SessionManager.getRootSpan();
 
-          return result;
-        } catch (e: any) {
-          span.setAttribute(
-            `${Config.LIBRARY_NAME}.entity.error`,
-            String(e)
-          );
-          span.recordException(e);
-          throw e;
-        } finally {
-          span.end();
-          SessionManager.unregisterSpan(spanName, span);
-          SessionManager.popEntity(entityType);
+        let parentCtx = context.active();
+        if ((!activeSpan || (rootSpan && activeSpan === rootSpan)) && lgStack && lgStack.length > 0) {
+             parentCtx = lgStack[lgStack.length - 1];
         }
-      });
+
+        return tracer.startActiveSpan(spanName, { attributes: { "netra.span.type": asType } }, parentCtx, span => {
+          SessionManager.registerSpan(spanName, span);
+          SessionManager.setCurrentSpan(span);
+
+          try {
+            const kwargs: Record<string, any> = {};
+            addSpanAttributes(span, func, args, kwargs, entityType);
+
+            const result = (func as AnyFunction).call(this, ...args);
+            addOutputAttributes(span, result);
+
+            return result;
+          } catch (e: any) {
+            span.setAttribute(
+              `${Config.LIBRARY_NAME}.entity.error`,
+              String(e)
+            );
+            span.recordException(e);
+            throw e;
+          } finally {
+            span.end();
+            SessionManager.unregisterSpan(spanName, span);
+            SessionManager.popEntity(entityType);
+          }
+        });
+      };
+
+      // If we already have a context, just execute
+      // Otherwise, create a new isolated context (this is the entry point)
+      if (hasExistingContext) {
+        return executeWithTracking();
+      } else {
+        return ContextStore.runWithNewContext(() => executeWithTracking());
+      }
     }) as T;
   }
 }
@@ -287,5 +347,3 @@ export function span<T extends AnyFunction>(
       );
   }
 }
-
-

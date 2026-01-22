@@ -2,29 +2,87 @@
  * Session Span Processor
  *
  * OpenTelemetry span processor that automatically adds session attributes to spans.
- * This includes session_id, user_id, tenant_id from baggage, and entity context
+ * This includes session_id, user_id, tenant_id from the context store, and entity context
  * (workflow, task, agent names) from SessionManager.
+ *
+ * Uses ContextStore for concurrency-safe session management - each concurrent request
+ * has its own isolated session context.
  */
 
 import { Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
 import { SessionManager } from "../session-manager";
+import { ContextStore } from "../context-store";
 
-// Simple baggage access - we store session context in a module-level store
-// since JS OTel baggage API is more complex to use correctly
-const sessionStore: Record<string, string> = {};
-
+/**
+ * Sets a session baggage value in the current context.
+ * This is concurrency-safe - each request has its own isolated context.
+ */
 export function setSessionBaggage(key: string, value: string): void {
-  sessionStore[key] = value;
+  const ctx = ContextStore.getOrCreateContext();
+  switch (key) {
+    case "session_id":
+      ctx.sessionId = value;
+      break;
+    case "user_id":
+      ctx.userId = value;
+      break;
+    case "tenant_id":
+      ctx.tenantId = value;
+      break;
+    default:
+      // Store as custom attribute
+      if (key.startsWith("custom.")) {
+        ctx.customAttributes.set(key.substring(7), value);
+      } else {
+        ctx.customAttributes.set(key, value);
+      }
+  }
 }
 
+/**
+ * Gets a session baggage value from the current context.
+ * Returns undefined if the value is not set or no context exists.
+ */
 export function getSessionBaggage(key: string): string | undefined {
-  return sessionStore[key];
+  const ctx = ContextStore.getContext();
+  if (!ctx) {
+    return undefined;
+  }
+
+  switch (key) {
+    case "session_id":
+      return ctx.sessionId;
+    case "user_id":
+      return ctx.userId;
+    case "tenant_id":
+      return ctx.tenantId;
+    case "custom_keys":
+      // Return comma-separated list of custom attribute keys
+      return ctx.customAttributes.size > 0
+        ? Array.from(ctx.customAttributes.keys()).join(",")
+        : undefined;
+    default:
+      // Check custom attributes
+      if (key.startsWith("custom.")) {
+        return ctx.customAttributes.get(key.substring(7));
+      }
+      return ctx.customAttributes.get(key);
+  }
 }
 
+/**
+ * Clears all session baggage from the current context.
+ */
 export function clearSessionBaggage(): void {
-  Object.keys(sessionStore).forEach((key) => delete sessionStore[key]);
+  const ctx = ContextStore.getContext();
+  if (ctx) {
+    ctx.sessionId = undefined;
+    ctx.userId = undefined;
+    ctx.tenantId = undefined;
+    ctx.customAttributes.clear();
+  }
 }
 
 export class SessionSpanProcessor implements SpanProcessor {
@@ -41,7 +99,7 @@ export class SessionSpanProcessor implements SpanProcessor {
       span.setAttribute("library.version", Config.LIBRARY_VERSION);
       span.setAttribute("sdk.name", Config.SDK_NAME);
 
-      // Add session context from our session store
+      // Add session context from context store
       const sessionId = getSessionBaggage("session_id");
       const userId = getSessionBaggage("user_id");
       const tenantId = getSessionBaggage("tenant_id");
@@ -56,7 +114,7 @@ export class SessionSpanProcessor implements SpanProcessor {
         span.setAttribute(`${Config.LIBRARY_NAME}.tenant_id`, tenantId);
       }
 
-      // Add custom attributes from session store
+      // Add custom attributes from context store
       const customKeys = getSessionBaggage("custom_keys");
       if (customKeys) {
         for (const key of customKeys.split(",")) {

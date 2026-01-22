@@ -3,18 +3,21 @@
  */
 
 import {
-  Span,
-  SpanKind,
-  SpanStatusCode,
-  Tracer,
-  context,
+    Span,
+    SpanKind,
+    SpanStatusCode,
+    Tracer,
+    context,
+    trace,
 } from "@opentelemetry/api";
+import { ContextStore } from "../../context-store";
+import { SessionManager } from "../../session-manager";
 import { isPromise } from "../utils";
 import {
-  modelAsDict,
-  setRequestAttributes,
-  setResponseAttributes,
-  shouldSuppressInstrumentation,
+    modelAsDict,
+    setRequestAttributes,
+    setResponseAttributes,
+    shouldSuppressInstrumentation,
 } from "./utils";
 
 // Span names
@@ -29,11 +32,11 @@ const AGENTS_STREAM_SPAN_NAME = AGENTS_SPAN_NAME;
 
 type MistralRequestType = "chat" | "embedding" | "fim" | "agent";
 
-function mistralWrapper(
+export const mistralWrapper = (
   tracer: Tracer,
   spanName: string,
   requestType: MistralRequestType
-) {
+) => {
   return function wrapper<F extends (...args: any[]) => any>(
     wrapped: F,
     instance: unknown,
@@ -45,12 +48,24 @@ function mistralWrapper(
       return isPromise(result) ? result.then((value) => value) : result;
     }
 
+    // Context Bridge: If active context is lost (Root) but LangGraph stack exists, use stack
+    const sessionCtx = ContextStore.getOrCreateContext();
+    const langGraphContext = sessionCtx.langgraph?.otelContextStack;
+    const activeSpan = trace.getSpan(context.active());
+    const rootSpan = SessionManager.getRootSpan();
+
+    let currentContext = context.active();
+    if ((!activeSpan || (rootSpan && activeSpan === rootSpan)) && langGraphContext && langGraphContext.length > 0) {
+      currentContext = langGraphContext[langGraphContext.length - 1];
+    }
+
     return tracer.startActiveSpan(
       spanName,
       {
         kind: SpanKind.CLIENT,
         attributes: { "llm.request.type": requestType },
       },
+      currentContext,
       (span: Span) => {
         try {
           setRequestAttributes(span, kwargs, requestType);
@@ -124,7 +139,13 @@ function mistralStreamWrapper(
     }
 
     // IMPORTANT: Pass the active context to inherit parent span
-    const currentContext = context.active();
+    const sessionCtx = ContextStore.getOrCreateContext();
+    const langGraphContext = sessionCtx.langgraph?.otelContextStack;
+    const currentContext =
+      langGraphContext && langGraphContext.length > 0
+        ? langGraphContext[langGraphContext.length - 1]
+        : context.active();
+
     const span = tracer.startSpan(
       spanName,
       {
