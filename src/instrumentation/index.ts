@@ -13,6 +13,7 @@ import {
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "../processors";
+import { anthropicInstrumentor } from "./anthropic";
 import { googleGenerativeAIInstrumentor } from "./google-genai";
 import { groqInstrumentor } from "./groq";
 import { langgraphInstrumentor } from "./langgraph";
@@ -57,6 +58,7 @@ export function initInstrumentations(
     mistral: false,
     langgraph: false,
     googleGenAI: false,
+    anthropic: false,
   };
 
   if (!instruments || instruments.size === 0) {
@@ -66,6 +68,7 @@ export function initInstrumentations(
     customInstrumentModules.mistral = true;
     customInstrumentModules.langgraph = true;
     customInstrumentModules.googleGenAI = true;
+    customInstrumentModules.anthropic = true;
     instrumentModules.google_vertexai = false;
     instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
@@ -111,6 +114,9 @@ export function initInstrumentations(
     }
     if (instruments.has(NetraInstruments.TOGETHER)) {
       instrumentModules.together = true;
+    }
+    if (instruments.has(NetraInstruments.ANTHROPIC)) {
+      customInstrumentModules.anthropic = true;
     }
   }
 
@@ -270,6 +276,22 @@ async function initCustomInstrumentationsAsync(
           "Failed to initialize custom Langgraph instrumentation:",
           e,
         );
+      }
+    }
+  }
+
+  if (
+    customInstrumentModules.anthropic && 
+    !blockInstruments?.has(NetraInstruments.ANTHROPIC)
+  ) {
+    try {
+      await anthropicInstrumentor.instrumentAsync({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom Anthropic instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug("Failed to initialize custom Anthropic instrumentation:", e);
       }
     }
   }
@@ -492,6 +514,16 @@ export function uninstrumentAll(): void {
   } catch (e) {
     console.debug("Failed to uninstrument Groq:", e);
   }
+
+   // Uninstrument custom Anthropic instrumentation
+  try {
+    if (anthropicInstrumentor.isInstrumented()) {
+        anthropicInstrumentor.uninstrument();
+      console.debug("Custom Anthropic instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument Anthropic:", e);
+  } 
 
   // Uninstrument custom Google GenAI instrumentation
   try {

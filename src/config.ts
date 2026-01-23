@@ -25,7 +25,8 @@ export enum NetraInstruments {
   GROQ = "groq",
   VERTEX_AI = "vertexai",
   TOGETHER = "together",
-
+  ANTHROPIC = "anthropic",
+  
   // AI Frameworks
   LANGCHAIN = "langchain",
   LANGGRAPH = "langgraph",

@@ -204,9 +204,25 @@ export function setRequestAttributes(
     }
   }
 
-  // Tools count
+  // Tools count and definitions
   if (Array.isArray(kwargs.tools) && kwargs.tools.length > 0) {
     span.setAttribute("gen_ai.request.tools_count", kwargs.tools.length);
+
+    // Add individual tool definitions
+    kwargs.tools.forEach((tool: any, index: number) => {
+      if (tool.name) {
+        span.setAttribute(`gen_ai.request.tools.${index}.name`, tool.name);
+      }
+      if (tool.description) {
+        span.setAttribute(`gen_ai.request.tools.${index}.description`, tool.description);
+      }
+      if (tool.input_schema) {
+        span.setAttribute(
+          `gen_ai.request.tools.${index}.input_schema`,
+          JSON.stringify(tool.input_schema)
+        );
+      }
+    });
   }
 
   // Tool choice (handle both snake_case and camelCase)
@@ -295,10 +311,39 @@ function _setChatCompletionAPIAttributes(
       `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
       message?.role ?? "user"
     );
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
-      String(message?.content ?? "")
-    );
+
+    // Handle content - can be string or array
+    const content = message?.content;
+    if (typeof content === 'string') {
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+        content
+      );
+    } else if (Array.isArray(content)) {
+      // Handle array content (tool results, multimodal content, etc.)
+      content.forEach((block: any, blockIndex: number) => {
+        if (block.type === 'tool_result') {
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${i}.tool_result.${blockIndex}.tool_use_id`,
+            block.tool_use_id
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${i}.tool_result.${blockIndex}.content`,
+            typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+          );
+        } else if (block.type === 'text') {
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${i}.content.${blockIndex}`,
+            block.text || ''
+          );
+        }
+      });
+    } else {
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+        String(content ?? "")
+      );
+    }
   }
 }
 
@@ -482,6 +527,43 @@ function _setResponseMessageAttributes(
       String(messageContent)
     );
   }
+
+  if (response.content && Array.isArray(response.content)) {
+      let toolCallIndex = 0;
+      response.content.forEach((contentBlock: any) => {
+        if (contentBlock.type === 'text' && contentBlock.text) {
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+            "assistant"
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+            String(contentBlock.text)
+          );
+          messageIndex += 1;
+        } else if (contentBlock.type === 'tool_use') {
+          // Capture tool use information
+          span.setAttribute(
+            `gen_ai.response.tool_calls.${toolCallIndex}.name`,
+            contentBlock.name
+          );
+          span.setAttribute(
+            `gen_ai.response.tool_calls.${toolCallIndex}.id`,
+            contentBlock.id
+          );
+          span.setAttribute(
+            `gen_ai.response.tool_calls.${toolCallIndex}.input`,
+            JSON.stringify(contentBlock.input)
+          );
+          toolCallIndex += 1;
+        }
+      });
+
+      // Set total tool calls count if any
+      if (toolCallIndex > 0) {
+        span.setAttribute("gen_ai.response.tool_calls_count", toolCallIndex);
+      }
+    }
 
   if (response.output !== undefined) {
     for (let element of response.output as Array<Record<string, unknown>>) {

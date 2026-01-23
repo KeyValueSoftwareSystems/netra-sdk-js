@@ -57,7 +57,8 @@
     "@opentelemetry/instrumentation-http": "^0.52.1",
     "@prisma/instrumentation": "^5.0.0",
     "groq-sdk": ">=0.3.0",
-    "openai": "^4.0.0 || ^5.0.0 || ^6.0.0"
+    "openai": "^4.0.0 || ^5.0.0 || ^6.0.0",
+    "@anthropic-ai/sdk": ">=0.60.0"
   },
   "peerDependenciesMeta": {
     "@opentelemetry/instrumentation-http": {
@@ -79,6 +80,9 @@
       "optional": true
     },
     "@google/generative-ai": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
       "optional": true
     }
   },
