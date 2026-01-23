@@ -14,7 +14,6 @@ import {
 
 import {
   shouldSuppressInstrumentation,
-  setNetraAttributes,
   setResponseAttributes as setBaseResponseAttributes,
 } from "../utils";
 import {
@@ -113,7 +112,6 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     NetraLanggraphContextManager.runWithContext(() => {
       const span = this.tracer.startSpan(`${nodeName}.task`);
       NetraLanggraphContextManager.createSpanContext(span);
-      setNetraAttributes(span, "langgraph");
       setChainInputAttributes(span, inputs, tags, metadata);
       this.addNode(runId, nodeName, span);
     });
@@ -170,7 +168,6 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 
     NetraLanggraphContextManager.runWithContext(() => {
       const span = this.tracer.startSpan(`${llmId}.task`);
-      setNetraAttributes(span, "langgraph");
       setLlmRequestAttributes(
         span,
         attributes.metadata,
@@ -219,7 +216,6 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 
     NetraLanggraphContextManager.runWithContext(() => {
       const span = this.tracer.startSpan(`${toolName}.tool`);
-      setNetraAttributes(span, "langgraph");
       setToolAttributes(span, toolName, input ?? {}, output, metadata, tags);
       span.end();
     });
@@ -265,7 +261,6 @@ export class LanggraphWrapper {
       });
       NetraLanggraphContextManager.createSpanContext(span);
       try {
-        setNetraAttributes(span, "langgraph");
         setInvokeInputAttributes(span, input);
 
         const updatedConfig = this.getUpdatedConfig(config);

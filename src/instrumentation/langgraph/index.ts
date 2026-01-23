@@ -3,7 +3,7 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { LanggraphWrapper } from "./wrappers";
 import { __version__ } from "./version";
 
-const INSTRUMENTATION_NAME = "netra.instrumentation.langgraph";
+const INSTRUMENTATION_NAME = "netra.instrumentation.langchain";
 const INSTRUMENTS = ["langgraph >= 1.1.1"];
 
 let isInstrumented = false;
