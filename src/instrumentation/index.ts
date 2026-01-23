@@ -13,11 +13,12 @@ import {
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "../processors";
+import { googleGenerativeAIInstrumentor } from "./google-genai";
 import { groqInstrumentor } from "./groq";
+import { langgraphInstrumentor } from "./langgraph";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
-import { langgraphInstrumentor } from "./langgraph";
 
 // Interface for TracerProvider with addSpanProcessor method
 interface TracerProviderWithProcessors {
@@ -29,7 +30,7 @@ export {
   modelAsDict,
   setRequestAttributes,
   setResponseAttributes,
-  shouldSuppressInstrumentation,
+  shouldSuppressInstrumentation
 } from "./utils";
 
 const require = createRequire(import.meta.url);
@@ -44,7 +45,7 @@ export let instrumentationsReady: Promise<void> = Promise.resolve();
 export function initInstrumentations(
   config: Config,
   instruments?: Set<NetraInstruments>,
-  blockInstruments?: Set<NetraInstruments>
+  blockInstruments?: Set<NetraInstruments>,
 ): void {
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
@@ -55,6 +56,7 @@ export function initInstrumentations(
     groq: false,
     mistral: false,
     langgraph: false,
+    googleGenAI: false,
   };
 
   if (!instruments || instruments.size === 0) {
@@ -63,7 +65,9 @@ export function initInstrumentations(
     customInstrumentModules.groq = true;
     customInstrumentModules.mistral = true;
     customInstrumentModules.langgraph = true;
-    instrumentModules.google_vertexai = true;
+    customInstrumentModules.googleGenAI = true;
+    instrumentModules.google_vertexai = false;
+    instrumentModules.langchain = true;
     instrumentModules.llamaIndex = true;
     instrumentModules.pinecone = true;
     instrumentModules.qdrant = true;
@@ -80,11 +84,11 @@ export function initInstrumentations(
     if (instruments.has(NetraInstruments.GROQ)) {
       customInstrumentModules.groq = true;
     }
-    if (
-      instruments.has(NetraInstruments.GOOGLE_GENAI) ||
-      instruments.has(NetraInstruments.VERTEX_AI)
-    ) {
-      // Google GenAI (Gemini) is supported via VertexAI instrumentation
+    if (instruments.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) {
+      customInstrumentModules.googleGenAI = true;
+    }
+    if (instruments.has(NetraInstruments.VERTEX_AI)) {
+      // Vertex AI still uses Traceloop's vertexai module
       instrumentModules.google_vertexai = true;
     }
     if (instruments.has(NetraInstruments.LANGCHAIN)) {
@@ -119,12 +123,12 @@ export function initInstrumentations(
     console.debug("Netra SDK Configuration:");
     console.debug(`  App Name: ${config.appName}`);
     console.debug(
-      `  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`
+      `  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`,
     );
     console.debug(
       `  API Key: ${
         config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"
-      }`
+      }`,
     );
     console.debug(`  Trace Content: ${config.traceContent}`);
     console.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
@@ -189,7 +193,7 @@ async function initCustomInstrumentationsAsync(
       if (config.debugMode) {
         console.debug(
           "Failed to initialize custom MistralAI instrumentation:",
-          e
+          e,
         );
       }
     }
@@ -229,6 +233,27 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
+  // Initialize custom Google GenAI instrumentation
+  if (
+    customInstrumentModules.googleGenAI &&
+    !blockInstruments?.has(NetraInstruments.GOOGLE_GENERATIVE_AI)
+  ) {
+    try {
+      await googleGenerativeAIInstrumentor.instrumentAsync({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom Google GenAI instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug(
+          "Failed to initialize custom Google GenAI instrumentation:",
+          e,
+        );
+      }
+    }
+  }
+
+  
   // Initialize custom Langgraph instrumentation
   if (
     customInstrumentModules.langgraph &&
@@ -341,7 +366,7 @@ function initOpenTelemetryInstrumentations(
  */
 function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
-  config: Config
+  config: Config,
 ): void {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
@@ -399,7 +424,7 @@ function addCustomSpanProcessors(
       if (config.debugMode) {
         console.debug(
           "Could not access TracerProvider for adding span processors. " +
-            "Session context will still be propagated via baggage."
+            "Session context will still be propagated via baggage.",
         );
       }
       return;
@@ -468,7 +493,17 @@ export function uninstrumentAll(): void {
     console.debug("Failed to uninstrument Groq:", e);
   }
 
-  // Uninstrument custom Groq instrumentation
+  // Uninstrument custom Google GenAI instrumentation
+  try {
+    if (googleGenerativeAIInstrumentor.isInstrumented()) {
+      googleGenerativeAIInstrumentor.uninstrument();
+      console.debug("Custom Google GenAI instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument Google GenAI:", e);
+  }
+
+  // Uninstrument custom Langgraph instrumentation
   try {
     if (langgraphInstrumentor.isInstrumented()) {
       langgraphInstrumentor.uninstrument();

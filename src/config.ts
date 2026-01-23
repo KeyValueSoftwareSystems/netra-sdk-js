@@ -20,27 +20,27 @@ export interface NetraConfig {
 export enum NetraInstruments {
   // LLM Providrs
   OPENAI = "openai",
-  GOOGLE_GENAI = "google_genai",
+  GOOGLE_GENERATIVE_AI = "google_genai",
   MISTRAL = "mistral",
   GROQ = "groq",
   VERTEX_AI = "vertexai",
   TOGETHER = "together",
-  
+
   // AI Frameworks
   LANGCHAIN = "langchain",
   LANGGRAPH = "langgraph",
   LLAMA_INDEX = "llama_index",
-  
+
   // Vector Dbs
   PINECONE = "pinecone",
   QDRANT = "qdrant",
   CHROMADB = "chromadb",
-  
+
   // HTTP Clients
   HTTP = "http",
   HTTPS = "https",
   FETCH = "fetch",
-  
+
   // Databases
   PRISMA = "prisma",
   TYPEORM = "typeorm",
@@ -48,12 +48,12 @@ export enum NetraInstruments {
   POSTGRES = "postgres",
   MYSQL = "mysql",
   REDIS = "redis",
-  
+
   // Web Frameworks
   EXPRESS = "express",
   FASTIFY = "fastify",
   NESTJS = "nestjs",
-  
+
   KAFKA = "kafka",
   RABBITMQ = "rabbitmq",
 }
@@ -63,10 +63,10 @@ export class Config {
   static readonly LIBRARY_NAME = "netra";
   static readonly LIBRARY_VERSION = "1.0.0";
   static readonly ATTRIBUTE_MAX_LEN = parseInt(
-    process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000"
+    process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000",
   );
   static readonly CONVERSATION_MAX_LEN = parseInt(
-    process.env.NETRA_CONVERSATION_CONTENT_MAX_LEN || "50000"
+    process.env.NETRA_CONVERSATION_CONTENT_MAX_LEN || "50000",
   );
 
   appName: string;
@@ -90,31 +90,31 @@ export class Config {
     this.disableBatch = this._getBoolConfig(
       config.disableBatch,
       "NETRA_DISABLE_BATCH",
-      false
+      false,
     );
     this.traceContent = this._getBoolConfig(
       config.traceContent,
       "NETRA_TRACE_CONTENT",
-      true
+      true,
     );
     this.debugMode = this._getBoolConfig(
       config.debugMode,
       "NETRA_DEBUG",
-      false
+      false,
     );
     this.enableRootSpan = this._getBoolConfig(
       config.enableRootSpan,
       "NETRA_ENABLE_ROOT_SPAN",
-      false
+      false,
     );
     this.enableScrubbing = this._getBoolConfig(
       config.enableScrubbing,
       "NETRA_ENABLE_SCRUBBING",
-      false
+      false,
     );
     this.environment = config.environment || process.env.NETRA_ENV || "local";
     this.resourceAttributes = this._getResourceAttributes(
-      config.resourceAttributes
+      config.resourceAttributes,
     );
     this.blockedSpans = config.blockedSpans;
 
@@ -135,13 +135,12 @@ export class Config {
 
   private _getOtlpEndpoint(): string | undefined {
     return (
-      process.env.NETRA_OTLP_ENDPOINT ||
-      process.env.OTEL_EXPORTER_OTLP_ENDPOINT
+      process.env.NETRA_OTLP_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
     );
   }
 
   private _parseHeaders(
-    headers?: string | Record<string, string>
+    headers?: string | Record<string, string>,
   ): Record<string, string> {
     if (!headers) {
       const envHeaders = process.env.NETRA_HEADERS;
@@ -177,7 +176,7 @@ export class Config {
       !this.apiKey
     ) {
       console.error(
-        "Error: Missing Netra API key, go to netra dashboard to create one"
+        "Error: Missing Netra API key, go to netra dashboard to create one",
       );
       console.error("Set the NETRA_API_KEY environment variable to the key");
     }
@@ -190,9 +189,7 @@ export class Config {
 
     const isNetra = this.otlpEndpoint.toLowerCase().includes("getnetra");
     const authKey = isNetra ? "x-api-key" : "Authorization";
-    const authValue = isNetra
-      ? this.apiKey
-      : `Bearer ${this.apiKey}`;
+    const authValue = isNetra ? this.apiKey : `Bearer ${this.apiKey}`;
 
     if (!this.headers[authKey]) {
       this.headers[authKey] = authValue;
@@ -202,7 +199,7 @@ export class Config {
   private _getBoolConfig(
     param: boolean | undefined,
     envVar: string,
-    defaultValue: boolean
+    defaultValue: boolean,
   ): boolean {
     if (param !== undefined) {
       return param;
@@ -217,7 +214,7 @@ export class Config {
   }
 
   private _getResourceAttributes(
-    resourceAttributes?: Record<string, any>
+    resourceAttributes?: Record<string, any>,
   ): Record<string, any> {
     if (resourceAttributes !== undefined) {
       return resourceAttributes;
@@ -256,7 +253,10 @@ export class Config {
     }
 
     // Set headers for Traceloop
-    if (Object.keys(this.headers).length > 0 && !process.env.TRACELOOP_HEADERS) {
+    if (
+      Object.keys(this.headers).length > 0 &&
+      !process.env.TRACELOOP_HEADERS
+    ) {
       const headerStr = Object.entries(this.headers)
         .map(([k, v]) => `${k}=${v}`)
         .join(",");
@@ -264,5 +264,3 @@ export class Config {
     }
   }
 }
-
-
