@@ -96,7 +96,6 @@ export function setChainOutputAttributes(
   if (tags) {
     const filteredTags = tags.filter(tagFilter);
     if (filteredTags.length > 0) {
-      console.log("FILTERED TAGS:", filteredTags);
       entityOutputs["kwargs"] = { tags: filteredTags };
     }
   }

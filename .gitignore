@@ -53,6 +53,7 @@ playwright-report/
 *.temp
 .cache/
 *.tgz
+*.zip
 .npm-cache/
 
 # Local pack/e2e consumer projects
