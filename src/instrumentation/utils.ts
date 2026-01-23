@@ -354,7 +354,7 @@ function _setResponseAPIAttributes(
  */
 export function setResponseAttributes(
   span: Span,
-  response: Record<string, unknown>
+  response: Record<string, unknown>,
 ): void {
   if (!span.isRecording()) {
     console.log("Span is not recording");
@@ -365,11 +365,9 @@ export function setResponseAttributes(
     span.setAttribute("llm.response.id", String(response.id));
   }
 
-  if (response.model) {
-    span.setAttribute(
-      SpanAttributes.LLM_RESPONSE_MODEL,
-      String(response.model)
-    );
+  const model = response?.model || (response?.response_metadata as any)?.model;
+  if (model) {
+    span.setAttribute(SpanAttributes.LLM_RESPONSE_MODEL, String(model));
   }
 
   _setUsageAttributes(span, response);
@@ -410,10 +408,14 @@ export function setResponseAttributes(
 
 function _setUsageAttributes(
   span: Span,
-  response: Record<string, unknown>
+  response: Record<string, unknown>,
 ): void {
-  const usage = response.usage as Record<string, unknown> | undefined;
-  if (!usage) return;
+  if (!response.usage && !response.usage_metadata) return;
+
+  const usage = (response.usage ?? response.usage_metadata) as Record<
+    string,
+    unknown
+  >;
 
   const promptTokens = usage.prompt_tokens ?? usage.input_tokens;
   if (promptTokens !== undefined) {
@@ -469,14 +471,15 @@ function _setResponseMessageAttributes(
   response: Record<string, unknown>
 ): void {
   let messageIndex = 0;
-  if (response.output_text) {
+  const messageContent = response.output_text ?? response.content;
+  if (messageContent) {
     span.setAttribute(
       `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
       "assistant"
     );
     span.setAttribute(
       `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-      String(response.output_text)
+      String(messageContent)
     );
   }
 
