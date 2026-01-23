@@ -1,6 +1,14 @@
 import { Context, Span, trace } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 
+/**
+ * LlmTraceIdentifierSpanProcessor
+ *
+ * Note: This processor uses instance-level state for trace tracking.
+ * The Maps here are shared across all requests within a single process,
+ * which is acceptable because they're indexed by traceId (which is unique
+ * per request). The state is automatically cleaned up when traces complete.
+ */
 export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
   // Default attribute keys
   static DEFAULT_REQUEST_MODEL_KEY = "gen_ai.request.model";
@@ -11,7 +19,7 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
   private _responseModelKey: string;
   private _rootMarkerKey: string;
 
-  // Trace state tracking
+  // Trace state tracking - indexed by traceId so inherently request-isolated
   private _rootSpansByTrace: Map<string, Span> = new Map();
   private _rootSpanIdsByTrace: Map<string, string> = new Map();
   private _markedTraces: Set<string> = new Set();

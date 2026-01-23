@@ -1,20 +1,19 @@
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import { Serialized } from "@langchain/core/load/serializable";
 import { LLMResult } from "@langchain/core/outputs";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { ChainValues } from "@langchain/core/utils/types";
-import { Serialized } from "@langchain/core/load/serializable";
-import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import {
-  Context,
   Span,
   SpanKind,
   Tracer,
   context,
-  trace,
+  trace
 } from "@opentelemetry/api";
 
 import {
-  shouldSuppressInstrumentation,
   setResponseAttributes as setBaseResponseAttributes,
+  shouldSuppressInstrumentation,
 } from "../utils";
 import {
   setChainInputAttributes,
@@ -27,64 +26,26 @@ import {
 
 type AnyFunc = (...args: any[]) => any;
 
-class NetraLanggraphContextManager {
-  private static _currentContext: Context | null = null;
-  private static _activeContextStack: Context[] = [];
-
-  static addContext(context: Context) {
-    this._currentContext = context;
-    this._activeContextStack.push(context);
-  }
-
-  static createSpanContext(span: Span) {
-    const spanContext = trace.setSpan(context.active(), span);
-    this.addContext(spanContext);
-  }
-
-  static removeContext() {
-    this._activeContextStack.pop();
-    const activeContexts = this._activeContextStack.length;
-    this._currentContext =
-      activeContexts > 0 ? this._activeContextStack[activeContexts - 1] : null;
-  }
-
-  static getCurrentContext() {
-    return this._currentContext;
-  }
-
-  static runWithContext(func: () => any) {
-    return this._currentContext
-      ? context.with(this._currentContext, func)
-      : func();
-  }
-}
-
 class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
   name = "netra-langgraph-callback-handler";
-  private nodes: Record<string, any>[] = [];
+  // Map runId -> Span for explicit parenting
+  private spans: Map<string, Span> = new Map();
+  private nodeAttributes: Map<string, Record<string, any>> = new Map();
 
-  constructor(private tracer: Tracer) {
+  constructor(private tracer: Tracer, private rootSpan: Span) {
     super();
   }
 
-  private addNode(id: string, name: string, span: Span) {
-    this.nodes.push({ id, name, span });
+  private getParentSpan(parentRunId?: string): Span {
+    if (parentRunId && this.spans.has(parentRunId)) {
+      return this.spans.get(parentRunId)!;
+    }
+    return this.rootSpan;
   }
 
-  private addNodeAttributes(attributes: Record<string, any>) {
-    if (this.nodes.length === 0) return;
-    let currentNode = this.nodes[this.nodes.length - 1];
-    this.nodes[this.nodes.length - 1] = { ...currentNode, attributes };
-  }
-
-  private removeNode() {
-    if (this.nodes.length === 0) return;
-    return this.nodes.pop();
-  }
-
-  private get currentNode(): Record<string, any> | null {
-    if (this.nodes.length == 0) return null;
-    return this.nodes[this.nodes.length - 1];
+  private addNodeAttributes(runId: string, attributes: Record<string, any>) {
+    const current = this.nodeAttributes.get(runId) || {};
+    this.nodeAttributes.set(runId, { ...current, ...attributes });
   }
 
   async handleChainStart(
@@ -109,12 +70,15 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       return;
     }
 
-    NetraLanggraphContextManager.runWithContext(() => {
-      const span = this.tracer.startSpan(`${nodeName}.task`);
-      NetraLanggraphContextManager.createSpanContext(span);
-      setChainInputAttributes(span, inputs, tags, metadata);
-      this.addNode(runId, nodeName, span);
-    });
+    const parentSpan = this.getParentSpan(parentRunId);
+    
+    // Create span parented to the correct node/workflow
+    const ctx = trace.setSpan(context.active(), parentSpan);
+    const span = this.tracer.startSpan(`${nodeName}.task`, undefined, ctx);
+    
+    setChainInputAttributes(span, inputs, tags, metadata);
+    
+    this.spans.set(runId, span);
   }
 
   async handleChainEnd(
@@ -124,15 +88,12 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     tags?: string[],
     kwargs?: { inputs?: Record<string, unknown> },
   ) {
-    const nodeInfo = this.currentNode;
-    if (nodeInfo === null || nodeInfo?.id !== parentRunId) return;
-    NetraLanggraphContextManager.runWithContext(() => {
-      const span: Span = nodeInfo.span;
-      setChainOutputAttributes(span, outputs, tags);
-      span.end();
-    });
-    this.removeNode();
-    NetraLanggraphContextManager.removeContext();
+    const span = this.spans.get(runId);
+    if (!span) return;
+
+    setChainOutputAttributes(span, outputs, tags);
+    span.end();
+    this.spans.delete(runId);
   }
 
   async handleLLMStart(
@@ -145,11 +106,12 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, unknown>,
     runName?: string,
   ) {
-    this.addNodeAttributes({
-      llmIds: llm.id,
-      metadata,
-      prompts,
-      extraParams,
+    this.addNodeAttributes(runId, {
+        llmIds: llm.id,
+        metadata,
+        prompts,
+        extraParams,
+        parentRunId // Store parent ID to link back
     });
   }
 
@@ -158,25 +120,27 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     runId: string,
     parentRunId?: string,
   ): Promise<void> {
-    let nodeInfo = this.currentNode;
-    if (nodeInfo === null || nodeInfo?.id !== parentRunId) return;
+    const attributes = this.nodeAttributes.get(runId);
+    if (!attributes) return;
 
     const response = (output?.generations?.[0]?.[0] as any)?.message;
-    const attributes = nodeInfo.attributes;
     const llmIds = attributes.llmIds ?? [];
     const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
-
-    NetraLanggraphContextManager.runWithContext(() => {
-      const span = this.tracer.startSpan(`${llmId}.task`);
-      setLlmRequestAttributes(
-        span,
-        attributes.metadata,
-        attributes.prompts,
-        attributes.extraParams,
-      );
-      setBaseResponseAttributes(span, response);
-      span.end();
-    });
+    
+    const parentSpan = this.getParentSpan(parentRunId);
+    const ctx = trace.setSpan(context.active(), parentSpan);
+    
+    const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
+    setLlmRequestAttributes(
+      span,
+      attributes.metadata,
+      attributes.prompts,
+      attributes.extraParams,
+    );
+    setBaseResponseAttributes(span, response);
+    span.end();
+    
+    this.nodeAttributes.delete(runId);
   }
 
   async handleToolStart(
@@ -194,10 +158,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     } catch {
       parsedInput = {};
     }
-    this.addNodeAttributes({
+    
+    this.addNodeAttributes(runId, {
       input: parsedInput,
       metadata,
-      tags,
+      tags
     });
   }
 
@@ -207,18 +172,20 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     parentRunId?: string,
     tags?: string[],
   ) {
-    let nodeInfo = this.currentNode;
-    if (nodeInfo === null || nodeInfo?.id !== parentRunId) return;
+    const attributes = this.nodeAttributes.get(runId);
+    if (!attributes) return;
 
-    const attributes = nodeInfo.attributes;
     const toolName = attributes?.input?.name ?? "custom";
     const { input, metadata } = attributes;
 
-    NetraLanggraphContextManager.runWithContext(() => {
-      const span = this.tracer.startSpan(`${toolName}.tool`);
-      setToolAttributes(span, toolName, input ?? {}, output, metadata, tags);
-      span.end();
-    });
+    const parentSpan = this.getParentSpan(parentRunId);
+    const ctx = trace.setSpan(context.active(), parentSpan);
+
+    const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
+    setToolAttributes(span, toolName, input ?? {}, output, metadata, tags);
+    span.end();
+
+    this.nodeAttributes.delete(runId);
   }
 }
 
@@ -229,8 +196,10 @@ export class LanggraphWrapper {
     this.spanName = "Langgraph.workflow";
   }
 
-  private getUpdatedConfig(config?: RunnableConfig): RunnableConfig {
-    const callbackHandler = new NetraLanggraphCallbackHandler(this.tracer);
+  private getUpdatedConfig(config?: RunnableConfig, rootSpan?: Span): RunnableConfig {
+    if (!rootSpan) return config || {};
+
+    const callbackHandler = new NetraLanggraphCallbackHandler(this.tracer, rootSpan);
     const callbacks = config?.callbacks;
     const normalizedCallbacks = callbacks
       ? Array.isArray(callbacks)
@@ -255,29 +224,35 @@ export class LanggraphWrapper {
       return await originalFunc.call(instance, input, config, ...rest);
     }
 
-    return NetraLanggraphContextManager.runWithContext(async () => {
-      const span = this.tracer.startSpan(this.spanName, {
-        kind: SpanKind.CLIENT,
-      });
-      NetraLanggraphContextManager.createSpanContext(span);
-      try {
-        setInvokeInputAttributes(span, input);
-
-        const updatedConfig = this.getUpdatedConfig(config);
-        const output = await originalFunc.call(
-          instance,
-          input,
-          updatedConfig,
-          ...rest,
-        );
-
-        setInvokeOutputAttributes(span, output);
-
-        return output;
-      } finally {
-        span.end();
-        NetraLanggraphContextManager.removeContext();
-      }
+    // Start metadata spanning for the workflow
+    // We use context.active() to parent to the current active span (e.g. request handler)
+    const span = this.tracer.startSpan(this.spanName, {
+      kind: SpanKind.CLIENT,
+    });
+    
+    return context.with(trace.setSpan(context.active(), span), async () => {
+        try {
+            setInvokeInputAttributes(span, input);
+            
+            // Pass the workflow span as the root for the callback handler
+            const updatedConfig = this.getUpdatedConfig(config, span);
+            
+            const output = await originalFunc.call(
+              instance,
+              input,
+              updatedConfig,
+              ...rest,
+            );
+    
+            setInvokeOutputAttributes(span, output);
+    
+            return output;
+        } catch (e) {
+            span.recordException(e as Error);
+            throw e;
+        } finally {
+            span.end();
+        }
     });
   }
 }
