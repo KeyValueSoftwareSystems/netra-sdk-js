@@ -4,24 +4,24 @@ import { LLMResult } from "@langchain/core/outputs";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { ChainValues } from "@langchain/core/utils/types";
 import {
-    Span,
-    SpanKind,
-    Tracer,
-    context,
-    trace
+  Span,
+  SpanKind,
+  Tracer,
+  context,
+  trace
 } from "@opentelemetry/api";
 
 import {
-    setResponseAttributes as setBaseResponseAttributes,
-    shouldSuppressInstrumentation,
+  setResponseAttributes as setBaseResponseAttributes,
+  shouldSuppressInstrumentation,
 } from "../utils";
 import {
-    setChainInputAttributes,
-    setChainOutputAttributes,
-    setInvokeInputAttributes,
-    setInvokeOutputAttributes,
-    setLlmRequestAttributes,
-    setToolAttributes,
+  setChainInputAttributes,
+  setChainOutputAttributes,
+  setInvokeInputAttributes,
+  setInvokeOutputAttributes,
+  setLlmRequestAttributes,
+  setToolAttributes,
 } from "./utils";
 
 type AnyFunc = (...args: any[]) => any;
@@ -106,20 +106,6 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, unknown>,
     runName?: string,
   ) {
-    // Just store attributes for later use in handleLLMEnd where we create the span
-    // Ideally we'd create the span here, but the original implementation did it in End??
-    // Wait, the original implementation did addNodeAttributes here.
-    // Let's attach these attributes to the *parent* node if it exists, or verify behavior.
-    
-    // Correction: In LangChain, LLM start is its own run. It will have a runId.
-    // We should probably start the span here if we want to trace the LLM call duration accurately.
-    // However, sticking to the previous logic of creating it at the end for simplicity of attributes?
-    // No, standard OTel practice is to start on Start.
-    
-    // But keeping it close to original logic:
-    // Original logic: handleLLMEnd creates the span.
-    // Let's stick to that pattern to minimize regression risk, but manage attributes properly map-based.
-    
     this.addNodeAttributes(runId, {
         llmIds: llm.id,
         metadata,

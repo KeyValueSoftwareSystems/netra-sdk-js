@@ -295,17 +295,7 @@ export class Netra {
      *
      * @param fn The function to run with isolated entity context
      * @returns The result of the function
-     *
-     * @example
-     * // In an Express handler with workflow/task tracking
-     * app.get('/api/chat', (req, res) => {
-     *   Netra.runWithContext(async () => {
-     *     Netra.setSessionId(req.sessionId);
-     *     // Workflow/task tracking will now be isolated per request
-     *     const result = await processChat();
-     *     res.json(result);
-     *   });
-     * });
+     * 
      */
     static runWithContext<T>(fn: () => T): T {
         return runWithEntityContext(fn);
