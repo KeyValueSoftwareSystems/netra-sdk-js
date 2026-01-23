@@ -3,7 +3,11 @@
  */
 
 import { trace } from "@opentelemetry/api";
-import { SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import {
+  ConsoleSpanExporter,
+  SpanExporter,
+  SpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { createRequire } from "module";
 import { Config, NetraInstruments } from "../config";
@@ -23,6 +27,13 @@ import { typeORMInstrumentor } from "./typeorm";
 import { FilteringSpanExporter, TrialAwareOTLPExporter } from "../exporters";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { LocalFilteringSpanProcessor } from "../processors/localfiltering-span-processor";
+import { propagation } from "@opentelemetry/api";
+import {
+  CompositePropagator,
+  W3CBaggagePropagator as BaggagePropagator,
+  W3CTraceContextPropagator,
+} from "@opentelemetry/core";
+
 // Interface for TracerProvider with addSpanProcessor method
 interface TracerProviderWithProcessors {
   addSpanProcessor(processor: SpanProcessor): void;
@@ -44,6 +55,12 @@ const require = createRequire(import.meta.url);
  * all async instrumentations are complete.
  */
 export let instrumentationsReady: Promise<void> = Promise.resolve();
+
+propagation.setGlobalPropagator(
+  new CompositePropagator({
+    propagators: [new W3CTraceContextPropagator(), new BaggagePropagator()],
+  }),
+);
 
 export function initInstrumentations(
   config: Config,
@@ -146,9 +163,39 @@ export function initInstrumentations(
     instrumentModules,
     silenceInitializationMessage: !config.debugMode,
   };
+  // ---- updated exporter setup (Python-equivalent) ----
+
+  // 1) Pick base exporter (Console fallback OR TrialAware(OTLP))
+  let exporter: SpanExporter;
+
+  if (!traceloopOptions.baseUrl || traceloopOptions.baseUrl == undefined) {
+    exporter = new ConsoleSpanExporter();
+  } else {
+    const formattedEndpoint = config.formatOtlpEndpoint();
+
+    const otlpExporter = new OTLPTraceExporter({
+      url: formattedEndpoint,
+      headers: config.headers,
+    });
+
+    exporter = new TrialAwareOTLPExporter(otlpExporter);
+  }
+
+  // 2) Always attempt filtering (even for Console fallback)
+  const originalExporter = exporter;
+
+  try {
+    const patterns = config.blockedSpans ?? [];
+    exporter = new FilteringSpanExporter(exporter, patterns);
+  } catch {
+    exporter = originalExporter;
+  }
+
+  traceloopOptions.exporter = exporter;
 
   initialize(traceloopOptions);
 
+  // ---- rest stays same ----
   const tracerProvider = trace.getTracerProvider();
 
   // Add custom span processors to the TracerProvider

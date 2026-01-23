@@ -102,6 +102,7 @@ export type {
   TraceSpan,
   TraceSummary,
 } from "./api";
+export * from "./exporters";
 
 let _initialized = false;
 let _rootSpan: Span | undefined;
@@ -186,6 +187,8 @@ export class Netra {
     this.evaluation = new Evaluation(cfg);
     this.dashboard = new Dashboard(cfg);
 
+    this._initialized = true;
+    console.info("Netra successfully initialized.");
     this._initialized = true;
     console.info("Netra successfully initialized.");
 
