@@ -17,7 +17,7 @@ const metadataFilter = (key: string) => {
   return !key.startsWith("__");
 };
 
-export function setInvokeInputAttributes(
+export function setGraphInputAttributes(
   span: Span,
   inputs: Record<string, any>,
 ): void {
@@ -27,7 +27,7 @@ export function setInvokeInputAttributes(
   );
 }
 
-export function setInvokeOutputAttributes(
+export function setGraphOutputAttributes(
   span: Span,
   outputs: Record<string, any>,
 ): void {
