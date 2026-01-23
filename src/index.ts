@@ -15,7 +15,7 @@ import {
     uninstrumentAll,
 } from "./instrumentation";
 import { setSessionBaggage } from "./processors/session-span-processor";
-import { ConversationType, SessionManager } from "./session-manager";
+import { ConversationType, runWithEntityContext, SessionManager } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
@@ -284,7 +284,39 @@ export class Netra {
     }
 
     /**
-     * Set session_id context attributes for all spans
+     * Run a function within an isolated entity context.
+     * This ensures that entity stacks (workflow, task, agent, span) are isolated
+     * per request in concurrent environments.
+     *
+     * Note: Session context (session_id, user_id, tenant_id) is automatically
+     * isolated via OpenTelemetry's baggage API and AsyncLocalStorage.
+     * This method is primarily needed if you're using workflow/task/agent decorators
+     * or span wrappers in concurrent environments.
+     *
+     * @param fn The function to run with isolated entity context
+     * @returns The result of the function
+     *
+     * @example
+     * // In an Express handler with workflow/task tracking
+     * app.get('/api/chat', (req, res) => {
+     *   Netra.runWithContext(async () => {
+     *     Netra.setSessionId(req.sessionId);
+     *     // Workflow/task tracking will now be isolated per request
+     *     const result = await processChat();
+     *     res.json(result);
+     *   });
+     * });
+     */
+    static runWithContext<T>(fn: () => T): T {
+        return runWithEntityContext(fn);
+    }
+
+    /**
+     * Set session_id context attributes for all spans.
+     * Uses OpenTelemetry baggage API for automatic context propagation.
+     *
+     * Context automatically propagates across async boundaries in concurrent environments
+     * thanks to AsyncLocalStorage in @opentelemetry/sdk-node.
      */
     static setSessionId(sessionId: string): void {
         if (typeof sessionId !== "string") {
@@ -294,7 +326,7 @@ export class Netra {
             return;
         }
         if (sessionId) {
-            // Store in baggage for span processors to pick up
+            // Store in OpenTelemetry baggage - automatically propagates across async boundaries
             setSessionBaggage("session_id", sessionId);
             SessionManager.setSessionContext("session_id", sessionId);
         } else {
@@ -305,7 +337,8 @@ export class Netra {
     }
 
     /**
-     * Set user_id context attributes for all spans
+     * Set user_id context attributes for all spans.
+     * Uses OpenTelemetry baggage API for automatic context propagation.
      */
     static setUserId(userId: string): void {
         if (typeof userId !== "string") {
@@ -315,7 +348,7 @@ export class Netra {
             return;
         }
         if (userId) {
-            // Store in baggage for span processors to pick up
+            // Store in OpenTelemetry baggage - automatically propagates across async boundaries
             setSessionBaggage("user_id", userId);
             SessionManager.setSessionContext("user_id", userId);
         } else {
@@ -326,7 +359,8 @@ export class Netra {
     }
 
     /**
-     * Set tenant_id context attributes for all spans
+     * Set tenant_id context attributes for all spans.
+     * Uses OpenTelemetry baggage API for automatic context propagation.
      */
     static setTenantId(tenantId: string): void {
         if (typeof tenantId !== "string") {
@@ -336,7 +370,7 @@ export class Netra {
             return;
         }
         if (tenantId) {
-            // Store in baggage for span processors to pick up
+            // Store in OpenTelemetry baggage - automatically propagates across async boundaries
             setSessionBaggage("tenant_id", tenantId);
             SessionManager.setSessionContext("tenant_id", tenantId);
         } else {
