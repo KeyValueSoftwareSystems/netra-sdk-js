@@ -1,5 +1,8 @@
-import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import { LLMResult } from "@langchain/core/outputs";
 import { RunnableConfig } from "@langchain/core/runnables";
+import { ChainValues } from "@langchain/core/utils/types";
+import { Serialized } from "@langchain/core/load/serializable";
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import {
   Context,
   Span,
@@ -8,15 +11,19 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { shouldSuppressInstrumentation } from "../utils";
-import { LLMResult } from "@langchain/core/outputs";
+
 import {
+  shouldSuppressInstrumentation,
   setResponseAttributes as setBaseResponseAttributes,
-  setNetraAttributes,
 } from "../utils";
-import { Serialized } from "@langchain/core/load/serializable";
-import { ChainValues } from "@langchain/core/utils/types";
-import { setLlmRequestAttributes } from "./utils";
+import {
+  setChainInputAttributes,
+  setChainOutputAttributes,
+  setInvokeInputAttributes,
+  setInvokeOutputAttributes,
+  setLlmRequestAttributes,
+  setToolAttributes,
+} from "./utils";
 
 type AnyFunc = (...args: any[]) => any;
 
@@ -105,7 +112,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     NetraLanggraphContextManager.runWithContext(() => {
       const span = this.tracer.startSpan(`${nodeName}.task`);
       NetraLanggraphContextManager.createSpanContext(span);
-      setNetraAttributes(span, "langgraph");
+      setChainInputAttributes(span, inputs, tags, metadata);
       this.addNode(runId, nodeName, span);
     });
   }
@@ -120,7 +127,9 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     const nodeInfo = this.currentNode;
     if (nodeInfo === null || nodeInfo?.id !== parentRunId) return;
     NetraLanggraphContextManager.runWithContext(() => {
-      nodeInfo.span.end();
+      const span: Span = nodeInfo.span;
+      setChainOutputAttributes(span, outputs, tags);
+      span.end();
     });
     this.removeNode();
     NetraLanggraphContextManager.removeContext();
@@ -137,6 +146,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     runName?: string,
   ) {
     this.addNodeAttributes({
+      llmIds: llm.id,
       metadata,
       prompts,
       extraParams,
@@ -153,9 +163,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 
     const response = (output?.generations?.[0]?.[0] as any)?.message;
     const attributes = nodeInfo.attributes;
+    const llmIds = attributes.llmIds ?? [];
+    const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
+
     NetraLanggraphContextManager.runWithContext(() => {
-      const span = this.tracer.startSpan(`llm.task`);
-      setNetraAttributes(span, "langgraph");
+      const span = this.tracer.startSpan(`${llmId}.task`);
       setLlmRequestAttributes(
         span,
         attributes.metadata,
@@ -163,6 +175,48 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
         attributes.extraParams,
       );
       setBaseResponseAttributes(span, response);
+      span.end();
+    });
+  }
+
+  async handleToolStart(
+    tool: Serialized,
+    input: string,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    metadata?: Record<string, unknown>,
+    runName?: string,
+  ) {
+    let parsedInput: Record<string | number, any>;
+    try {
+      parsedInput = JSON.parse(input);
+    } catch {
+      parsedInput = {};
+    }
+    this.addNodeAttributes({
+      input: parsedInput,
+      metadata,
+      tags,
+    });
+  }
+
+  async handleToolEnd(
+    output: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+  ) {
+    let nodeInfo = this.currentNode;
+    if (nodeInfo === null || nodeInfo?.id !== parentRunId) return;
+
+    const attributes = nodeInfo.attributes;
+    const toolName = attributes?.input?.name ?? "custom";
+    const { input, metadata } = attributes;
+
+    NetraLanggraphContextManager.runWithContext(() => {
+      const span = this.tracer.startSpan(`${toolName}.tool`);
+      setToolAttributes(span, toolName, input ?? {}, output, metadata, tags);
       span.end();
     });
   }
@@ -207,9 +261,19 @@ export class LanggraphWrapper {
       });
       NetraLanggraphContextManager.createSpanContext(span);
       try {
-        setNetraAttributes(span, "langgraph");
+        setInvokeInputAttributes(span, input);
+
         const updatedConfig = this.getUpdatedConfig(config);
-        return await originalFunc.call(instance, input, updatedConfig, ...rest);
+        const output = await originalFunc.call(
+          instance,
+          input,
+          updatedConfig,
+          ...rest,
+        );
+
+        setInvokeOutputAttributes(span, output);
+
+        return output;
       } finally {
         span.end();
         NetraLanggraphContextManager.removeContext();

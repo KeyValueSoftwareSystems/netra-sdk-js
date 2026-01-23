@@ -159,16 +159,6 @@ function extractFirstCompletionText(
 }
 
 /**
- * Set netra specific attributes on span
- */
-export function setNetraAttributes(span: Span, instrumentationName: string) {
-  span.setAttribute("netra.instrumentation.name", instrumentationName);
-  span.setAttribute("library.name", Config.LIBRARY_NAME);
-  span.setAttribute("library.version", Config.LIBRARY_VERSION);
-  span.setAttribute("sdk.name", Config.SDK_NAME);
-}
-
-/**
  * Set request attributes on span
  * These are shared across different LLM providers
  */
