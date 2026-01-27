@@ -69,13 +69,6 @@ export function initInstrumentations(
     customInstrumentModules.langgraph = true;
     customInstrumentModules.googleGenAI = true;
     customInstrumentModules.anthropic = true;
-    instrumentModules.google_vertexai = false;
-    instrumentModules.langchain = true;
-    instrumentModules.llamaIndex = true;
-    instrumentModules.pinecone = true;
-    instrumentModules.qdrant = true;
-    instrumentModules.chromadb = true;
-    instrumentModules.together = true;
   } else if (instruments.size) {
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {

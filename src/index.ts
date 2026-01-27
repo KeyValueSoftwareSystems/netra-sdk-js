@@ -105,12 +105,16 @@ export class Netra {
     }
 
     /**
-     * Initialize the Netra SDK
-     * Note: Custom instrumentations (OpenAI, Groq, MistralAI) are initialized
-     * asynchronously. Use initAsync() or await Netra.ready() to ensure
-     * instrumentations are complete before using instrumented modules.
+     * Initialize the Netra SDK and wait for all instrumentations to be ready.
+     * Ensures all async instrumentations (OpenAI, Groq, MistralAI) are
+     * complete before the application starts using the instrumented modules.
+     *
+     * @example
+     * await Netra.init({ appName: 'my-app', instruments: new Set([NetraInstruments.OPENAI]) });
+     * // Now OpenAI is fully instrumented
+     * const openai = new OpenAI();
      */
-    static init(config: NetraConfig = {}): void {
+    static async init(config: NetraConfig = {}): Promise<void> {
         if (this._initialized) {
             console.warn(
                 "Netra.init() called more than once; ignoring subsequent calls.",
@@ -169,34 +173,7 @@ export class Netra {
                 "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
             );
         }
-    }
 
-    /**
-     * Initialize the Netra SDK and wait for all instrumentations to be ready.
-     * This is the recommended way to initialize Netra when using ES modules,
-     * as it ensures all async instrumentations (OpenAI, Groq, MistralAI) are
-     * complete before the application starts using the instrumented modules.
-     *
-     * @example
-     * await Netra.initAsync({ appName: 'my-app', instruments: new Set([NetraInstruments.OPENAI]) });
-     * // Now OpenAI is fully instrumented
-     * const openai = new OpenAI();
-     */
-    static async initAsync(config: NetraConfig = {}): Promise<void> {
-        this.init(config);
-        await instrumentationsReady;
-    }
-
-    /**
-     * Returns a promise that resolves when all async instrumentations are ready.
-     * Can be called after init() to wait for instrumentations.
-     *
-     * @example
-     * Netra.init({ appName: 'my-app' });
-     * await Netra.ready();
-     * // Now all instrumentations are complete
-     */
-    static async ready(): Promise<void> {
         await instrumentationsReady;
     }
 
