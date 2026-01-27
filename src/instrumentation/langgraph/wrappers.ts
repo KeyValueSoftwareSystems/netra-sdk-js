@@ -95,6 +95,20 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     this.spans.delete(runId);
   }
 
+  async handleChainError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    kwargs?: { inputs?: Record<string, unknown> },
+  ) {
+    const span = this.spans.get(runId);
+    if (!span) return;
+    span.recordException(err);
+    span.end();
+    this.spans.delete(runId);
+  }
+
   async handleLLMStart(
     llm: Serialized,
     prompts: string[],
@@ -142,6 +156,29 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     this.nodeAttributes.delete(runId);
   }
 
+  async handleLLMError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    extraParams?: Record<string, unknown>,
+  ) {
+    const attributes = this.nodeAttributes.get(runId);
+    if (!attributes) return;
+
+    const llmIds = attributes.llmIds ?? [];
+    const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
+
+    const parentSpan = this.getParentSpan(parentRunId);
+    const ctx = trace.setSpan(context.active(), parentSpan);
+
+    const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
+    span.recordException(err);
+    span.end();
+
+    this.nodeAttributes.delete(runId);
+  }
+
   async handleToolStart(
     tool: Serialized,
     input: string,
@@ -182,6 +219,25 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 
     const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
     setToolAttributes(span, toolName, input ?? {}, output, metadata, tags);
+    span.end();
+
+    this.nodeAttributes.delete(runId);
+  }
+
+  async handleToolError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+  ) {
+    const attributes = this.nodeAttributes.get(runId);
+    if (!attributes) return;
+
+    const toolName = attributes?.input?.name ?? "custom";
+    const parentSpan = this.getParentSpan(parentRunId);
+    const ctx = trace.setSpan(context.active(), parentSpan);
+    const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
+    span.recordException(err);
     span.end();
 
     this.nodeAttributes.delete(runId);
