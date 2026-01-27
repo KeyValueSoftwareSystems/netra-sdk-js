@@ -10,6 +10,7 @@ import {
   modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
+import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type GoogleGenAIRequestType = "chat" | "embedding";
 
@@ -237,7 +238,6 @@ function googleGenAIStreamWrapper(
 
                           // Optional: store chunk-by-chunk attributes if you want
                           // span.setAttribute(`llm.stream.chunk.${chunkIndex}`, ...)
-                          
                           // Best-effort: accumulate chunk.text() if available
                           try {
                             const t =
