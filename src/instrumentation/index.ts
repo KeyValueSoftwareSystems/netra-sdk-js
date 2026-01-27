@@ -47,7 +47,7 @@ export function initInstrumentations(
   config: Config,
   instruments?: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
-): void {
+): TracerProviderWithProcessors | null {
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
@@ -151,7 +151,7 @@ export function initInstrumentations(
 
   // Add custom span processors to the TracerProvider
   // The Traceloop SDK creates a BasicTracerProvider internally
-  addCustomSpanProcessors(tracerProvider, config);
+  const effectiveProvider = addCustomSpanProcessors(tracerProvider, config);
 
   // Initialize custom instrumentations asynchronously
   // We use async initialization to ensure we get the same ES module instances
@@ -165,6 +165,8 @@ export function initInstrumentations(
 
   // Initialize additional OpenTelemetry instrumentations
   initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
+
+  return effectiveProvider;
 }
 
 /**
@@ -378,11 +380,13 @@ function initOpenTelemetryInstrumentations(
 /**
  * Add custom span processors to the TracerProvider
  * These processors add session context, instrumentation metadata, and scrubbing
+ * 
+ * Returns the effective TracerProvider that processors were added to.
  */
 function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   config: Config,
-): void {
+): TracerProviderWithProcessors | null {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
     // We need to find the actual provider with addSpanProcessor method
@@ -416,6 +420,9 @@ function addCustomSpanProcessors(
             addSpanProcessor: (processor: SpanProcessor) => {
               delegate._activeSpanProcessor._spanProcessors.push(processor);
             },
+            getTracer: (name: string, version?: string) => {
+                 return delegate.getTracer(name, version);
+            }
           } as TracerProviderWithProcessors;
         }
       }
@@ -442,7 +449,7 @@ function addCustomSpanProcessors(
             "Session context will still be propagated via baggage.",
         );
       }
-      return;
+      return null;
     }
 
     // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name
@@ -466,10 +473,14 @@ function addCustomSpanProcessors(
     if (config.debugMode) {
       console.debug("Custom span processors registered successfully");
     }
+
+    return provider;
+
   } catch (e) {
     if (config.debugMode) {
       console.debug("Failed to add custom span processors:", e);
     }
+    return null;
   }
 }
 

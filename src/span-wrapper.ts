@@ -3,15 +3,15 @@
  */
 
 import {
-  Span,
-  SpanKind,
-  SpanStatusCode,
-  context,
-  trace,
+    Span,
+    SpanKind,
+    SpanStatusCode,
+    context,
+    trace,
 } from "@opentelemetry/api";
 import { Config } from "./config";
 import { SessionManager } from "./session-manager";
-import { SpanType, UsageModel, ActionModel } from "./types";
+import { ActionModel, SpanType, UsageModel } from "./types";
 
 export class SpanWrapper {
   private name: string;
@@ -23,22 +23,26 @@ export class SpanWrapper {
   private errorMessage?: string;
   private span?: Span;
   private activeContext?: ReturnType<typeof context.active>;
+  private tracer?: any;
 
   constructor(
     name: string,
     attributes: Record<string, string> = {},
     moduleName: string = "netra_sdk",
-    asType: SpanType = SpanType.SPAN
+    asType: SpanType = SpanType.SPAN,
+    tracer?: any // Using any to avoid strict type issues with Tracer interface, but it expects a Tracer
   ) {
     this.name = name;
     this.attributes = { ...attributes };
     this.moduleName = moduleName;
     this.attributes["netra.span.type"] = asType;
+    this.tracer = tracer;
   }
 
   start(): this {
     this.startTime = Date.now();
-    const tracer = trace.getTracer(this.moduleName);
+    // Use provided tracer or fallback to global
+    const tracer = this.tracer || trace.getTracer(this.moduleName);
     this.activeContext = context.active();
     
     this.span = tracer.startSpan(this.name, {
