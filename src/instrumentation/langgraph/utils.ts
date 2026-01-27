@@ -2,7 +2,7 @@ import { Span } from "@opentelemetry/api";
 import { ChainValues } from "@langchain/core/utils/types";
 import { SpanAttributes } from "../span-attributes";
 
-const NetraLanggraphAttributes = {
+export const NetraLanggraphAttributes = {
   spanType: "netra.span.type",
   entityInput: "netra.entity.input",
   entityOutput: "netra.entity.output",
@@ -17,7 +17,7 @@ const metadataFilter = (key: string) => {
   return !key.startsWith("__");
 };
 
-export function setInvokeInputAttributes(
+export function setGraphInputAttributes(
   span: Span,
   inputs: Record<string, any>,
 ): void {
@@ -27,7 +27,7 @@ export function setInvokeInputAttributes(
   );
 }
 
-export function setInvokeOutputAttributes(
+export function setGraphOutputAttributes(
   span: Span,
   outputs: Record<string, any>,
 ): void {

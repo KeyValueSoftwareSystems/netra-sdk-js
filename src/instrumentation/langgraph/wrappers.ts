@@ -3,28 +3,24 @@ import { Serialized } from "@langchain/core/load/serializable";
 import { LLMResult } from "@langchain/core/outputs";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { ChainValues } from "@langchain/core/utils/types";
-import {
-  Span,
-  SpanKind,
-  Tracer,
-  context,
-  trace
-} from "@opentelemetry/api";
+import { Span, SpanKind, Tracer, context, trace } from "@opentelemetry/api";
 
 import {
   setResponseAttributes as setBaseResponseAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
 import {
+  NetraLanggraphAttributes,
   setChainInputAttributes,
   setChainOutputAttributes,
-  setInvokeInputAttributes,
-  setInvokeOutputAttributes,
+  setGraphInputAttributes,
+  setGraphOutputAttributes,
   setLlmRequestAttributes,
   setToolAttributes,
 } from "./utils";
 
 type AnyFunc = (...args: any[]) => any;
+type AsyncIterableFunc = (...args: any[]) => Promise<AsyncIterable<any>>;
 
 class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
   name = "netra-langgraph-callback-handler";
@@ -32,7 +28,10 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
   private spans: Map<string, Span> = new Map();
   private nodeAttributes: Map<string, Record<string, any>> = new Map();
 
-  constructor(private tracer: Tracer, private rootSpan: Span) {
+  constructor(
+    private tracer: Tracer,
+    private rootSpan: Span,
+  ) {
     super();
   }
 
@@ -71,13 +70,13 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     }
 
     const parentSpan = this.getParentSpan(parentRunId);
-    
+
     // Create span parented to the correct node/workflow
     const ctx = trace.setSpan(context.active(), parentSpan);
     const span = this.tracer.startSpan(`${nodeName}.task`, undefined, ctx);
-    
+
     setChainInputAttributes(span, inputs, tags, metadata);
-    
+
     this.spans.set(runId, span);
   }
 
@@ -96,6 +95,20 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     this.spans.delete(runId);
   }
 
+  async handleChainError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    kwargs?: { inputs?: Record<string, unknown> },
+  ) {
+    const span = this.spans.get(runId);
+    if (!span) return;
+    span.recordException(err);
+    span.end();
+    this.spans.delete(runId);
+  }
+
   async handleLLMStart(
     llm: Serialized,
     prompts: string[],
@@ -107,11 +120,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     runName?: string,
   ) {
     this.addNodeAttributes(runId, {
-        llmIds: llm.id,
-        metadata,
-        prompts,
-        extraParams,
-        parentRunId // Store parent ID to link back
+      llmIds: llm.id,
+      metadata,
+      prompts,
+      extraParams,
+      parentRunId, // Store parent ID to link back
     });
   }
 
@@ -126,10 +139,10 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     const response = (output?.generations?.[0]?.[0] as any)?.message;
     const llmIds = attributes.llmIds ?? [];
     const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
-    
+
     const parentSpan = this.getParentSpan(parentRunId);
     const ctx = trace.setSpan(context.active(), parentSpan);
-    
+
     const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
     setLlmRequestAttributes(
       span,
@@ -139,7 +152,30 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     );
     setBaseResponseAttributes(span, response);
     span.end();
-    
+
+    this.nodeAttributes.delete(runId);
+  }
+
+  async handleLLMError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+    extraParams?: Record<string, unknown>,
+  ) {
+    const attributes = this.nodeAttributes.get(runId);
+    if (!attributes) return;
+
+    const llmIds = attributes.llmIds ?? [];
+    const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
+
+    const parentSpan = this.getParentSpan(parentRunId);
+    const ctx = trace.setSpan(context.active(), parentSpan);
+
+    const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
+    span.recordException(err);
+    span.end();
+
     this.nodeAttributes.delete(runId);
   }
 
@@ -158,11 +194,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     } catch {
       parsedInput = {};
     }
-    
+
     this.addNodeAttributes(runId, {
       input: parsedInput,
       metadata,
-      tags
+      tags,
     });
   }
 
@@ -187,6 +223,69 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 
     this.nodeAttributes.delete(runId);
   }
+
+  async handleToolError(
+    err: any,
+    runId: string,
+    parentRunId?: string,
+    tags?: string[],
+  ) {
+    const attributes = this.nodeAttributes.get(runId);
+    if (!attributes) return;
+
+    const toolName = attributes?.input?.name ?? "custom";
+    const parentSpan = this.getParentSpan(parentRunId);
+    const ctx = trace.setSpan(context.active(), parentSpan);
+    const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
+    span.recordException(err);
+    span.end();
+
+    this.nodeAttributes.delete(runId);
+  }
+}
+
+class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
+  private iterable: any;
+  private output: Record<string, any> = {};
+
+  constructor(private rootSpan: Span) {}
+
+  async startStream(
+    originalFunc: (...args: any[]) => any,
+    instance: unknown,
+    input: any,
+    config?: RunnableConfig,
+    ...rest: any[]
+  ) {
+    this.iterable = await originalFunc.call(instance, input, config, ...rest);
+    return this;
+  }
+
+  async *[Symbol.asyncIterator]() {
+    const spanContext = trace.setSpan(context.active(), this.rootSpan);
+    try {
+      const iterator = await this.iterable[Symbol.asyncIterator]();
+      while (true) {
+        let result: any;
+        await context.with(spanContext, async () => {
+          result = await iterator.next();
+        });
+        if (result.done) break;
+        const value = result?.value ?? {};
+        this.output = { ...this.output, ...value };
+        yield result;
+      }
+      this.rootSpan.setAttribute(
+        NetraLanggraphAttributes.entityOutput,
+        JSON.stringify({ outputs: this.output }),
+      );
+    } catch (error) {
+      this.rootSpan.recordException(error as Error);
+      throw error;
+    } finally {
+      this.rootSpan.end();
+    }
+  }
 }
 
 export class LanggraphWrapper {
@@ -196,10 +295,16 @@ export class LanggraphWrapper {
     this.spanName = "Langgraph.workflow";
   }
 
-  private getUpdatedConfig(config?: RunnableConfig, rootSpan?: Span): RunnableConfig {
+  private getUpdatedConfig(
+    config?: RunnableConfig,
+    rootSpan?: Span,
+  ): RunnableConfig {
     if (!rootSpan) return config || {};
 
-    const callbackHandler = new NetraLanggraphCallbackHandler(this.tracer, rootSpan);
+    const callbackHandler = new NetraLanggraphCallbackHandler(
+      this.tracer,
+      rootSpan,
+    );
     const callbacks = config?.callbacks;
     const normalizedCallbacks = callbacks
       ? Array.isArray(callbacks)
@@ -229,30 +334,64 @@ export class LanggraphWrapper {
     const span = this.tracer.startSpan(this.spanName, {
       kind: SpanKind.CLIENT,
     });
-    
+
     return context.with(trace.setSpan(context.active(), span), async () => {
-        try {
-            setInvokeInputAttributes(span, input);
-            
-            // Pass the workflow span as the root for the callback handler
-            const updatedConfig = this.getUpdatedConfig(config, span);
-            
-            const output = await originalFunc.call(
-              instance,
-              input,
-              updatedConfig,
-              ...rest,
-            );
-    
-            setInvokeOutputAttributes(span, output);
-    
-            return output;
-        } catch (e) {
-            span.recordException(e as Error);
-            throw e;
-        } finally {
-            span.end();
-        }
+      try {
+        setGraphInputAttributes(span, input);
+
+        // Pass the workflow span as the root for the callback handler
+        const updatedConfig = this.getUpdatedConfig(config, span);
+
+        const output = await originalFunc.call(
+          instance,
+          input,
+          updatedConfig,
+          ...rest,
+        );
+
+        setGraphOutputAttributes(span, output);
+
+        return output;
+      } catch (e) {
+        span.recordException(e as Error);
+        throw e;
+      } finally {
+        span.end();
+      }
     });
+  }
+
+  async stream(
+    originalFunc: AsyncIterableFunc,
+    instance: unknown,
+    input: any,
+    config?: RunnableConfig,
+    ...rest: any[]
+  ): Promise<unknown> {
+    if (shouldSuppressInstrumentation()) {
+      return await originalFunc.call(instance, input, config, ...rest);
+    }
+    const span = this.tracer.startSpan(
+      this.spanName,
+      {
+        kind: SpanKind.CLIENT,
+      },
+      context.active(),
+    );
+    setGraphInputAttributes(span, input);
+    const updatedConfig = this.getUpdatedConfig(config, span);
+    try {
+      const streamingWrapper = new LanggraphStreamingWrapper(span);
+      return streamingWrapper.startStream(
+        originalFunc,
+        instance,
+        input,
+        updatedConfig,
+        ...rest,
+      );
+    } catch (error) {
+      span.recordException(error as Error);
+      span.end();
+    }
   }
 }
