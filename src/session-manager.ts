@@ -307,7 +307,7 @@ export class SessionManager {
     attrValue: any
   ): void {
     try {
-      const span = trace.getActiveSpan();
+      const span = this.getCurrentSpan();
       if (span && span.isRecording()) {
         const value =
           typeof attrValue === "string"
