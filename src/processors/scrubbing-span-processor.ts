@@ -1,6 +1,6 @@
 /**
  * Scrubbing Span Processor
- * 
+ *
  * OpenTelemetry span processor that scrubs sensitive data from span attributes.
  * This includes API keys, emails, phone numbers, SSNs, credit cards, passwords,
  * bearer tokens, and other sensitive information.
@@ -15,7 +15,7 @@ const SENSITIVE_PATTERNS: Record<string, RegExp> = {
   api_key: new RegExp(
     "(?:Token:\\s*\\S{32,})" + // Token: <32+ chars>
       "|(?:sk-[A-Za-z0-9]{16,})", // sk-... tokens
-    "g"
+    "g",
   ),
   // Email addresses
   email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/gi,
@@ -57,6 +57,7 @@ const SENSITIVE_KEYS = new Set([
   "x-auth-token",
   "cookie",
   "set-cookie",
+  "span",
 ]);
 
 const SCRUB_REPLACEMENT = "[SCRUBBED]";
@@ -101,7 +102,7 @@ export class ScrubbingSpanProcessor implements SpanProcessor {
    * Recursively scrub sensitive data from a dictionary value.
    */
   private scrubDictValue(
-    value: Record<string, unknown>
+    value: Record<string, unknown>,
   ): Record<string, unknown> {
     const scrubbed: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
@@ -183,7 +184,7 @@ export class ScrubbingSpanProcessor implements SpanProcessor {
         } else if (spanAny.attributes) {
           // Some implementations use different property names
           Object.keys(spanAny.attributes).forEach(
-            (k) => delete spanAny.attributes[k]
+            (k) => delete spanAny.attributes[k],
           );
           Object.assign(spanAny.attributes, scrubbedAttributes);
         }
