@@ -79,8 +79,10 @@ export class Netra {
     private static _initialized = false;
     private static _config: Config | undefined;
 
+    private static _tracer: any;
+
     /**
-     * Usage API client for session/tenant usage and traces
+     * Usage API client for usage and traces
      * Available after calling Netra.init()
      */
     static usage: Usage;
@@ -122,8 +124,17 @@ export class Netra {
         const cfg = new Config(config);
         this._config = cfg;
 
-        // Initialize instrumentations
-        initInstrumentations(cfg, config.instruments, config.blockInstruments);
+        // Initialize instrumentations and get effective provider
+        const effectiveProvider = initInstrumentations(cfg, config.instruments, config.blockInstruments);
+        
+        // If we found an effective provider (delegate), get a tracer from IT.
+        // This ensures the tracer has the processors we added.
+        if (effectiveProvider && typeof (effectiveProvider as any).getTracer === 'function') {
+            this._tracer = (effectiveProvider as any).getTracer(Config.LIBRARY_NAME, Config.LIBRARY_VERSION);
+        } else {
+             // Fallback
+             this._tracer = trace.getTracer(Config.LIBRARY_NAME, Config.LIBRARY_VERSION);
+        }
 
         // Initialize API clients
         this.usage = new Usage(cfg);
@@ -133,14 +144,42 @@ export class Netra {
         this._initialized = true;
         console.info("Netra successfully initialized.");
 
-        // Ensure cleanup at process exit (even if root span is disabled)
-        process.on("exit", () => {
-            this.shutdown();
+        // Graceful shutdown logic
+        const handleSignal = async (signal: string) => {
+            console.log(`\nRecepived ${signal}. Shutting down Netra SDK...`);
+            await this.shutdown();
+            process.exit(0);
+        };
+
+        const handleUncaughtException = async (error: Error) => {
+            console.error("Uncaught exception:", error);
+            console.error("Shutting down Netra SDK due to crash...");
+            try {
+                await this.shutdown();
+            } catch (err) {
+                console.error("Error during crash shutdown:", err);
+            }
+            process.exit(1);
+        };
+
+        // Handle process running out of work
+        process.once("beforeExit", async () => {
+            // beforeExit can be called multiple times if the loop fills up again
+            // but for our purpose, we just want to ensure flush happens if the script finishes
+            await this.shutdown();
         });
+
+        // Handle termination signals
+        process.once("SIGINT", () => handleSignal("SIGINT"));
+        process.once("SIGTERM", () => handleSignal("SIGTERM"));
+
+        // Handle crashes
+        process.once("uncaughtException", handleUncaughtException);
 
         // Create root span if enabled
         if (cfg.enableRootSpan) {
-            const tracer = trace.getTracer("netra.root.span");
+            // Use the effective tracer if available
+            const tracer = this._tracer || trace.getTracer("netra.root.span");
             const rootName = `${Config.LIBRARY_NAME}.root.span`;
 
             // Create the root span
@@ -148,26 +187,28 @@ export class Netra {
                 kind: SpanKind.INTERNAL,
             });
 
-            if (cfg.appName) {
-                _rootSpan.setAttribute("service.name", cfg.appName);
-            }
-            _rootSpan.setAttribute("netra.environment", cfg.environment);
-            _rootSpan.setAttribute(
-                "netra.library.version",
-                Config.LIBRARY_VERSION,
-            );
+            if (_rootSpan) {
+                if (cfg.appName) {
+                    _rootSpan.setAttribute("service.name", cfg.appName);
+                }
+                _rootSpan.setAttribute("netra.environment", cfg.environment);
+                _rootSpan.setAttribute(
+                    "netra.library.version",
+                    Config.LIBRARY_VERSION,
+                );
 
-            try {
-                SessionManager.setCurrentSpan(_rootSpan);
-                // Also store the root span in SessionManager for access by SpanWrapper/decorators
-                SessionManager.setRootSpan(_rootSpan);
-            } catch (e) {
-                // Ignore
-            }
+                try {
+                    SessionManager.setCurrentSpan(_rootSpan);
+                    // Also store the root span in SessionManager for access by SpanWrapper/decorators
+                    SessionManager.setRootSpan(_rootSpan);
+                } catch (e) {
+                    // Ignore
+                }
 
-            console.info(
-                "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
-            );
+                console.info(
+                    "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
+                );
+            }
         }
     }
 
@@ -201,14 +242,22 @@ export class Netra {
     }
 
     /**
-     * Optional cleanup to end the root span and uninstrument all
+     * Optional cleanup to end the root span and uninstrument all.
+     * Now async to ensure spans are flushed.
      */
-    static shutdown(): void {
+    static async shutdown(): Promise<void> {
+        if (!this._initialized) {
+            return;
+        }
+
         // Unpatch any monkey-patched instrumentations first
         try {
             uninstrumentAll();
         } catch (e) {
             // Ignore
+            if (this._config?.debugMode) {
+                console.error("Error during uninstrumentAll:", e);
+            }
         }
 
         if (_rootSpan) {
@@ -222,23 +271,39 @@ export class Netra {
 
         try {
             const provider = trace.getTracerProvider();
-            if (
-                "forceFlush" in provider &&
-                typeof provider.forceFlush === "function"
-            ) {
-                provider.forceFlush();
-            }
-            if (
-                "shutdown" in provider &&
-                typeof provider.shutdown === "function"
-            ) {
-                provider.shutdown();
-            }
+            
+            // Define timeouts
+            const FLUSH_TIMEOUT_MS = 5000;
+            
+            const flushPromise = (async () => {
+                if (
+                    "forceFlush" in provider &&
+                    typeof provider.forceFlush === "function"
+                ) {
+                    await provider.forceFlush();
+                }
+                if (
+                    "shutdown" in provider &&
+                    typeof provider.shutdown === "function"
+                ) {
+                    await provider.shutdown();
+                }
+            })();
+
+            // Race against timeout
+            await Promise.race([
+                flushPromise,
+                new Promise((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS))
+            ]);
+
         } catch (e) {
-            // Ignore
+            if (this._config?.debugMode) {
+                console.error("Error during Netra shutdown flush:", e);
+            }
         }
 
         this._initialized = false;
+        this._tracer = undefined;
     }
 
     /**
@@ -422,7 +487,8 @@ export class Netra {
         moduleName: string = "netra_sdk",
         asType: SpanType = SpanType.SPAN,
     ): SpanWrapper {
-        return new SpanWrapper(name, attributes, moduleName, asType);
+        // Pass the effective tracer derived from the provider we control
+        return new SpanWrapper(name, attributes, moduleName, asType, this._tracer);
     }
 }
 
