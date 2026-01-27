@@ -3,11 +3,11 @@
  */
 
 import {
-    Span,
-    SpanKind,
-    SpanStatusCode,
-    context,
-    trace,
+  Span,
+  SpanKind,
+  SpanStatusCode,
+  context,
+  trace,
 } from "@opentelemetry/api";
 import { Config } from "./config";
 import { SessionManager } from "./session-manager";
@@ -30,7 +30,7 @@ export class SpanWrapper {
     attributes: Record<string, string> = {},
     moduleName: string = "netra_sdk",
     asType: SpanType = SpanType.SPAN,
-    tracer?: any // Using any to avoid strict type issues with Tracer interface, but it expects a Tracer
+    tracer?: any, // Using any to avoid strict type issues with Tracer interface, but it expects a Tracer
   ) {
     this.name = name;
     this.attributes = { ...attributes };
@@ -41,14 +41,22 @@ export class SpanWrapper {
 
   start(): this {
     this.startTime = Date.now();
-    // Use provided tracer or fallback to global
+
     const tracer = this.tracer || trace.getTracer(this.moduleName);
-    this.activeContext = context.active();
-    
-    this.span = tracer.startSpan(this.name, {
-      kind: SpanKind.CLIENT,
-      attributes: this.attributes,
-    }, this.activeContext);
+
+    const ctx = context.active();
+
+    this.span = tracer.startSpan(
+      this.name,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          ...this.attributes,
+          "netra.span.name": this.name,
+        },
+      },
+      ctx,
+    );
 
     if (this.span) {
       SessionManager.registerSpan(this.name, this.span);
@@ -68,7 +76,7 @@ export class SpanWrapper {
     if (durationMs !== undefined) {
       this.setAttribute(
         `${Config.LIBRARY_NAME}.duration_ms`,
-        durationMs.toFixed(2)
+        durationMs.toFixed(2),
       );
     }
 
@@ -102,6 +110,27 @@ export class SpanWrapper {
     return this;
   }
 
+  /**
+   * Run a function with this span set as the active span in the OTel context.
+   * Useful for nesting spans.
+   */
+  withActive<T>(fn: () => T): T {
+    if (!this.span) return fn();
+
+    const ctx = trace.setSpan(context.active(), this.span);
+    return context.with(ctx, fn);
+  }
+
+  /**
+   * Async version of withActive(). Keeps the context active across async work.
+   */
+  async withActiveAsync<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.span) return fn();
+
+    const ctx = trace.setSpan(context.active(), this.span);
+    return context.with(ctx, fn);
+  }
+
   setPrompt(prompt: string): this {
     return this.setAttribute(`${Config.LIBRARY_NAME}.prompt`, prompt);
   }
@@ -109,7 +138,7 @@ export class SpanWrapper {
   setNegativePrompt(negativePrompt: string): this {
     return this.setAttribute(
       `${Config.LIBRARY_NAME}.negative_prompt`,
-      negativePrompt
+      negativePrompt,
     );
   }
 
@@ -142,7 +171,7 @@ export class SpanWrapper {
     }
     return this.setAttribute(
       `${Config.LIBRARY_NAME}.error_message`,
-      errorMessage
+      errorMessage,
     );
   }
 
@@ -165,4 +194,3 @@ export class SpanWrapper {
     return this.span;
   }
 }
-

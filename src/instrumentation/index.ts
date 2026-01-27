@@ -20,7 +20,9 @@ import { langgraphInstrumentor } from "./langgraph";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
-
+import { FilteringSpanExporter, TrialAwareOTLPExporter } from "../exporters";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { LocalFilteringSpanProcessor } from "../processors/localfiltering-span-processor";
 // Interface for TracerProvider with addSpanProcessor method
 interface TracerProviderWithProcessors {
   addSpanProcessor(processor: SpanProcessor): void;
@@ -31,7 +33,7 @@ export {
   modelAsDict,
   setRequestAttributes,
   setResponseAttributes,
-  shouldSuppressInstrumentation
+  shouldSuppressInstrumentation,
 } from "./utils";
 
 const require = createRequire(import.meta.url);
@@ -160,7 +162,7 @@ export function initInstrumentations(
     config,
     tracerProvider,
     customInstrumentModules,
-    blockInstruments
+    blockInstruments,
   );
 
   // Initialize additional OpenTelemetry instrumentations
@@ -178,7 +180,7 @@ async function initCustomInstrumentationsAsync(
   config: Config,
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   customInstrumentModules: Record<string, boolean>,
-  blockInstruments?: Set<NetraInstruments>
+  blockInstruments?: Set<NetraInstruments>,
 ): Promise<void> {
   // Initialize custom MistralAI instrumentation
   if (
@@ -254,7 +256,6 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
-  
   // Initialize custom Langgraph instrumentation
   if (
     customInstrumentModules.langgraph &&
@@ -276,7 +277,7 @@ async function initCustomInstrumentationsAsync(
   }
 
   if (
-    customInstrumentModules.anthropic && 
+    customInstrumentModules.anthropic &&
     !blockInstruments?.has(NetraInstruments.ANTHROPIC)
   ) {
     try {
@@ -286,7 +287,10 @@ async function initCustomInstrumentationsAsync(
       }
     } catch (e) {
       if (config.debugMode) {
-        console.debug("Failed to initialize custom Anthropic instrumentation:", e);
+        console.debug(
+          "Failed to initialize custom Anthropic instrumentation:",
+          e,
+        );
       }
     }
   }
@@ -380,7 +384,7 @@ function initOpenTelemetryInstrumentations(
 /**
  * Add custom span processors to the TracerProvider
  * These processors add session context, instrumentation metadata, and scrubbing
- * 
+ *
  * Returns the effective TracerProvider that processors were added to.
  */
 function addCustomSpanProcessors(
@@ -421,8 +425,8 @@ function addCustomSpanProcessors(
               delegate._activeSpanProcessor._spanProcessors.push(processor);
             },
             getTracer: (name: string, version?: string) => {
-                 return delegate.getTracer(name, version);
-            }
+              return delegate.getTracer(name, version);
+            },
           } as TracerProviderWithProcessors;
         }
       }
@@ -452,6 +456,10 @@ function addCustomSpanProcessors(
       return null;
     }
 
+    // 0. Local Filtering Span Processor - filters spans based on local context
+    const localFilteringSpanProcessor = new LocalFilteringSpanProcessor();
+    provider.addSpanProcessor(localFilteringSpanProcessor);
+
     // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name
     const instrumentationProcessor = new InstrumentationSpanProcessor();
     provider.addSpanProcessor(instrumentationProcessor);
@@ -475,7 +483,6 @@ function addCustomSpanProcessors(
     }
 
     return provider;
-
   } catch (e) {
     if (config.debugMode) {
       console.debug("Failed to add custom span processors:", e);
@@ -519,15 +526,15 @@ export function uninstrumentAll(): void {
     console.debug("Failed to uninstrument Groq:", e);
   }
 
-   // Uninstrument custom Anthropic instrumentation
+  // Uninstrument custom Anthropic instrumentation
   try {
     if (anthropicInstrumentor.isInstrumented()) {
-        anthropicInstrumentor.uninstrument();
+      anthropicInstrumentor.uninstrument();
       console.debug("Custom Anthropic instrumentation disabled");
     }
   } catch (e) {
     console.debug("Failed to uninstrument Anthropic:", e);
-  } 
+  }
 
   // Uninstrument custom Google GenAI instrumentation
   try {
