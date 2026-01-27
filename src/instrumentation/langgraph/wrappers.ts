@@ -10,6 +10,7 @@ import {
   shouldSuppressInstrumentation,
 } from "../utils";
 import {
+  NetraLanggraphAttributes,
   setChainInputAttributes,
   setChainOutputAttributes,
   setGraphInputAttributes,
@@ -189,11 +190,9 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 
 class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
   private iterable: any;
+  private output: Record<string, any> = {};
 
-  constructor(
-    private tracer: Tracer,
-    private rootSpan: Span,
-  ) {}
+  constructor(private rootSpan: Span) {}
 
   async startStream(
     originalFunc: (...args: any[]) => any,
@@ -216,8 +215,14 @@ class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
           result = await iterator.next();
         });
         if (result.done) break;
+        const value = result?.value ?? {};
+        this.output = { ...this.output, ...value };
         yield result;
       }
+      this.rootSpan.setAttribute(
+        NetraLanggraphAttributes.entityOutput,
+        JSON.stringify({ outputs: this.output }),
+      );
     } catch (error) {
       this.rootSpan.recordException(error as Error);
       throw error;
@@ -319,13 +324,18 @@ export class LanggraphWrapper {
     );
     setGraphInputAttributes(span, input);
     const updatedConfig = this.getUpdatedConfig(config, span);
-    const streamingWrapper = new LanggraphStreamingWrapper(this.tracer, span);
-    return streamingWrapper.startStream(
-      originalFunc,
-      instance,
-      input,
-      updatedConfig,
-      ...rest,
-    );
+    try {
+      const streamingWrapper = new LanggraphStreamingWrapper(span);
+      return streamingWrapper.startStream(
+        originalFunc,
+        instance,
+        input,
+        updatedConfig,
+        ...rest,
+      );
+    } catch (error) {
+      span.recordException(error as Error);
+      span.end();
+    }
   }
 }
