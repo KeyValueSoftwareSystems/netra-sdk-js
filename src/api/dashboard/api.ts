@@ -76,13 +76,13 @@ export class Dashboard {
 
     return result;
   }
-
-  async getSessionStats(
+  
+async getSessionStats(
     startTime: string,
     endTime: string,
-    filters?: SessionFilter[],
     limit: number = 10,
-    page?: number,
+    filters?: SessionFilter[],
+    cursor?: string,
     sortField?: SortField,
     sortOrder?: SortOrder,
   ): Promise<SessionStatsResult | null> {
@@ -98,7 +98,7 @@ export class Dashboard {
       endTime,
       filters,
       limit,
-      page,
+      cursor,
       sortField,
       sortOrder,
     );
@@ -109,15 +109,20 @@ export class Dashboard {
 
     const data = result.data ?? {};
     const sessionStats = data.sessions ?? [];
-    const cursor = data.cursor ?? {};
+    const pageInfo = data.pageInfo ?? {};
 
-    const hasNextPage = Boolean(cursor.hasMore);
-    const nextPage = hasNextPage ? cursor.pageNo + 1 : undefined;
+    const hasNextPage = Boolean(pageInfo.hasNextPage);
+    
+    let nextCursor: string | undefined = undefined;
+    if (sessionStats.length > 0) {
+      const lastItem = sessionStats[sessionStats.length - 1];
+      nextCursor = lastItem.cursor;
+    }
 
     return {
       data: sessionStats,
       hasNextPage,
-      nextPage,
+      nextCursor,
     };
   }
 
@@ -135,15 +140,15 @@ export class Dashboard {
       return;
     }
 
-    let currentPage: number | undefined = undefined;
+    let cursor: string | undefined = undefined;
 
     while (true) {
       const result = await this.getSessionStats(
         startTime,
         endTime,
-        filters,
         undefined,
-        currentPage,
+        filters,
+        cursor,
         sortField,
         sortOrder,
       );
@@ -160,7 +165,7 @@ export class Dashboard {
         break;
       }
 
-      currentPage = result.nextPage;
+      cursor = result.nextCursor;
     }
   }
 

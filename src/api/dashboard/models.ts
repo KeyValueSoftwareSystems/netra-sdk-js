@@ -209,7 +209,7 @@ export interface SessionFilter {
 export interface SessionStatsResult {
   data: SessionStatsData[];
   hasNextPage: boolean;
-  nextPage?: number;
+  nextCursor?: string;
 }
 
 export interface SessionFilterConfig {

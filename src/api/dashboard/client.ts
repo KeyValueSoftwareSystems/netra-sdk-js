@@ -108,12 +108,12 @@ export class DashboardHttpClient extends NetraHttpClient {
    * Returns:
    *   The session stats response data or null on error.
    */
-  async getSessionStats(
+async getSessionStats(
     startTime: string,
     endTime: string,
     filters?: SessionFilter[],
     limit?: number,
-    page?: number,
+    cursor?: string,
     sortField?: SortField,
     sortOrder?: SortOrder,
   ): Promise<any | null> {
@@ -141,15 +141,15 @@ export class DashboardHttpClient extends NetraHttpClient {
         }));
       }
 
-      if (limit !== undefined || page !== undefined) {
+      if (limit !== undefined || cursor !== undefined) {
         payload.pagination = {};
 
         if (limit !== undefined) {
           payload.pagination.limit = limit;
         }
 
-        if (page !== undefined) {
-          payload.pagination.cursor = { pageNo: page };
+        if (cursor !== undefined) { 
+          payload.pagination.cursor = cursor;
         }
       }
 
