@@ -26,7 +26,7 @@ export enum NetraInstruments {
   VERTEX_AI = "vertexai",
   TOGETHER = "together",
   ANTHROPIC = "anthropic",
-  
+
   // AI Frameworks
   LANGCHAIN = "langchain",
   LANGGRAPH = "langgraph",
@@ -63,6 +63,7 @@ export class Config {
   static readonly SDK_NAME = "netra";
   static readonly LIBRARY_NAME = "netra";
   static readonly LIBRARY_VERSION = "1.0.0";
+  static readonly TRIAL_BLOCK_DURATION_SECONDS = 300;
   static readonly ATTRIBUTE_MAX_LEN = parseInt(
     process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000",
   );
@@ -236,6 +237,27 @@ export class Config {
 
   private _setTraceContentEnv(): void {
     process.env.TRACELOOP_TRACE_CONTENT = this.traceContent ? "true" : "false";
+  }
+
+  /**
+   * Format the OTLP endpoint URL by appending /v1/traces if not already present
+   */
+  public formatOtlpEndpoint(): string | undefined {
+    if (!this.otlpEndpoint) {
+      return undefined;
+    }
+
+    const url = this.otlpEndpoint.trim();
+
+    // Remove trailing slash if present
+    const cleanUrl = url.endsWith("/") ? url.slice(0, -1) : url;
+
+    // Append /v1/traces if not already present
+    if (!cleanUrl.endsWith("/v1/traces")) {
+      return `${cleanUrl}/v1/traces`;
+    }
+
+    return cleanUrl;
   }
 
   /**

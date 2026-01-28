@@ -11,7 +11,7 @@ import {
 } from "@opentelemetry/api";
 import { Config } from "./config";
 import { SessionManager } from "./session-manager";
-import { SpanType, UsageModel, ActionModel } from "./types";
+import { ActionModel, SpanType, UsageModel } from "./types";
 
 export class SpanWrapper {
   private name: string;
@@ -23,28 +23,40 @@ export class SpanWrapper {
   private errorMessage?: string;
   private span?: Span;
   private activeContext?: ReturnType<typeof context.active>;
+  private tracer?: any;
 
   constructor(
     name: string,
     attributes: Record<string, string> = {},
     moduleName: string = "netra_sdk",
-    asType: SpanType = SpanType.SPAN
+    asType: SpanType = SpanType.SPAN,
+    tracer?: any, // Using any to avoid strict type issues with Tracer interface, but it expects a Tracer
   ) {
     this.name = name;
     this.attributes = { ...attributes };
     this.moduleName = moduleName;
     this.attributes["netra.span.type"] = asType;
+    this.tracer = tracer;
   }
 
   start(): this {
     this.startTime = Date.now();
-    const tracer = trace.getTracer(this.moduleName);
-    this.activeContext = context.active();
-    
-    this.span = tracer.startSpan(this.name, {
-      kind: SpanKind.CLIENT,
-      attributes: this.attributes,
-    }, this.activeContext);
+
+    const tracer = this.tracer || trace.getTracer(this.moduleName);
+
+    const ctx = context.active();
+
+    this.span = tracer.startSpan(
+      this.name,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: {
+          ...this.attributes,
+          "netra.span.name": this.name,
+        },
+      },
+      ctx,
+    );
 
     if (this.span) {
       SessionManager.registerSpan(this.name, this.span);
@@ -64,7 +76,7 @@ export class SpanWrapper {
     if (durationMs !== undefined) {
       this.setAttribute(
         `${Config.LIBRARY_NAME}.duration_ms`,
-        durationMs.toFixed(2)
+        durationMs.toFixed(2),
       );
     }
 
@@ -98,6 +110,27 @@ export class SpanWrapper {
     return this;
   }
 
+  /**
+   * Run a function with this span set as the active span in the OTel context.
+   * Useful for nesting spans.
+   */
+  withActive<T>(fn: () => T): T {
+    if (!this.span) return fn();
+
+    const ctx = trace.setSpan(context.active(), this.span);
+    return context.with(ctx, fn);
+  }
+
+  /**
+   * Async version of withActive(). Keeps the context active across async work.
+   */
+  async withActiveAsync<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.span) return fn();
+
+    const ctx = trace.setSpan(context.active(), this.span);
+    return context.with(ctx, fn);
+  }
+
   setPrompt(prompt: string): this {
     return this.setAttribute(`${Config.LIBRARY_NAME}.prompt`, prompt);
   }
@@ -105,7 +138,7 @@ export class SpanWrapper {
   setNegativePrompt(negativePrompt: string): this {
     return this.setAttribute(
       `${Config.LIBRARY_NAME}.negative_prompt`,
-      negativePrompt
+      negativePrompt,
     );
   }
 
@@ -138,7 +171,7 @@ export class SpanWrapper {
     }
     return this.setAttribute(
       `${Config.LIBRARY_NAME}.error_message`,
-      errorMessage
+      errorMessage,
     );
   }
 
@@ -161,4 +194,3 @@ export class SpanWrapper {
     return this.span;
   }
 }
-

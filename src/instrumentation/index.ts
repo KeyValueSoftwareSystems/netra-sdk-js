@@ -3,7 +3,11 @@
  */
 
 import { trace } from "@opentelemetry/api";
-import { SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import {
+  ConsoleSpanExporter,
+  SpanExporter,
+  SpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { createRequire } from "module";
 import { Config, NetraInstruments } from "../config";
@@ -20,6 +24,15 @@ import { langgraphInstrumentor } from "./langgraph";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { typeORMInstrumentor } from "./typeorm";
+import { FilteringSpanExporter, TrialAwareOTLPExporter } from "../exporters";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { LocalFilteringSpanProcessor } from "../processors/localfiltering-span-processor";
+import { propagation } from "@opentelemetry/api";
+import {
+  CompositePropagator,
+  W3CBaggagePropagator as BaggagePropagator,
+  W3CTraceContextPropagator,
+} from "@opentelemetry/core";
 
 // Interface for TracerProvider with addSpanProcessor method
 interface TracerProviderWithProcessors {
@@ -31,7 +44,7 @@ export {
   modelAsDict,
   setRequestAttributes,
   setResponseAttributes,
-  shouldSuppressInstrumentation
+  shouldSuppressInstrumentation,
 } from "./utils";
 
 const require = createRequire(import.meta.url);
@@ -43,11 +56,17 @@ const require = createRequire(import.meta.url);
  */
 export let instrumentationsReady: Promise<void> = Promise.resolve();
 
+propagation.setGlobalPropagator(
+  new CompositePropagator({
+    propagators: [new W3CTraceContextPropagator(), new BaggagePropagator()],
+  }),
+);
+
 export function initInstrumentations(
   config: Config,
   instruments?: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
-): void {
+): TracerProviderWithProcessors | null {
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
@@ -144,14 +163,44 @@ export function initInstrumentations(
     instrumentModules,
     silenceInitializationMessage: !config.debugMode,
   };
+  // ---- updated exporter setup (Python-equivalent) ----
+
+  // 1) Pick base exporter (Console fallback OR TrialAware(OTLP))
+  let exporter: SpanExporter;
+
+  if (!traceloopOptions.baseUrl || traceloopOptions.baseUrl == undefined) {
+    exporter = new ConsoleSpanExporter();
+  } else {
+    const formattedEndpoint = config.formatOtlpEndpoint();
+
+    const otlpExporter = new OTLPTraceExporter({
+      url: formattedEndpoint,
+      headers: config.headers,
+    });
+
+    exporter = new TrialAwareOTLPExporter(otlpExporter);
+  }
+
+  // 2) Always attempt filtering (even for Console fallback)
+  const originalExporter = exporter;
+
+  try {
+    const patterns = config.blockedSpans ?? [];
+    exporter = new FilteringSpanExporter(exporter, patterns);
+  } catch {
+    exporter = originalExporter;
+  }
+
+  traceloopOptions.exporter = exporter;
 
   initialize(traceloopOptions);
 
+  // ---- rest stays same ----
   const tracerProvider = trace.getTracerProvider();
 
   // Add custom span processors to the TracerProvider
   // The Traceloop SDK creates a BasicTracerProvider internally
-  addCustomSpanProcessors(tracerProvider, config);
+  const effectiveProvider = addCustomSpanProcessors(tracerProvider, config);
 
   // Initialize custom instrumentations asynchronously
   // We use async initialization to ensure we get the same ES module instances
@@ -160,11 +209,13 @@ export function initInstrumentations(
     config,
     tracerProvider,
     customInstrumentModules,
-    blockInstruments
+    blockInstruments,
   );
 
   // Initialize additional OpenTelemetry instrumentations
   initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
+
+  return effectiveProvider;
 }
 
 /**
@@ -176,7 +227,7 @@ async function initCustomInstrumentationsAsync(
   config: Config,
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   customInstrumentModules: Record<string, boolean>,
-  blockInstruments?: Set<NetraInstruments>
+  blockInstruments?: Set<NetraInstruments>,
 ): Promise<void> {
   // Initialize custom MistralAI instrumentation
   if (
@@ -252,7 +303,6 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
-  
   // Initialize custom Langgraph instrumentation
   if (
     customInstrumentModules.langgraph &&
@@ -274,7 +324,7 @@ async function initCustomInstrumentationsAsync(
   }
 
   if (
-    customInstrumentModules.anthropic && 
+    customInstrumentModules.anthropic &&
     !blockInstruments?.has(NetraInstruments.ANTHROPIC)
   ) {
     try {
@@ -284,7 +334,10 @@ async function initCustomInstrumentationsAsync(
       }
     } catch (e) {
       if (config.debugMode) {
-        console.debug("Failed to initialize custom Anthropic instrumentation:", e);
+        console.debug(
+          "Failed to initialize custom Anthropic instrumentation:",
+          e,
+        );
       }
     }
   }
@@ -378,11 +431,13 @@ function initOpenTelemetryInstrumentations(
 /**
  * Add custom span processors to the TracerProvider
  * These processors add session context, instrumentation metadata, and scrubbing
+ *
+ * Returns the effective TracerProvider that processors were added to.
  */
 function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   config: Config,
-): void {
+): TracerProviderWithProcessors | null {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
     // We need to find the actual provider with addSpanProcessor method
@@ -416,6 +471,9 @@ function addCustomSpanProcessors(
             addSpanProcessor: (processor: SpanProcessor) => {
               delegate._activeSpanProcessor._spanProcessors.push(processor);
             },
+            getTracer: (name: string, version?: string) => {
+              return delegate.getTracer(name, version);
+            },
           } as TracerProviderWithProcessors;
         }
       }
@@ -442,8 +500,12 @@ function addCustomSpanProcessors(
             "Session context will still be propagated via baggage.",
         );
       }
-      return;
+      return null;
     }
+
+    // 0. Local Filtering Span Processor - filters spans based on local context
+    const localFilteringSpanProcessor = new LocalFilteringSpanProcessor();
+    provider.addSpanProcessor(localFilteringSpanProcessor);
 
     // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name
     const instrumentationProcessor = new InstrumentationSpanProcessor();
@@ -466,10 +528,13 @@ function addCustomSpanProcessors(
     if (config.debugMode) {
       console.debug("Custom span processors registered successfully");
     }
+
+    return provider;
   } catch (e) {
     if (config.debugMode) {
       console.debug("Failed to add custom span processors:", e);
     }
+    return null;
   }
 }
 
@@ -508,15 +573,15 @@ export function uninstrumentAll(): void {
     console.debug("Failed to uninstrument Groq:", e);
   }
 
-   // Uninstrument custom Anthropic instrumentation
+  // Uninstrument custom Anthropic instrumentation
   try {
     if (anthropicInstrumentor.isInstrumented()) {
-        anthropicInstrumentor.uninstrument();
+      anthropicInstrumentor.uninstrument();
       console.debug("Custom Anthropic instrumentation disabled");
     }
   } catch (e) {
     console.debug("Failed to uninstrument Anthropic:", e);
-  } 
+  }
 
   // Uninstrument custom Google GenAI instrumentation
   try {
