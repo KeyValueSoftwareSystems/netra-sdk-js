@@ -85,6 +85,30 @@ export enum FilterField {
   METADATA = "metadata",
 }
 
+export enum SessionFilterField {
+  TENANT_ID = "tenant_id",
+}
+
+export enum SessionOperator {
+  ANY_OF = "any_of",
+}
+
+export enum SessionFilterType {
+  ARRAY = "arrayOptions",
+}
+
+export enum SortField {
+  SESSION_ID = "session_id",
+  START_TIME = "start_time",
+  TOTAL_REQUESTS = "totalRequests",
+  TOTAL_COST = "totalCost",
+}
+
+export enum SortOrder {
+  ASC = "asc",
+  DESC = "desc",
+}
+
 /**
  * Create a metadata filter field
  * @param key The metadata key to filter on
@@ -172,4 +196,33 @@ export interface QueryDataParams {
   metrics: Metrics;
   filter: FilterConfig;
   dimension?: Dimension;
+}
+
+//Sessions
+export interface SessionFilter {
+  field: SessionFilterField;
+  operator: SessionOperator;
+  type: SessionFilterType;
+  value: string[];
+}
+
+export interface SessionStatsResult {
+  data: SessionStatsData[];
+  hasNextPage: boolean;
+  nextCursor?: string;
+}
+
+export interface SessionFilterConfig {
+  startTime: string;
+  endTime: string;
+  filters?: SessionFilter[];
+}
+
+export interface SessionStatsData {
+  session_id: string;
+  session_start_time: string;
+  totalRequests: number;
+  totalCost: number;
+  session_duration: string;
+  cursor: string
 }
