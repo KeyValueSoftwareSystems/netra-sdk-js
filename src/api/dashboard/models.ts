@@ -219,9 +219,10 @@ export interface SessionFilterConfig {
 }
 
 export interface SessionStatsData {
-  sessionId: string;
-  startTime: string;
+  session_id: string;
+  session_start_time: string;
   totalRequests: number;
   totalCost: number;
-  sessionDuration: string;
+  session_duration: string;
+  cursor: string
 }
