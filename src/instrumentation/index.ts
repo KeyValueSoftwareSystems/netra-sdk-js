@@ -173,12 +173,12 @@ export function initInstrumentations(
   } else {
     const formattedEndpoint = config.formatOtlpEndpoint();
 
-    const otlpExporter = new OTLPTraceExporter({
+    // In TS, we pass the config directly to our custom class
+    // because it handles the HTTP transport itself to catch the error body.
+    exporter = new TrialAwareOTLPExporter({
       url: formattedEndpoint,
       headers: config.headers,
     });
-
-    exporter = new TrialAwareOTLPExporter(otlpExporter);
   }
 
   // 2) Always attempt filtering (even for Console fallback)

@@ -63,7 +63,7 @@ export class Config {
   static readonly SDK_NAME = "netra";
   static readonly LIBRARY_NAME = "netra";
   static readonly LIBRARY_VERSION = "1.0.0";
-  static readonly TRIAL_BLOCK_DURATION_SECONDS = 300;
+  static readonly TRIAL_BLOCK_DURATION_SECONDS = 900; // 15 minutes
   static readonly ATTRIBUTE_MAX_LEN = parseInt(
     process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000",
   );
@@ -242,7 +242,7 @@ export class Config {
   /**
    * Format the OTLP endpoint URL by appending /v1/traces if not already present
    */
-  public formatOtlpEndpoint(): string | undefined {
+  public formatOtlpEndpoint(): any {
     if (!this.otlpEndpoint) {
       return undefined;
     }
