@@ -331,9 +331,13 @@ export class LanggraphWrapper {
 
     // Start metadata spanning for the workflow
     // We use context.active() to parent to the current active span (e.g. request handler)
-    const span = this.tracer.startSpan(this.spanName, {
-      kind: SpanKind.CLIENT,
-    });
+    const span = this.tracer.startSpan(
+      this.spanName,
+      {
+        kind: SpanKind.CLIENT,
+      },
+      context.active()
+    );
 
     return context.with(trace.setSpan(context.active(), span), async () => {
       try {

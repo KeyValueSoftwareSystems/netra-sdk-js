@@ -89,6 +89,16 @@ export function initInstrumentations(
     customInstrumentModules.googleGenAI = true;
     customInstrumentModules.anthropic = true;
   } else if (instruments.size) {
+    // When specific instruments are provided, explicitly disable all Traceloop modules
+    // to prevent default "enable all" behavior
+    instrumentModules.google_vertexai = false;
+    instrumentModules.langchain = false;
+    instrumentModules.llamaIndex = false;
+    instrumentModules.pinecone = false;
+    instrumentModules.qdrant = false;
+    instrumentModules.chromadb = false;
+    instrumentModules.together = false;
+
     // Enable specific instruments
     if (instruments.has(NetraInstruments.OPENAI)) {
       customInstrumentModules.openai = true;

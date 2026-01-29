@@ -1,0 +1,68 @@
+# Source files (only dist/ should be published)
+src/
+examples/
+test/
+tests/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+
+# Build artifacts
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# TypeScript config
+tsconfig.json
+tsup.config.ts
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+circle.yml
+appveyor.yml
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+jest.config.js
+jest.config.ts
+
+# Environment files
+.env
+.env.local
+.env.test
+.env.production
+.env.*
+
+# Package manager files
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Misc
+.DS_Store
+*.tgz
+*.tar.gz
