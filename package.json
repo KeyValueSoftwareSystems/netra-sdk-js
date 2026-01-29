@@ -34,8 +34,16 @@
     "typescript",
     "javascript"
   ],
-  "author": "",
+  "author": "KeyValue Software Systems",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KeyValueSoftwareSystems/netra-sdk-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KeyValueSoftwareSystems/netra-sdk-js/issues"
+  },
+  "homepage": "https://github.com/KeyValueSoftwareSystems/netra-sdk-js#readme",
   "engines": {
     "node": ">=18.0.0"
   },
