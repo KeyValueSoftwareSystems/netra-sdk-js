@@ -1,4 +1,4 @@
-import { context, Span, SpanKind, SpanStatusCode, Tracer } from "@opentelemetry/api";
+import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
 import { isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
@@ -25,6 +25,12 @@ function anthropicWrapper(
       return isPromise(result) ? result.then((value) => value) : result;
     }
     const isStreaming = args[0]?.stream === true;
+    
+    if (process.env.NETRA_DEBUG_LOGS) {
+        const activeSpan = trace.getSpan(context.active());
+        console.log(`[Netra Debug] Anthropic invoke (${requestType}). Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
+    }
+
     if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
       const currentContext = context.active();
       const span = tracer.startSpan(spanName + ".create", {

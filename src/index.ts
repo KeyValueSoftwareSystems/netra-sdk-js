@@ -8,8 +8,7 @@ import {
   context,
   Span,
   SpanKind,
-  trace,
-  propagation,
+  trace
 } from "@opentelemetry/api";
 import { Dashboard } from "./api/dashboard";
 import { Evaluation } from "./api/evaluation";
@@ -20,6 +19,7 @@ import {
   instrumentationsReady,
   uninstrumentAll,
 } from "./instrumentation";
+import { withBlockedSpansLocal } from "./processors/localfiltering-span-processor";
 import { setSessionBaggage } from "./processors/session-span-processor";
 import {
   ConversationType,
@@ -28,14 +28,13 @@ import {
 } from "./session-manager";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
-import { withBlockedSpansLocal } from "./processors/localfiltering-span-processor";
 
 export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
   InstrumentationSpanProcessor,
   ScrubbingSpanProcessor,
-  SessionSpanProcessor,
+  SessionSpanProcessor
 } from "./processors";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
@@ -63,7 +62,7 @@ export {
   RunStatus,
   Scope,
   // Usage API
-  Usage,
+  Usage
 } from "./api";
 
 export type {
@@ -100,7 +99,7 @@ export type {
   TimeSeriesWithDimension,
   TracesPage,
   TraceSpan,
-  TraceSummary,
+  TraceSummary
 } from "./api";
 export * from "./exporters";
 
@@ -141,11 +140,16 @@ export class Netra {
 
   /**
    * Initialize the Netra SDK
-   * Note: Custom instrumentations (OpenAI, Groq, MistralAI) are initialized
-   * asynchronously. Use initAsync() or await Netra.ready() to ensure
-   * instrumentations are complete before using instrumented modules.
+   *
+   * This method is async and must be awaited to ensure all instrumentations
+   * are ready before your application starts using instrumented modules.
+   *
+   * @example
+   * await Netra.init({ appName: 'my-app', instruments: new Set([NetraInstruments.OPENAI]) });
+   * // Now all instrumentations are ready
+   * const openai = new OpenAI();
    */
-  static init(config: NetraConfig = {}): void {
+  static async init(config: NetraConfig = {}): Promise<void> {
     if (this._initialized) {
       console.warn(
         "Netra.init() called more than once; ignoring subsequent calls.",
@@ -189,12 +193,10 @@ export class Netra {
 
     this._initialized = true;
     console.info("Netra successfully initialized.");
-    this._initialized = true;
-    console.info("Netra successfully initialized.");
 
     // Graceful shutdown logic
     const handleSignal = async (signal: string) => {
-      console.log(`\nRecepived ${signal}. Shutting down Netra SDK...`);
+      console.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
       await this.shutdown();
       process.exit(0);
     };
@@ -255,32 +257,26 @@ export class Netra {
         );
       }
     }
-  }
 
-  /**
-   * Initialize the Netra SDK and wait for all instrumentations to be ready.
-   * This is the recommended way to initialize Netra when using ES modules,
-   * as it ensures all async instrumentations (OpenAI, Groq, MistralAI) are
-   * complete before the application starts using the instrumented modules.
-   *
-   * @example
-   * await Netra.initAsync({ appName: 'my-app', instruments: new Set([NetraInstruments.OPENAI]) });
-   * // Now OpenAI is fully instrumented
-   * const openai = new OpenAI();
-   */
-  static async initAsync(config: NetraConfig = {}): Promise<void> {
-    this.init(config);
+    // Wait for all async instrumentations to be ready
     await instrumentationsReady;
   }
 
   /**
-   * Returns a promise that resolves when all async instrumentations are ready.
-   * Can be called after init() to wait for instrumentations.
+   * @deprecated Use `Netra.init()` instead. The init method is now async by default.
    *
-   * @example
-   * Netra.init({ appName: 'my-app' });
-   * await Netra.ready();
-   * // Now all instrumentations are complete
+   * Initialize the Netra SDK and wait for all instrumentations to be ready.
+   * This method is kept for backwards compatibility.
+   */
+  static async initAsync(config: NetraConfig = {}): Promise<void> {
+    await this.init(config);
+  }
+
+  /**
+   * @deprecated Since `Netra.init()` is now async and waits for instrumentations,
+   * this method is no longer necessary. It's kept for backwards compatibility.
+   *
+   * Returns a promise that resolves when all async instrumentations are ready.
    */
   static async ready(): Promise<void> {
     await instrumentationsReady;

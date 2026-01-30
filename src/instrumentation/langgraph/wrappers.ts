@@ -3,12 +3,16 @@ import { Serialized } from "@langchain/core/load/serializable";
 import { LLMResult } from "@langchain/core/outputs";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { ChainValues } from "@langchain/core/utils/types";
-import { Span, SpanKind, Tracer, context, trace } from "@opentelemetry/api";
+import { Span, SpanKind, Tracer, context, trace, createContextKey } from "@opentelemetry/api";
 
 import {
   setResponseAttributes as setBaseResponseAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
+
+// Context key to track if we're inside a LangGraph instrumented call
+// This prevents double-instrumentation when invoke internally calls stream
+const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
 import {
   NetraLanggraphAttributes,
   setChainInputAttributes,
@@ -325,8 +329,14 @@ export class LanggraphWrapper {
     config?: RunnableConfig,
     ...rest: any[]
   ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
+    // Skip if instrumentation is suppressed or we're already inside a LangGraph instrumented call
+    if (shouldSuppressInstrumentation() || context.active().getValue(LANGGRAPH_INSTRUMENTATION_ACTIVE)) {
       return await originalFunc.call(instance, input, config, ...rest);
+    }
+
+    const activeSpan = trace.getSpan(context.active());
+    if (process.env.NETRA_DEBUG_LOGS) {
+        console.log(`[Netra Debug] LangGraph invoke start. Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
     }
 
     // Start metadata spanning for the workflow
@@ -339,7 +349,19 @@ export class LanggraphWrapper {
       context.active()
     );
 
-    return context.with(trace.setSpan(context.active(), span), async () => {
+    if (process.env.NETRA_DEBUG_LOGS) {
+        console.log(`[Netra Debug] LangGraph span created. New TraceId: ${span.spanContext().traceId}, SpanId: ${span.spanContext().spanId}`);
+    }
+
+    // Set the active flag to prevent nested instrumentation (e.g., when invoke calls stream internally)
+    const ctxWithSpan = trace.setSpan(context.active(), span);
+    const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
+
+    return context.with(ctxWithFlag, async () => {
+      if (process.env.NETRA_DEBUG_LOGS) {
+           const innerSpan = trace.getSpan(context.active());
+           console.log(`[Netra Debug] Inside LangGraph context. Active TraceId: ${innerSpan?.spanContext().traceId}, SpanId: ${innerSpan?.spanContext().spanId}`);
+      }
       try {
         setGraphInputAttributes(span, input);
 
@@ -372,9 +394,18 @@ export class LanggraphWrapper {
     config?: RunnableConfig,
     ...rest: any[]
   ): Promise<unknown> {
-    if (shouldSuppressInstrumentation()) {
+    // Skip if instrumentation is suppressed or we're already inside a LangGraph instrumented call
+    if (shouldSuppressInstrumentation() || context.active().getValue(LANGGRAPH_INSTRUMENTATION_ACTIVE)) {
+      if (process.env.NETRA_DEBUG_LOGS) {
+        console.log("[Netra Debug] LangGraph stream skipped (inside instrumented call)");
+      }
       return await originalFunc.call(instance, input, config, ...rest);
     }
+
+    if (process.env.NETRA_DEBUG_LOGS) {
+      console.log("[Netra Debug] LangGraph stream starting instrumentation");
+    }
+
     const span = this.tracer.startSpan(
       this.spanName,
       {
