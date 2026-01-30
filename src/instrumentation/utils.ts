@@ -204,9 +204,25 @@ export function setRequestAttributes(
     }
   }
 
-  // Tools count
+  // Tools count and definitions
   if (Array.isArray(kwargs.tools) && kwargs.tools.length > 0) {
     span.setAttribute("gen_ai.request.tools_count", kwargs.tools.length);
+
+    // Add individual tool definitions
+    kwargs.tools.forEach((tool: any, index: number) => {
+      if (tool.name) {
+        span.setAttribute(`gen_ai.request.tools.${index}.name`, tool.name);
+      }
+      if (tool.description) {
+        span.setAttribute(`gen_ai.request.tools.${index}.description`, tool.description);
+      }
+      if (tool.input_schema) {
+        span.setAttribute(
+          `gen_ai.request.tools.${index}.input_schema`,
+          JSON.stringify(tool.input_schema)
+        );
+      }
+    });
   }
 
   // Tool choice (handle both snake_case and camelCase)
@@ -295,10 +311,39 @@ function _setChatCompletionAPIAttributes(
       `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
       message?.role ?? "user"
     );
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
-      String(message?.content ?? "")
-    );
+
+    // Handle content - can be string or array
+    const content = message?.content;
+    if (typeof content === 'string') {
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+        content
+      );
+    } else if (Array.isArray(content)) {
+      // Handle array content (tool results, multimodal content, etc.)
+      content.forEach((block: any, blockIndex: number) => {
+        if (block.type === 'tool_result') {
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${i}.tool_result.${blockIndex}.tool_use_id`,
+            block.tool_use_id
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${i}.tool_result.${blockIndex}.content`,
+            typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+          );
+        } else if (block.type === 'text') {
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${i}.content.${blockIndex}`,
+            block.text || ''
+          );
+        }
+      });
+    } else {
+      span.setAttribute(
+        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+        String(content ?? "")
+      );
+    }
   }
 }
 
@@ -354,7 +399,7 @@ function _setResponseAPIAttributes(
  */
 export function setResponseAttributes(
   span: Span,
-  response: Record<string, unknown>
+  response: Record<string, unknown>,
 ): void {
   if (!span.isRecording()) {
     console.log("Span is not recording");
@@ -365,11 +410,9 @@ export function setResponseAttributes(
     span.setAttribute("llm.response.id", String(response.id));
   }
 
-  if (response.model) {
-    span.setAttribute(
-      SpanAttributes.LLM_RESPONSE_MODEL,
-      String(response.model)
-    );
+  const model = response?.model || (response?.response_metadata as any)?.model;
+  if (model) {
+    span.setAttribute(SpanAttributes.LLM_RESPONSE_MODEL, String(model));
   }
 
   _setUsageAttributes(span, response);
@@ -410,10 +453,14 @@ export function setResponseAttributes(
 
 function _setUsageAttributes(
   span: Span,
-  response: Record<string, unknown>
+  response: Record<string, unknown>,
 ): void {
-  const usage = response.usage as Record<string, unknown> | undefined;
-  if (!usage) return;
+  if (!response.usage && !response.usage_metadata) return;
+
+  const usage = (response.usage ?? response.usage_metadata) as Record<
+    string,
+    unknown
+  >;
 
   const promptTokens = usage.prompt_tokens ?? usage.input_tokens;
   if (promptTokens !== undefined) {
@@ -469,16 +516,54 @@ function _setResponseMessageAttributes(
   response: Record<string, unknown>
 ): void {
   let messageIndex = 0;
-  if (response.output_text) {
+  const messageContent = response.output_text ?? response.content;
+  if (messageContent) {
     span.setAttribute(
       `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
       "assistant"
     );
     span.setAttribute(
       `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-      String(response.output_text)
+      String(messageContent)
     );
   }
+
+  if (response.content && Array.isArray(response.content)) {
+      let toolCallIndex = 0;
+      response.content.forEach((contentBlock: any) => {
+        if (contentBlock.type === 'text' && contentBlock.text) {
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
+            "assistant"
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
+            String(contentBlock.text)
+          );
+          messageIndex += 1;
+        } else if (contentBlock.type === 'tool_use') {
+          // Capture tool use information
+          span.setAttribute(
+            `gen_ai.response.tool_calls.${toolCallIndex}.name`,
+            contentBlock.name
+          );
+          span.setAttribute(
+            `gen_ai.response.tool_calls.${toolCallIndex}.id`,
+            contentBlock.id
+          );
+          span.setAttribute(
+            `gen_ai.response.tool_calls.${toolCallIndex}.input`,
+            JSON.stringify(contentBlock.input)
+          );
+          toolCallIndex += 1;
+        }
+      });
+
+      // Set total tool calls count if any
+      if (toolCallIndex > 0) {
+        span.setAttribute("gen_ai.response.tool_calls_count", toolCallIndex);
+      }
+    }
 
   if (response.output !== undefined) {
     for (let element of response.output as Array<Record<string, unknown>>) {

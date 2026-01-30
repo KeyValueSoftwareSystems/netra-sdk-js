@@ -53,6 +53,7 @@ playwright-report/
 *.temp
 .cache/
 *.tgz
+*.zip
 .npm-cache/
 
 # Local pack/e2e consumer projects
@@ -60,6 +61,8 @@ examples/**/node_modules/
 examples/**/package-lock.json
 examples/**/.env
 examples/**/.env.*
+
+examples
 
 # Package manager locks (optional - uncomment if you want to ignore)
 # package-lock.json

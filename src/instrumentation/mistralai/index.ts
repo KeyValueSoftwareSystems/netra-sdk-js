@@ -1,13 +1,11 @@
 /**
  * Custom MistralAI instrumentor for Netra SDK
+ *
+ * Note: '@mistralai/mistralai' is a peer dependency. The SDK dynamically imports it
+ * to ensure we patch the same module instance the application uses.
  */
 
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
-// Some IDE/linter setups may not resolve optional deps from node_modules,
-// but the package is present at runtime when installed. Keep this as a normal
-// import so we can patch the public SDK surface (OpenAI/Groq pattern).
-// @ts-ignore
-import { Mistral } from "@mistralai/mistralai";
 import { __version__ } from "./version";
 import {
   agentsStreamWrapper,
@@ -28,11 +26,46 @@ const originalMethods: Map<string, Function> = new Map();
 // Track instrumentation state
 let isInstrumented = false;
 
+// Cache the resolved Mistral class
+let MistralClass: any = null;
+
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
 }
 
 type MistralResourceName = "chat" | "embeddings" | "fim" | "agents";
+
+/**
+ * Dynamically resolve the Mistral module from the application's context.
+ * This ensures we patch the same module instance that the application uses.
+ *
+ * IMPORTANT: We use dynamic import() to ensure we get the same ES module
+ * instance that the application uses. Using require() would give us a
+ * different instance due to ESM/CJS dual package handling in Node.js.
+ */
+async function resolveMistralAsync(): Promise<any> {
+  if (MistralClass) return MistralClass;
+
+  try {
+    // Use dynamic import to get the same ES module instance
+    // @ts-ignore - @mistralai/mistralai is an optional peer dependency
+    const mistralModule = await import("@mistralai/mistralai");
+    MistralClass =
+      mistralModule.Mistral || mistralModule.default || mistralModule;
+    return MistralClass;
+  } catch {
+    // Package not installed - this is fine, it's optional
+    return null;
+  }
+}
+
+/**
+ * Synchronous version that returns cached class or null.
+ * Must call resolveMistralAsync() first to populate cache.
+ */
+function resolveMistral(): any {
+  return MistralClass;
+}
 
 /**
  * Custom MistralAI instrumentor for Netra SDK
@@ -54,11 +87,22 @@ export class NetraMistralAIInstrumentor {
   }
 
   /**
-   * Instrument MistralAI client methods
+   * Instrument MistralAI client methods (async version)
+   * Uses dynamic import() to ensure we get the same ES module instance
+   * that the application uses.
    */
-  instrument(options: InstrumentorOptions = {}): NetraMistralAIInstrumentor {
+  async instrumentAsync(
+    options: InstrumentorOptions = {}
+  ): Promise<NetraMistralAIInstrumentor> {
     if (isInstrumented) {
       console.warn("MistralAI is already instrumented");
+      return this;
+    }
+
+    // Resolve Mistral from application context using dynamic import
+    const Mistral = await resolveMistralAsync();
+    if (!Mistral) {
+      // @mistralai/mistralai package not installed - skip silently (it's optional)
       return this;
     }
 
@@ -79,12 +123,65 @@ export class NetraMistralAIInstrumentor {
     }
 
     // Instrument client methods. Mark instrumented only if we actually patched anything.
-    // NOTE: don't use `a() || b() || ...` here — it short-circuits and would stop
-    // patching after the first successful instrumentation.
-    const patchedChat = this._instrumentChat();
-    const patchedEmbeddings = this._instrumentEmbeddings();
-    const patchedFIM = this._instrumentFIM();
-    const patchedAgents = this._instrumentAgents();
+    const patchedChat = this._instrumentChat(Mistral);
+    const patchedEmbeddings = this._instrumentEmbeddings(Mistral);
+    const patchedFIM = this._instrumentFIM(Mistral);
+    const patchedAgents = this._instrumentAgents(Mistral);
+    const didPatch =
+      patchedChat || patchedEmbeddings || patchedFIM || patchedAgents;
+
+    if (!didPatch) {
+      console.warn(
+        "MistralAI instrumentation initialized but no methods were patched. Is '@mistralai/mistralai' installed and compatible?"
+      );
+      return this;
+    }
+
+    isInstrumented = true;
+    return this;
+  }
+
+  /**
+   * Instrument MistralAI client methods (sync version - for backwards compatibility)
+   * Note: This uses a cached Mistral class. Call instrumentAsync() for proper initialization.
+   */
+  instrument(options: InstrumentorOptions = {}): NetraMistralAIInstrumentor {
+    if (isInstrumented) {
+      console.warn("MistralAI is already instrumented");
+      return this;
+    }
+
+    // Try to get cached Mistral class (must have called instrumentAsync first)
+    const Mistral = resolveMistral();
+    if (!Mistral) {
+      // Fall back to async initialization
+      this.instrumentAsync(options).catch((e) => {
+        console.error("Failed to instrument MistralAI:", e);
+      });
+      return this;
+    }
+
+    try {
+      this.tracerProvider = options.tracerProvider;
+      // Use provided tracer provider or fall back to global
+      if (this.tracerProvider) {
+        this.tracer = this.tracerProvider.getTracer(
+          INSTRUMENTATION_NAME,
+          __version__
+        );
+      } else {
+        this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
+      }
+    } catch (error) {
+      console.error(`Failed to initialize tracer: ${error}`);
+      return this;
+    }
+
+    // Instrument client methods. Mark instrumented only if we actually patched anything.
+    const patchedChat = this._instrumentChat(Mistral);
+    const patchedEmbeddings = this._instrumentEmbeddings(Mistral);
+    const patchedFIM = this._instrumentFIM(Mistral);
+    const patchedAgents = this._instrumentAgents(Mistral);
     const didPatch =
       patchedChat || patchedEmbeddings || patchedFIM || patchedAgents;
 
@@ -108,17 +205,13 @@ export class NetraMistralAIInstrumentor {
       return;
     }
 
-    // Uninstrument chat
-    this._uninstrumentChat();
-
-    // Uninstrument embeddings
-    this._uninstrumentEmbeddings();
-
-    // Uninstrument FIM
-    this._uninstrumentFIM();
-
-    // Uninstrument agents
-    this._uninstrumentAgents();
+    const Mistral = resolveMistral();
+    if (Mistral) {
+      this._uninstrumentChat(Mistral);
+      this._uninstrumentEmbeddings(Mistral);
+      this._uninstrumentFIM(Mistral);
+      this._uninstrumentAgents(Mistral);
+    }
 
     originalMethods.clear();
     isInstrumented = false;
@@ -138,7 +231,7 @@ export class NetraMistralAIInstrumentor {
    * We create a temporary client instance purely for discovery; it should not
    * make network calls.
    */
-  private _ensureResourceCtors(): void {
+  private _ensureResourceCtors(Mistral: any): void {
     if (
       this.resourceCtors.chat &&
       this.resourceCtors.embeddings &&
@@ -154,10 +247,10 @@ export class NetraMistralAIInstrumentor {
 
     let client: any;
     try {
-      client = new (Mistral as any)({ apiKey });
+      client = new Mistral({ apiKey });
     } catch {
       // Fallback for alternate ctor signatures
-      client = new (Mistral as any)(apiKey);
+      client = new Mistral(apiKey);
     }
 
     for (const name of ["chat", "embeddings", "fim", "agents"] as const) {
@@ -168,16 +261,16 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _getCtor(name: MistralResourceName): any | null {
-    this._ensureResourceCtors();
+  private _getCtor(Mistral: any, name: MistralResourceName): any | null {
+    this._ensureResourceCtors(Mistral);
     return this.resourceCtors[name] ?? null;
   }
 
-  private _instrumentChat(): boolean {
+  private _instrumentChat(Mistral: any): boolean {
     if (!this.tracer) return false;
 
     try {
-      const ChatClass = this._getCtor("chat");
+      const ChatClass = this._getCtor(Mistral, "chat");
       let didPatch = false;
 
       if (ChatClass?.prototype?.complete) {
@@ -233,11 +326,11 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _instrumentEmbeddings(): boolean {
+  private _instrumentEmbeddings(Mistral: any): boolean {
     if (!this.tracer) return false;
 
     try {
-      const EmbeddingsClass = this._getCtor("embeddings");
+      const EmbeddingsClass = this._getCtor(Mistral, "embeddings");
       let didPatch = false;
 
       if (EmbeddingsClass?.prototype?.create) {
@@ -270,11 +363,11 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _instrumentFIM(): boolean {
+  private _instrumentFIM(Mistral: any): boolean {
     if (!this.tracer) return false;
 
     try {
-      const FimClass = this._getCtor("fim");
+      const FimClass = this._getCtor(Mistral, "fim");
       let didPatch = false;
 
       if (FimClass?.prototype?.complete) {
@@ -330,11 +423,11 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _instrumentAgents(): boolean {
+  private _instrumentAgents(Mistral: any): boolean {
     if (!this.tracer) return false;
 
     try {
-      const AgentsClass = this._getCtor("agents");
+      const AgentsClass = this._getCtor(Mistral, "agents");
       let didPatch = false;
 
       if (AgentsClass?.prototype?.complete) {
@@ -390,9 +483,9 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentChat(): void {
+  private _uninstrumentChat(Mistral: any): void {
     try {
-      const ChatClass = this._getCtor("chat");
+      const ChatClass = this._getCtor(Mistral, "chat");
 
       const originalComplete = originalMethods.get("chat.complete");
       if (originalComplete && ChatClass?.prototype) {
@@ -408,9 +501,9 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentEmbeddings(): void {
+  private _uninstrumentEmbeddings(Mistral: any): void {
     try {
-      const EmbeddingsClass = this._getCtor("embeddings");
+      const EmbeddingsClass = this._getCtor(Mistral, "embeddings");
 
       const originalCreate = originalMethods.get("embeddings.create");
       if (originalCreate && EmbeddingsClass?.prototype) {
@@ -421,9 +514,9 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentFIM(): void {
+  private _uninstrumentFIM(Mistral: any): void {
     try {
-      const FimClass = this._getCtor("fim");
+      const FimClass = this._getCtor(Mistral, "fim");
 
       const originalComplete = originalMethods.get("fim.complete");
       if (originalComplete && FimClass?.prototype) {
@@ -439,9 +532,9 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentAgents(): void {
+  private _uninstrumentAgents(Mistral: any): void {
     try {
-      const AgentsClass = this._getCtor("agents");
+      const AgentsClass = this._getCtor(Mistral, "agents");
 
       const originalComplete = originalMethods.get("agents.complete");
       if (originalComplete && AgentsClass?.prototype) {
