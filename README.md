@@ -23,12 +23,12 @@ npm install netra-sdk
 
 ### Basic Setup
 
-Initialize the Netra SDK at the start of your application (entry point):
+Initialize the Netra SDK at the start of your application (entry point). The `init()` method is async and waits for all instrumentations to be ready before returning:
 
 ```typescript
 import { Netra, NetraInstruments } from "netra-sdk";
 
-Netra.init({
+await Netra.init({
   appName: "my-ai-app",
   headers: `x-api-key=${process.env.NETRA_API_KEY}`, // Optional: Send traces to Netra Platform
   environment: "production",
@@ -37,16 +37,7 @@ Netra.init({
 });
 ```
 
-### Async Initialization
-
-If you need to ensure all instrumentations (like OpenAI, Anthropic) are fully patched before use, use `initAsync`:
-
-```typescript
-await Netra.initAsync({
-  appName: "my-ai-app",
-  headers: `x-api-key=${process.env.NETRA_API_KEY}`,
-});
-```
+> **Note**: Always `await` the `init()` call to ensure all instrumentations (like OpenAI, Anthropic, LangGraph) are fully patched before your application starts using them. This is especially important in frameworks like NestJS where modules are loaded after initialization.
 
 ## 🎯 Decorators
 
@@ -128,7 +119,7 @@ To configure specific instruments, use `NetraInstruments`:
 ```typescript
 import { Netra, NetraInstruments } from "netra-sdk";
 
-Netra.init({
+await Netra.init({
     instruments: new Set([
         NetraInstruments.OPENAI,
         NetraInstruments.EXPRESS
