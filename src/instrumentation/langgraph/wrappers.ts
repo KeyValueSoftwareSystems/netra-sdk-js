@@ -3,7 +3,15 @@ import { Serialized } from "@langchain/core/load/serializable";
 import { LLMResult } from "@langchain/core/outputs";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { ChainValues } from "@langchain/core/utils/types";
-import { Span, SpanKind, Tracer, context, trace, createContextKey } from "@opentelemetry/api";
+import {
+  Span,
+  SpanKind,
+  Tracer,
+  Context,
+  context,
+  trace,
+  createContextKey,
+} from "@opentelemetry/api";
 
 import {
   setResponseAttributes as setBaseResponseAttributes,
@@ -13,6 +21,46 @@ import {
 // Context key to track if we're inside a LangGraph instrumented call
 // This prevents double-instrumentation when invoke internally calls stream
 const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
+
+function getContextManager(): any {
+  try {
+    if ((context as any)._getContextManager) {
+      return (context as any)._getContextManager();
+    }
+
+    const globalSymbols = Object.getOwnPropertySymbols(global);
+    const otelSymbol = globalSymbols.find(s =>
+      s.toString().includes("opentelemetry.js.api"),
+    );
+    if (otelSymbol) {
+      const globalState = (global as any)[otelSymbol];
+      if (globalState?.contextManager) {
+        return globalState.contextManager;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function enterWithContext(newContext: Context): void {
+  const contextManager = getContextManager();
+  if (!contextManager) return;
+
+  if (typeof contextManager.enterWith === "function") {
+    contextManager.enterWith(newContext);
+    return;
+  }
+
+  if (
+    contextManager._asyncLocalStorage &&
+    typeof contextManager._asyncLocalStorage.enterWith === "function"
+  ) {
+    contextManager._asyncLocalStorage.enterWith(newContext);
+  }
+}
 import {
   NetraLanggraphAttributes,
   setChainInputAttributes,
@@ -31,6 +79,8 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
   // Map runId -> Span for explicit parenting
   private spans: Map<string, Span> = new Map();
   private nodeAttributes: Map<string, Record<string, any>> = new Map();
+  private runStack: string[] = [];
+  private inferredParents: Map<string, string> = new Map();
 
   constructor(
     private tracer: Tracer,
@@ -51,29 +101,83 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     this.nodeAttributes.set(runId, { ...current, ...attributes });
   }
 
+  private inferParentRunId(parentRunId?: string): string | undefined {
+    if (parentRunId) return parentRunId;
+    return this.runStack.length > 0
+      ? this.runStack[this.runStack.length - 1]
+      : undefined;
+  }
+
+  private pushRun(runId: string): void {
+    this.runStack.push(runId);
+  }
+
+  private popRun(runId: string): void {
+    const last = this.runStack[this.runStack.length - 1];
+    if (last === runId) {
+      this.runStack.pop();
+      return;
+    }
+    const idx = this.runStack.lastIndexOf(runId);
+    if (idx >= 0) {
+      this.runStack.splice(idx, 1);
+    }
+  }
+
   async handleChainStart(
     chain: Serialized,
     inputs: ChainValues,
     runId: string,
-    runType?: string,
+    parentRunId?: string,
     tags?: string[],
     metadata?: Record<string, unknown>,
     runName?: string,
-    parentRunId?: string,
-    extra?: Record<string, unknown>,
+    runType?: string,
   ) {
-    const nodeName = (metadata?.langgraph_node ?? "") as string;
-    const nodeType = chain.id?.[chain.id.length - 1] || "Unknown";
+    const metadataNodeName =
+      typeof metadata?.langgraph_node === "string"
+        ? (metadata.langgraph_node as string)
+        : "";
+    const runNameValue = typeof runName === "string" ? runName : "";
+    const chainIdName =
+      Array.isArray(chain.id) && chain.id.length > 0
+        ? chain.id[chain.id.length - 1]
+        : "";
+    const nodeName = metadataNodeName || runNameValue || chainIdName || "Chain";
+    const nodeType = chainIdName || "Unknown";
+
+    if (process.env.NETRA_DEBUG_LOGS) {
+      const metadataKeys =
+        metadata && typeof metadata === "object"
+          ? Object.keys(metadata as Record<string, unknown>).join(",")
+          : "n/a";
+      console.log(
+        `[Netra Debug] NetraLanggraph handleChainStart: runId=${runId} parentRunId=${parentRunId} nodeName=${nodeName} nodeType=${nodeType} runName=${runNameValue || "n/a"} metadataKeys=${metadataKeys}`,
+      );
+    }
 
     if (
       !nodeName ||
-      nodeType.toUpperCase() !== "RUNNABLESEQUENCE" ||
       ["__start__"].includes(nodeName.toLowerCase())
     ) {
       return;
     }
 
-    const parentSpan = this.getParentSpan(parentRunId);
+    const effectiveParentRunId = this.inferParentRunId(parentRunId);
+    if (
+      !parentRunId &&
+      effectiveParentRunId &&
+      effectiveParentRunId !== runId
+    ) {
+      this.inferredParents.set(runId, effectiveParentRunId);
+      if (process.env.NETRA_DEBUG_LOGS) {
+        console.log(
+          `[Netra Debug] NetraLanggraph inferred parent: runId=${runId} parentRunId=${effectiveParentRunId}`,
+        );
+      }
+    }
+
+    const parentSpan = this.getParentSpan(effectiveParentRunId);
 
     // Create span parented to the correct node/workflow
     const ctx = trace.setSpan(context.active(), parentSpan);
@@ -82,6 +186,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     setChainInputAttributes(span, inputs, tags, metadata);
 
     this.spans.set(runId, span);
+    this.pushRun(runId);
   }
 
   async handleChainEnd(
@@ -97,6 +202,9 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     setChainOutputAttributes(span, outputs, tags);
     span.end();
     this.spans.delete(runId);
+    this.nodeAttributes.delete(runId);
+    this.inferredParents.delete(runId);
+    this.popRun(runId);
   }
 
   async handleChainError(
@@ -111,6 +219,9 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     span.recordException(err);
     span.end();
     this.spans.delete(runId);
+    this.nodeAttributes.delete(runId);
+    this.inferredParents.delete(runId);
+    this.popRun(runId);
   }
 
   async handleLLMStart(
@@ -123,12 +234,20 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     metadata?: Record<string, unknown>,
     runName?: string,
   ) {
+    const effectiveParentRunId =
+      parentRunId ?? this.inferParentRunId(parentRunId);
+    if (process.env.NETRA_DEBUG_LOGS) {
+      const llmId = llm.id?.[llm.id.length - 1] || "llm";
+      console.log(
+        `[Netra Debug] NetraLanggraph handleLLMStart: runId=${runId} parentRunId=${effectiveParentRunId} llmId=${llmId}`,
+      );
+    }
     this.addNodeAttributes(runId, {
       llmIds: llm.id,
       metadata,
       prompts,
       extraParams,
-      parentRunId, // Store parent ID to link back
+      parentRunId: effectiveParentRunId, // Store parent ID to link back
     });
   }
 
@@ -144,7 +263,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     const llmIds = attributes.llmIds ?? [];
     const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
 
-    const parentSpan = this.getParentSpan(parentRunId);
+    const effectiveParentRunId =
+      parentRunId ??
+      attributes.parentRunId ??
+      this.inferredParents.get(runId);
+    const parentSpan = this.getParentSpan(effectiveParentRunId);
     const ctx = trace.setSpan(context.active(), parentSpan);
 
     const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
@@ -173,7 +296,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     const llmIds = attributes.llmIds ?? [];
     const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
 
-    const parentSpan = this.getParentSpan(parentRunId);
+    const effectiveParentRunId =
+      parentRunId ??
+      attributes.parentRunId ??
+      this.inferredParents.get(runId);
+    const parentSpan = this.getParentSpan(effectiveParentRunId);
     const ctx = trace.setSpan(context.active(), parentSpan);
 
     const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
@@ -199,10 +326,19 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       parsedInput = {};
     }
 
+    const effectiveParentRunId =
+      parentRunId ?? this.inferParentRunId(parentRunId);
+    if (process.env.NETRA_DEBUG_LOGS) {
+      const toolName = tool.id?.[tool.id.length - 1] || "tool";
+      console.log(
+        `[Netra Debug] NetraLanggraph handleToolStart: runId=${runId} parentRunId=${effectiveParentRunId} tool=${toolName}`,
+      );
+    }
     this.addNodeAttributes(runId, {
       input: parsedInput,
       metadata,
       tags,
+      parentRunId: effectiveParentRunId,
     });
   }
 
@@ -218,7 +354,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     const toolName = attributes?.input?.name ?? "custom";
     const { input, metadata } = attributes;
 
-    const parentSpan = this.getParentSpan(parentRunId);
+    const effectiveParentRunId =
+      parentRunId ??
+      attributes.parentRunId ??
+      this.inferredParents.get(runId);
+    const parentSpan = this.getParentSpan(effectiveParentRunId);
     const ctx = trace.setSpan(context.active(), parentSpan);
 
     const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
@@ -238,7 +378,11 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     if (!attributes) return;
 
     const toolName = attributes?.input?.name ?? "custom";
-    const parentSpan = this.getParentSpan(parentRunId);
+    const effectiveParentRunId =
+      parentRunId ??
+      attributes.parentRunId ??
+      this.inferredParents.get(runId);
+    const parentSpan = this.getParentSpan(effectiveParentRunId);
     const ctx = trace.setSpan(context.active(), parentSpan);
     const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
     span.recordException(err);
@@ -252,7 +396,10 @@ class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
   private iterable: any;
   private output: Record<string, any> = {};
 
-  constructor(private rootSpan: Span) {}
+  constructor(
+    private rootSpan: Span,
+    private rootContext: Context,
+  ) {}
 
   async startStream(
     originalFunc: (...args: any[]) => any,
@@ -266,7 +413,7 @@ class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
   }
 
   async *[Symbol.asyncIterator]() {
-    const spanContext = trace.setSpan(context.active(), this.rootSpan);
+    const spanContext = trace.setSpan(this.rootContext, this.rootSpan);
     try {
       const iterator = await this.iterable[Symbol.asyncIterator]();
       while (true) {
@@ -356,6 +503,7 @@ export class LanggraphWrapper {
     // Set the active flag to prevent nested instrumentation (e.g., when invoke calls stream internally)
     const ctxWithSpan = trace.setSpan(context.active(), span);
     const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
+    enterWithContext(ctxWithFlag);
 
     return context.with(ctxWithFlag, async () => {
       if (process.env.NETRA_DEBUG_LOGS) {
@@ -416,7 +564,10 @@ export class LanggraphWrapper {
     setGraphInputAttributes(span, input);
     const updatedConfig = this.getUpdatedConfig(config, span);
     try {
-      const streamingWrapper = new LanggraphStreamingWrapper(span);
+      const ctxWithSpan = trace.setSpan(context.active(), span);
+      const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
+      enterWithContext(ctxWithFlag);
+      const streamingWrapper = new LanggraphStreamingWrapper(span, ctxWithFlag);
       return streamingWrapper.startStream(
         originalFunc,
         instance,

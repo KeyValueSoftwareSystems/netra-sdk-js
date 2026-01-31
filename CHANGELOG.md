@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-01-31
+
+### Fixed
+
+- **LangGraph v0.2.x Hierarchy Fallback**: Added a best-effort parent inference stack when `parentRunId` is missing, so LangGraph node/LLM/tool spans can still nest under the workflow for older LangGraph versions.
+- **LangGraph Node Naming**: Added runName/chainId fallback naming when `langgraph_node` metadata is absent to avoid unnamed spans.
+- **LangChain Instrumentation Isolation**: When `NetraInstruments.LANGCHAIN` is disabled, Traceloop's LangChain callback handler injection is now blocked to prevent duplicate or flat traces.
+
 ## [1.0.2] - 2026-01-30
 
 ### Changed

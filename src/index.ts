@@ -10,6 +10,7 @@ import {
   SpanKind,
   trace
 } from "@opentelemetry/api";
+import { createRequire } from "module";
 import { Dashboard } from "./api/dashboard";
 import { Evaluation } from "./api/evaluation";
 import { Usage } from "./api/usage";
@@ -193,6 +194,21 @@ export class Netra {
 
     this._initialized = true;
     console.info("Netra successfully initialized.");
+    if (cfg.debugMode) {
+      let pkgVersion = Config.LIBRARY_VERSION;
+      let pkgPath = "unknown";
+      try {
+        const req = createRequire(import.meta.url);
+        pkgPath = req.resolve("../package.json");
+        const pkg = req("../package.json");
+        pkgVersion = pkg?.version || pkgVersion;
+      } catch {
+        // keep defaults
+      }
+      console.debug(
+        `[Netra Debug] SDK version=${pkgVersion} libraryVersion=${Config.LIBRARY_VERSION} build=langgraph-parenting-v3 packageJson=${pkgPath}`,
+      );
+    }
 
     // Graceful shutdown logic
     const handleSignal = async (signal: string) => {
