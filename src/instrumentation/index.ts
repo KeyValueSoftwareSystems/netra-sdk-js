@@ -2,7 +2,7 @@
  * Instrumentation setup for Netra SDK
  */
 
-import { trace } from "@opentelemetry/api";
+import { context, trace } from "@opentelemetry/api";
 import {
   ConsoleSpanExporter,
   SpanExporter,
@@ -61,6 +61,122 @@ propagation.setGlobalPropagator(
     propagators: [new W3CTraceContextPropagator(), new BaggagePropagator()],
   }),
 );
+
+function patchTraceloopLangchainCallbackHandler(): void {
+  const applyPatch = (mod: any, sourceLabel: string) => {
+    const Handler = mod?.TraceloopCallbackHandler;
+    if (!Handler || Handler.__netra_patched) return;
+
+    const wrapWithParentContext = (methodName: string) => {
+      const original = Handler.prototype[methodName];
+      if (typeof original !== "function") return;
+      Handler.prototype[methodName] = function (...args: any[]) {
+        const parentRunId = args[3];
+        const parentSpan = parentRunId
+          ? this?.spans?.get(parentRunId)?.span
+          : undefined;
+        const active = trace.getSpan(context.active());
+        if (process.env.NETRA_DEBUG_LOGS) {
+          console.log(
+            `[Netra Debug] Traceloop ${methodName}: runId=${args[2]} parentRunId=${parentRunId} parentSpan=${parentSpan ? "yes" : "no"} activeSpanId=${active?.spanContext().spanId}`,
+          );
+        }
+        // Always bind the current active context (or explicit parent) for this callback.
+        const ctx = parentSpan
+          ? trace.setSpan(context.active(), parentSpan)
+          : context.active();
+        return context.with(ctx, () => original.apply(this, args));
+      };
+    };
+
+    wrapWithParentContext("handleChainStart");
+    wrapWithParentContext("handleLLMStart");
+    wrapWithParentContext("handleChatModelStart");
+    wrapWithParentContext("handleToolStart");
+
+    Handler.__netra_patched = true;
+    if (process.env.NETRA_DEBUG_LOGS) {
+      console.log(
+        `[Netra Debug] Patched TraceloopCallbackHandler for parent context (${sourceLabel}).`,
+      );
+    }
+  };
+
+  try {
+    const mod = require("@traceloop/instrumentation-langchain");
+    if (process.env.NETRA_DEBUG_LOGS) {
+      console.log(
+        `[Netra Debug] Loaded @traceloop/instrumentation-langchain via require from ${require.resolve("@traceloop/instrumentation-langchain")}`,
+      );
+    }
+    applyPatch(mod, "require");
+    return;
+  } catch (e) {
+    if (process.env.NETRA_DEBUG_LOGS) {
+      console.log("[Netra Debug] require() for traceloop langchain failed, falling back to import().");
+    }
+  }
+
+  import("@traceloop/instrumentation-langchain")
+    .then((mod: any) => {
+      applyPatch(mod, "import");
+    })
+    .catch(() => {
+      // No-op: langchain instrumentation not installed or not in use
+    });
+}
+
+function disableTraceloopLangchainCallbackHandler(): void {
+  try {
+    const callbackManagerModule = require("@langchain/core/callbacks/manager");
+    const CallbackManager = callbackManagerModule?.CallbackManager;
+    if (!CallbackManager || (CallbackManager as any).__netra_disable_traceloop) {
+      return;
+    }
+    const originalConfigureSync = (CallbackManager as any)._configureSync;
+    if (typeof originalConfigureSync !== "function") return;
+
+    (CallbackManager as any)._configureSync = function (
+      inheritableHandlers: any,
+      localHandlers: any,
+      inheritableTags: any,
+      localTags: any,
+      inheritableMetadata: any,
+      localMetadata: any,
+      options?: any,
+    ) {
+      const filterHandlers = (handlers: any) => {
+        if (!handlers) return handlers;
+        if (Array.isArray(handlers)) {
+          return handlers.filter(
+            (h) => h?.name !== "traceloop_callback_handler",
+          );
+        }
+        return handlers;
+      };
+      const filteredInheritable = filterHandlers(inheritableHandlers);
+      const filteredLocal = filterHandlers(localHandlers);
+      return originalConfigureSync.call(
+        this,
+        filteredInheritable,
+        filteredLocal,
+        inheritableTags,
+        localTags,
+        inheritableMetadata,
+        localMetadata,
+        options,
+      );
+    };
+    (CallbackManager as any).__netra_disable_traceloop = true;
+    if (process.env.NETRA_DEBUG_LOGS) {
+      console.log(
+        "[Netra Debug] Disabled Traceloop LangChain callback injection.",
+      );
+    }
+  } catch {
+    // no-op
+  }
+}
 
 export function initInstrumentations(
   config: Config,
@@ -204,6 +320,12 @@ export function initInstrumentations(
   traceloopOptions.exporter = exporter;
 
   initialize(traceloopOptions);
+
+  if (instrumentModules.langchain) {
+    patchTraceloopLangchainCallbackHandler();
+  } else {
+    disableTraceloopLangchainCallbackHandler();
+  }
 
   // ---- rest stays same ----
   const tracerProvider = trace.getTracerProvider();
