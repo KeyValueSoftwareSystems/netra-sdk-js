@@ -10,8 +10,8 @@ import {
     ConversationResult,
     SimulationItem,
     SimulationResult,
-    TaskFunction,
 } from "./models";
+import { BaseTask } from "./task";
 import { executeTask, formatTraceId, validateSimulationInputs } from "./utils";
 
 const LOG_PREFIX = "netra.simulation";
@@ -21,7 +21,7 @@ const SPAN_NAME = "Netra.Simulation.TestRun";
 export interface SimulationOptions {
     name: string;
     datasetId: string;
-    task: TaskFunction;
+    task: BaseTask;
     context?: Record<string, any>;
     maxConcurrency?: number;  // default: 5
 }
@@ -96,7 +96,7 @@ export class Simulation {
     private async _runSimulationAsync(
         runId: string,
         runItems: SimulationItem[],
-        task: TaskFunction,
+        task: BaseTask,
         maxConcurrency: number,
     ): Promise<SimulationResult> {
         const results: SimulationResult = {
@@ -147,7 +147,7 @@ export class Simulation {
      */
     private async _executeConversation(
         runItem: SimulationItem,
-        task: TaskFunction,
+        task: BaseTask,
     ): Promise<ConversationResult> {
         const { runItemId, message: initialMessage, turnId: initialTurnId } = runItem;
         let message = initialMessage;

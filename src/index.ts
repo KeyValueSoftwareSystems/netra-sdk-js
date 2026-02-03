@@ -105,7 +105,7 @@ export type {
 } from "./api";
 
 // Export simulation types and classes
-export { Simulation } from "./simulation";
+export { BaseTask, Simulation } from "./simulation";
 export type {
   ConversationResponse,
   ConversationResult,

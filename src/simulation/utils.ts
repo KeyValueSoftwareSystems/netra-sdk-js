@@ -1,4 +1,4 @@
-import { TaskFunction } from "./models";
+import { BaseTask } from "./task";
 
 const LOG_PREFIX = "netra.simulation";
 
@@ -21,14 +21,14 @@ export function formatTraceId(traceId: number): string {
  */
 export function validateSimulationInputs(
     datasetId: string,
-    task: TaskFunction,
+    task: BaseTask,
 ): boolean {
     if (!datasetId) {
         console.error(`${LOG_PREFIX}: dataset_id is required`);
         return false;
     }
-    if (typeof task !== "function") {
-        console.error(`${LOG_PREFIX}: task must be a callable function`);
+    if (!(task instanceof BaseTask)) {
+        console.error(`${LOG_PREFIX}: task must be a BaseTask instance`);
         return false;
     }
     return true;
@@ -44,11 +44,11 @@ export function validateSimulationInputs(
  * @throws Error if the task returns an unsupported type
  */
 export async function executeTask(
-    task: TaskFunction,
+    task: BaseTask,
     message: string,
     sessionId: string | null,
 ): Promise<[string, string | null]> {
-    const result = task(message, sessionId);
+    const result = task.run(message, sessionId);
 
     // Check if result is a Promise (async function)
     const resolvedResult = result instanceof Promise ? await result : result;

@@ -11,6 +11,6 @@ export {
     type ConversationResult,
     type SimulationItem,
     type SimulationResult,
-    type TaskFunction,
     type TaskResult,
 } from "./models";
+export { BaseTask } from "./task";

@@ -55,10 +55,3 @@ export interface SimulationResult {
   totalItems: number;
 }
 
-/**
- * Type for user-provided task function.
- */
-export type TaskFunction = (
-  message: string,
-  sessionId: string | null,
-) => TaskResult | Promise<TaskResult>;
