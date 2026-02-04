@@ -12,7 +12,7 @@ import {
     SimulationResult,
 } from "./models";
 import { BaseTask } from "./task";
-import { executeTask, formatTraceId, validateSimulationInputs } from "./utils";
+import { executeTask, validateSimulationInputs } from "./utils";
 
 const LOG_PREFIX = "netra.simulation";
 const SPAN_NAME = "Netra.Simulation.TestRun";
@@ -159,12 +159,7 @@ export class Simulation {
                 const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);
                 span.start();
 
-                let traceId = "";
-                const otelSpan = span.getCurrentSpan();
-                if (otelSpan) {
-                    const spanContext = otelSpan.spanContext();
-                    traceId = formatTraceId(parseInt(spanContext.traceId, 16));
-                }
+                const traceId = span.getCurrentSpan()?.spanContext().traceId ?? "";
 
                 // Execute the user's task
                 const [responseMessage, taskSessionId] = await executeTask(
