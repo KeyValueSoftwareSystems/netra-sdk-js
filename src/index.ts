@@ -27,6 +27,7 @@ import {
   runWithEntityContext,
   SessionManager,
 } from "./session-manager";
+import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
 
@@ -102,6 +103,18 @@ export type {
   TraceSpan,
   TraceSummary
 } from "./api";
+
+// Export simulation types and classes
+export { BaseTask, Simulation } from "./simulation";
+export type {
+  ConversationResponse,
+  ConversationResult,
+  CreateRunResult,
+  SimulationItem,
+  SimulationOptions,
+  SimulationResult,
+  TaskResult,
+} from "./simulation";
 export * from "./exporters";
 
 let _initialized = false;
@@ -131,6 +144,18 @@ export class Netra {
    * Available after calling Netra.init()
    */
   static dashboard: Dashboard;
+
+  static simulation: Simulation;
+
+  /**
+   * Get the current Netra configuration
+   */
+  static getConfig(): Config {
+    if (!this._config) {
+      throw new Error("Netra SDK not initialized. Call Netra.init() first.");
+    }
+    return this._config;
+  }
 
   /**
    * Check if Netra has been initialized
@@ -191,6 +216,7 @@ export class Netra {
     this.usage = new Usage(cfg);
     this.evaluation = new Evaluation(cfg);
     this.dashboard = new Dashboard(cfg);
+    this.simulation = new Simulation(cfg);
 
     this._initialized = true;
     console.info("Netra successfully initialized.");
