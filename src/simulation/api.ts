@@ -71,6 +71,39 @@ export class Simulation {
             return null;
         }
 
+        let interrupted = false;
+        const proc = typeof process !== "undefined" ? process : undefined;
+        const finalizeFailure = (signal?: NodeJS.Signals) => {
+            if (interrupted) {
+                return;
+            }
+            interrupted = true;
+            proc?.removeListener("SIGINT", handleSignal);
+            proc?.removeListener("SIGTERM", handleSignal);
+            proc?.removeListener("uncaughtException", handleException);
+            proc?.removeListener("unhandledRejection", handleRejection);
+            void this._client.postRunStatus(runId, "failed").finally(() => {
+                if (signal) {
+                    proc?.kill(proc.pid, signal);
+                }
+            });
+        };
+        const handleSignal = (signal: "SIGINT" | "SIGTERM") => {
+            finalizeFailure(signal);
+        };
+        const handleException = () => {
+            finalizeFailure();
+        };
+        const handleRejection = () => {
+            finalizeFailure();
+        };
+        if (proc && typeof proc.once === "function") {
+            proc.once("SIGINT", handleSignal);
+            proc.once("SIGTERM", handleSignal);
+            proc.once("uncaughtException", handleException);
+            proc.once("unhandledRejection", handleRejection);
+        }
+
         console.info(
             `${LOG_PREFIX}: Starting simulation with ${simulationItems.length} items`,
         );
@@ -93,6 +126,13 @@ export class Simulation {
             console.error(`${LOG_PREFIX}: Run simulation failed`);
             await this._client.postRunStatus(runId, "failed");
             throw error;
+        } finally {
+            if (proc && typeof proc.removeListener === "function") {
+                proc.removeListener("SIGINT", handleSignal);
+                proc.removeListener("SIGTERM", handleSignal);
+                proc.removeListener("uncaughtException", handleException);
+                proc.removeListener("unhandledRejection", handleRejection);
+            }
         }
     }
 
