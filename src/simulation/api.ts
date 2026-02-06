@@ -75,19 +75,25 @@ export class Simulation {
             `${LOG_PREFIX}: Starting simulation with ${simulationItems.length} items`,
         );
 
-        const result = await this._runSimulationAsync(
-            runId,
-            simulationItems,
-            task,
-            maxConcurrency,
-        );
+        try {
+            const result = await this._runSimulationAsync(
+                runId,
+                simulationItems,
+                task,
+                maxConcurrency,
+            );
 
-        const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
-        console.info(
-            `${LOG_PREFIX}: Simulation completed in ${elapsedTime} seconds`,
-        );
+            const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
+            console.info(
+                `${LOG_PREFIX}: Simulation completed in ${elapsedTime} seconds`,
+            );
 
-        return result;
+            return result;
+        } catch (error) {
+            console.error(`${LOG_PREFIX}: Run simulation failed`);
+            await this._client.postRunStatus(runId, "failed");
+            throw error;
+        }
     }
 
     /**
@@ -114,7 +120,7 @@ export class Simulation {
         // Process items with concurrency control
         const promises = runItems.map((runItem) =>
             limit(async () => {
-                const result = await this._executeConversation(runItem, task);
+                const result = await this._executeConversation(runId, runItem, task);
 
                 if (result.success) {
                     results.completed.push(result);
@@ -146,6 +152,7 @@ export class Simulation {
      * Execute a multi-turn conversation for a single simulation item.
      */
     private async _executeConversation(
+        runId: string,
         runItem: SimulationItem,
         task: BaseTask,
     ): Promise<ConversationResult> {
@@ -211,7 +218,7 @@ export class Simulation {
                 console.error(
                     `${LOG_PREFIX}: Task failed run_item_id=${runItemId}, turn_id=${turnId}: ${errorMsg}`,
                 );
-                await this._client.reportFailure(runItemId, errorMsg);
+                await this._client.reportFailure(runId, runItemId, errorMsg);
                 return {
                     runItemId,
                     success: false,

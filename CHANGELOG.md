@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Data models for simulation items and results
 - Implemented concurrency control using `p-limit` (default: 5 concurrent tasks)
 - Added trace context propagation for simulation tasks
+
 ## [1.0.3] - 2026-01-31
 
 ### Fixed

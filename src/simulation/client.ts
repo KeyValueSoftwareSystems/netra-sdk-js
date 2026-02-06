@@ -202,16 +202,16 @@ export class SimulationHttpClient {
     /**
      * Report a task execution failure to the backend.
      */
-    async reportFailure(runItemId: string, error: string): Promise<void> {
+    async reportFailure(runId: string, runItemId: string, error: string): Promise<void> {
         if (!this.client) {
             console.error(`${LOG_PREFIX}: Client not initialized`);
             return;
         }
 
         try {
-            const url = `/evaluations/run/${runItemId}/item`;
-            const payload = { status: "failed" };
-            await this.client.post(url, payload);
+            const url = `/evaluations/run/${runId}/item/${runItemId}/status`;
+            const payload = { status: "failed", failureReason: error };
+            await this.client.patch(url, payload);
             console.info(`${LOG_PREFIX}: Reported failure - ${error}`);
         } catch (err) {
             const errorMsg = this._extractErrorMessage(err);
