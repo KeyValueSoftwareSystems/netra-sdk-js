@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-02-12
+
+### Fixed
+
+- **LangGraph Instrumentation in Deferred-Load Apps**: Fixed cases where `Netra.init()` succeeded but traces were missing because LangGraph was loaded later by another package/module (for example DI-based app layouts). Instrumentation now defers patching until the actual application module is loaded.
+- **LangGraph Instrumentation in ESM Runtimes**: Fixed regression in ESM-first projects (such as the LangGraph TypeScript example) where CommonJS module-load hooks alone were insufficient to patch LangGraph.
+- **Cross-Instance Repatching**: Improved LangGraph patching logic to allow re-patching when a different module instance is discovered later, preventing silent no-op behavior in multi-copy dependency layouts.
+
+### Changed
+
+- **LangGraph Module Resolution Strategy**: Switched to a hybrid strategy:
+  - `require.cache` detection when module is already loaded
+  - deferred `Module._load` hook for CommonJS/deferred-load paths
+  - dynamic import fallback for ESM/preloaded paths
+- **Peer Dependency Flexibility**: Updated `@langchain/langgraph` peer range to `>=0.2.0` and marked LangGraph/Ollama peers as optional to reduce forced/mismatched installs in consumers that do not directly depend on those packages.
+
 ## [1.0.4] - 2026-02-04
 
 ### Added

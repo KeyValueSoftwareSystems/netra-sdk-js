@@ -1,6 +1,6 @@
 {
   "name": "netra-sdk",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "A comprehensive TypeScript/JavaScript SDK for AI application observability built on top of OpenTelemetry and Traceloop",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -60,7 +60,7 @@
     "shimmer": "^1.2.1"
   },
   "peerDependencies": {
-    "@langchain/langgraph": "^1.1.1",
+    "@langchain/langgraph": ">=0.2.0",
     "@langchain/ollama": "^1.2.1",
     "@mistralai/mistralai": ">=1.0.0",
     "@google/generative-ai": "^0.24.1",
@@ -94,6 +94,12 @@
       "optional": true
     },
     "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@langchain/langgraph": {
+      "optional": true
+    },
+    "@langchain/ollama": {
       "optional": true
     }
   },
