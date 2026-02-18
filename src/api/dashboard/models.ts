@@ -24,6 +24,8 @@ export enum Measure {
   TOTAL_COST = "Total Cost",
   VIOLATIONS = "Violations",
   TOTAL_TOKENS = "Total Tokens",
+  AUDIO_DURATION = "Audio Duration",
+  CHARACTER_COUNT = "Character Count",
 }
 
 export enum Aggregation {
@@ -224,5 +226,5 @@ export interface SessionStatsData {
   totalRequests: number;
   totalCost: number;
   session_duration: string;
-  cursor: string
+  cursor: string;
 }
