@@ -2,7 +2,6 @@
  * Internal HTTP client for Dashboard APIs
  */
 
-import { Session } from "openai/resources/beta/realtime.mjs";
 import { Config } from "../../config";
 import { NetraHttpClient } from "../http-client";
 import {
@@ -108,7 +107,7 @@ export class DashboardHttpClient extends NetraHttpClient {
    * Returns:
    *   The session stats response data or null on error.
    */
-async getSessionStats(
+  async getSessionStats(
     startTime: string,
     endTime: string,
     filters?: SessionFilter[],
@@ -148,7 +147,7 @@ async getSessionStats(
           payload.pagination.limit = limit;
         }
 
-        if (cursor !== undefined) { 
+        if (cursor !== undefined) {
           payload.pagination.cursor = cursor;
         }
       }
