@@ -9,6 +9,7 @@ import {
   ChartType,
   Dimension,
   FilterConfig,
+  Measure,
   Metrics,
   QueryDataParams,
   QueryResponse,
@@ -204,12 +205,24 @@ async getSessionStats(
   }
 
   private isValidMetrics(metrics: any): metrics is Metrics {
-    return (
+    const hasBaseShape =
       metrics &&
       typeof metrics === "object" &&
       "measure" in metrics &&
-      "aggregation" in metrics
-    );
+      "aggregation" in metrics;
+
+    if (!hasBaseShape) {
+      return false;
+    }
+
+    if (metrics.measure === Measure.CUSTOM) {
+      return (
+        typeof metrics.metricName === "string" &&
+        metrics.metricName.trim().length > 0
+      );
+    }
+
+    return true;
   }
 
   private isValidFilterConfig(filter: any): filter is FilterConfig {

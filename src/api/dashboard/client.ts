@@ -43,6 +43,7 @@ export class DashboardHttpClient extends NetraHttpClient {
       metrics: {
         measure: metrics.measure,
         aggregation: metrics.aggregation,
+        ...(metrics.metricName ? { metricName: metrics.metricName } : {}),
       },
     };
 

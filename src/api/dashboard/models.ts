@@ -26,6 +26,7 @@ export enum Measure {
   TOTAL_TOKENS = "Total Tokens",
   AUDIO_DURATION = "Audio Duration",
   CHARACTER_COUNT = "Character Count",
+  CUSTOM = "Custom",
 }
 
 export enum Aggregation {
@@ -133,6 +134,7 @@ export interface Filter {
 export interface Metrics {
   measure: Measure;
   aggregation: Aggregation;
+  metricName?: string;
 }
 
 export interface Dimension {

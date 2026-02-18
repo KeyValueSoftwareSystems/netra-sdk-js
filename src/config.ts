@@ -12,6 +12,8 @@ export interface NetraConfig {
   resourceAttributes?: Record<string, any>;
   environment?: string;
   enableScrubbing?: boolean;
+  enableMetrics?: boolean;
+  metricsExportIntervalMs?: number;
   blockedSpans?: string[];
   instruments?: Set<NetraInstruments>;
   blockInstruments?: Set<NetraInstruments>;
@@ -80,6 +82,8 @@ export class Config {
   debugMode: boolean;
   enableRootSpan: boolean;
   enableScrubbing: boolean;
+  enableMetrics: boolean;
+  metricsExportIntervalMs: number;
   environment: string;
   resourceAttributes: Record<string, any>;
   blockedSpans?: string[];
@@ -113,6 +117,16 @@ export class Config {
       config.enableScrubbing,
       "NETRA_ENABLE_SCRUBBING",
       false,
+    );
+    this.enableMetrics = this._getBoolConfig(
+      config.enableMetrics,
+      "NETRA_ENABLE_METRICS",
+      false,
+    );
+    this.metricsExportIntervalMs = this._getNumberConfig(
+      config.metricsExportIntervalMs,
+      "NETRA_METRICS_EXPORT_INTERVAL",
+      60000,
     );
     this.environment = config.environment || process.env.NETRA_ENV || "local";
     this.resourceAttributes = this._getResourceAttributes(
@@ -235,6 +249,24 @@ export class Config {
     }
   }
 
+  private _getNumberConfig(
+    param: number | undefined,
+    envVar: string,
+    defaultValue: number,
+  ): number {
+    if (param !== undefined) {
+      return param;
+    }
+
+    const envValue = process.env[envVar];
+    if (envValue === undefined) {
+      return defaultValue;
+    }
+
+    const parsed = Number.parseInt(envValue, 10);
+    return Number.isFinite(parsed) ? parsed : defaultValue;
+  }
+
   private _setTraceContentEnv(): void {
     process.env.TRACELOOP_TRACE_CONTENT = this.traceContent ? "true" : "false";
   }
@@ -255,6 +287,24 @@ export class Config {
     // Append /v1/traces if not already present
     if (!cleanUrl.endsWith("/v1/traces")) {
       return `${cleanUrl}/v1/traces`;
+    }
+
+    return cleanUrl;
+  }
+
+  /**
+   * Format the OTLP endpoint URL by appending /v1/metrics if not already present
+   */
+  public formatOtlpMetricsEndpoint(): string | undefined {
+    if (!this.otlpEndpoint) {
+      return undefined;
+    }
+
+    const url = this.otlpEndpoint.trim();
+    const cleanUrl = url.endsWith("/") ? url.slice(0, -1) : url;
+
+    if (!cleanUrl.endsWith("/v1/metrics")) {
+      return `${cleanUrl}/v1/metrics`;
     }
 
     return cleanUrl;
