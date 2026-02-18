@@ -24,6 +24,7 @@ export enum Measure {
   TOTAL_COST = "Total Cost",
   VIOLATIONS = "Violations",
   TOTAL_TOKENS = "Total Tokens",
+  CUSTOM = "Custom",
 }
 
 export enum Aggregation {
@@ -131,6 +132,7 @@ export interface Filter {
 export interface Metrics {
   measure: Measure;
   aggregation: Aggregation;
+  metricName?: string;
 }
 
 export interface Dimension {
