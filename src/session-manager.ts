@@ -28,6 +28,7 @@ interface EntityContext {
   spanStack: string[];
   spansByName: Map<string, Span[]>;
   activeSpans: Span[];
+  conversations: Map<Span, any[]>;
 }
 
 // AsyncLocalStorage for entity context (internal SDK state)
@@ -41,6 +42,7 @@ const globalFallbackContext: EntityContext = {
   spanStack: [],
   spansByName: new Map(),
   activeSpans: [],
+  conversations: new Map(),
 };
 
 /**
@@ -67,6 +69,7 @@ export function runWithEntityContext<T>(fn: () => T): T {
     spanStack: [],
     spansByName: new Map(),
     activeSpans: [],
+    conversations: new Map(),
   };
   return entityStorage.run(newContext, fn);
 }
@@ -270,16 +273,10 @@ export class SessionManager {
         return;
       }
 
-      // Get existing conversation
-      const existing: Array<{
-        type: string;
-        role: string;
-        content: string | Record<string, any>;
-        format: string;
-      }> = [];
+      // Get or create conversation history for this span in the current context
+      const ctx = getOrCreateEntityContext();
+      const existing = ctx.conversations.get(span) || [];
 
-      // Try to get existing conversation from span attributes
-      // Note: This is a simplified version - in production you'd need to access span internals
       const maxLen = Config.CONVERSATION_MAX_LEN;
       const processedContent =
         typeof content === "string"
@@ -294,6 +291,7 @@ export class SessionManager {
       };
 
       existing.push(entry);
+      ctx.conversations.set(span, existing);
 
       // Set conversation attribute
       span.setAttribute("conversation", JSON.stringify(existing));
