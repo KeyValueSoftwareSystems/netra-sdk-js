@@ -134,6 +134,9 @@ export class SessionManager {
           break;
         }
       }
+
+      // Cleanup conversations to prevent memory leaks
+      ctx.conversations.delete(span);
     } catch (e) {
       console.error(`Failed to unregister span '${name}':`, e);
     }
