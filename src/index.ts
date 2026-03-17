@@ -34,13 +34,14 @@ import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { MeterSetup } from "./meter";
 import { SpanType } from "./types";
+import { Prompts } from "./api";
 
 export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
   InstrumentationSpanProcessor,
   ScrubbingSpanProcessor,
-  SessionSpanProcessor
+  SessionSpanProcessor,
 } from "./processors";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
@@ -68,7 +69,9 @@ export {
   RunStatus,
   Scope,
   // Usage API
-  Usage
+  Usage,
+  // Prompts API
+  Prompts,
 } from "./api";
 
 export type {
@@ -105,7 +108,9 @@ export type {
   TimeSeriesWithDimension,
   TracesPage,
   TraceSpan,
-  TraceSummary
+  TraceSummary,
+  GetPromptParams,
+  PromptResponse,
 } from "./api";
 
 // Export simulation types and classes
@@ -151,6 +156,12 @@ export class Netra {
   static dashboard: Dashboard;
 
   static simulation: Simulation;
+
+  /**
+   * Prompts API client for prompt versioning
+   * Available after calling Netra.init()
+   */
+  static prompts: Prompts;
 
   /**
    * Get the current Netra configuration
@@ -249,6 +260,7 @@ export class Netra {
     this.evaluation = new Evaluation(cfg);
     this.dashboard = new Dashboard(cfg);
     this.simulation = new Simulation(cfg);
+    this.prompts = new Prompts(cfg);
 
     this._initialized = true;
     console.info("Netra successfully initialized.");
