@@ -4,7 +4,15 @@
  * Built on top of OpenTelemetry and Traceloop
  */
 
-import { context, Span, SpanKind, trace } from "@opentelemetry/api";
+import {
+  context,
+  Meter,
+  metrics,
+  Span,
+  SpanKind,
+  trace
+} from "@opentelemetry/api";
+import { MeterProvider } from "@opentelemetry/sdk-metrics";
 import { createRequire } from "module";
 import { Dashboard } from "./api/dashboard";
 import { Evaluation } from "./api/evaluation";
@@ -24,6 +32,7 @@ import {
 } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
+import { MeterSetup } from "./meter";
 import { SpanType } from "./types";
 import { Prompts } from "./api";
 
@@ -126,6 +135,7 @@ export class Netra {
   private static _config: Config | undefined;
 
   private static _tracer: any;
+  private static _meterProvider: MeterProvider | undefined;
 
   /**
    * Usage API client for usage and traces
@@ -168,6 +178,24 @@ export class Netra {
    */
   static isInitialized(): boolean {
     return this._initialized;
+  }
+
+  /**
+   * Get an OpenTelemetry meter for creating custom metrics instruments.
+   */
+  static getMeter(name: string, version: string = "1.0.0"): Meter {
+    if (!Netra._initialized || !Netra._config) {
+      throw new Error("Netra SDK not initialized. Call Netra.init() first.");
+    }
+
+    if (!Netra._config.enableMetrics || !Netra._meterProvider) {
+      throw new Error(
+        "Metrics are not enabled. Set enableMetrics: true in Netra.init() config.",
+      );
+    }
+
+    // Standard OTel usage: obtain meter from global Metrics API.
+    return metrics.getMeter(name, version);
   }
 
   /**
@@ -216,6 +244,15 @@ export class Netra {
         Config.LIBRARY_NAME,
         Config.LIBRARY_VERSION,
       );
+    }
+
+    if (cfg.enableMetrics) {
+      this._meterProvider = MeterSetup.setup(cfg);
+      if (cfg.debugMode) {
+        console.debug(
+          `[Netra Debug] metrics enabled=${Boolean(this._meterProvider)} endpoint=${cfg.formatOtlpMetricsEndpoint()}`,
+        );
+      }
     }
 
     // Initialize API clients
@@ -360,10 +397,32 @@ export class Netra {
     }
 
     try {
-      const provider = trace.getTracerProvider();
-
-      // Define timeouts
       const FLUSH_TIMEOUT_MS = 5000;
+
+      if (this._meterProvider) {
+        const meterProvider = this._meterProvider;
+        const meterFlushPromise = (async () => {
+          if (
+            "forceFlush" in meterProvider &&
+            typeof meterProvider.forceFlush === "function"
+          ) {
+            await meterProvider.forceFlush();
+          }
+          if (
+            "shutdown" in meterProvider &&
+            typeof meterProvider.shutdown === "function"
+          ) {
+            await meterProvider.shutdown();
+          }
+        })();
+
+        await Promise.race([
+          meterFlushPromise,
+          new Promise((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
+        ]);
+      }
+
+      const provider = trace.getTracerProvider();
 
       const flushPromise = (async () => {
         if (
@@ -390,6 +449,7 @@ export class Netra {
 
     this._initialized = false;
     this._tracer = undefined;
+    this._meterProvider = undefined;
   }
 
   /**
