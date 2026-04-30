@@ -107,6 +107,42 @@ export class EvaluationHttpClient extends NetraHttpClient {
   }
 
   /**
+   * Fetch test run results by run ID
+   * @param runId The id of the run to fetch
+   * @returns The run results data
+   */
+  async getRunResults(runId: string): Promise<any> {
+    if (!this.isInitialized()) {
+      console.error(
+        "netra.evaluation: Evaluation client is not initialized; cannot fetch run",
+      );
+      return { success: false };
+    }
+
+    try {
+      const response = await this.get(`/evaluations/run/${runId}`);
+      if (!response.ok) {
+        const errorMessage =
+          response.data?.error?.message ?? "Unknown error";
+        console.error(
+          `netra.evaluation: Failed to fetch run results for run '${runId}': ${errorMessage}`,
+        );
+        return null;
+      }
+      const data = this.extractData(response, null);
+      if (data !== null) {
+        console.info("netra.evaluation: Run fetched successfully");
+      }
+      return data;
+    } catch {
+      console.error(
+        `netra.evaluation: Failed to fetch run results for run '${runId}'`,
+      );
+      return null;
+    }
+  }
+
+  /**
    * Submit a new run item to the backend
    */
   async postRunItem(runId: string, payload: Record<string, any>): Promise<any> {
