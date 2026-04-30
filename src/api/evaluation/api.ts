@@ -200,6 +200,23 @@ export class Evaluation {
   }
 
   /**
+   * Fetch test run results based on run ID
+   * @param runId The id of the run to fetch
+   * @returns The run results data
+   */
+  async getRunResults(runId: string): Promise<any> {
+    if (!runId) {
+      console.error(
+        "netra.evaluation: Failed to get run: run_id is required",
+      );
+      return null;
+    }
+
+    const response = await this.client.getRunResults(runId);
+    return response;
+  }
+
+  /**
    * Netra evaluation function to initiate a test suite
    * @param name The name of the run
    * @param data The dataset to be used for the test suite
