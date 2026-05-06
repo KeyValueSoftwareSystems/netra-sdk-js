@@ -31,6 +31,7 @@ export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
   InstrumentationSpanProcessor,
+  RootSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "./processors";
@@ -558,6 +559,42 @@ export class Netra {
     content: string | Record<string, any>,
   ): void {
     SessionManager.addConversation(conversationType, role, content);
+  }
+
+  /**
+   * Set the input attribute on the current active span.
+   * 
+   * @param value - The input value to record
+   */
+  static setInput(value: any): void {
+    SessionManager.setInput(value);
+  }
+
+  /**
+   * Set the output attribute on the current active span.
+   *
+   * @param value - The output value to record
+   */
+  static setOutput(value: any): void {
+    SessionManager.setOutput(value);
+  }
+
+  /**
+   * Set the input attribute on the root span of the current trace.
+   *
+   * @param value - The input value to record
+   */
+  static setRootInput(value: any): void {
+    SessionManager.setRootInput(value);
+  }
+
+  /**
+   * Set the output attribute on the root span of the current trace.
+   *
+   * @param value - The output value to record
+   */
+  static setRootOutput(value: any): void {
+    SessionManager.setRootOutput(value);
   }
 
   /**

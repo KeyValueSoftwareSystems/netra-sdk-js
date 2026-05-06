@@ -9,6 +9,7 @@
 import { Span, context, trace } from "@opentelemetry/api";
 import { AsyncLocalStorage } from "async_hooks";
 import { Config } from "./config";
+import { RootSpanProcessor } from "./processors/root-span-processor";
 
 export enum ConversationType {
   INPUT = "input",
@@ -130,6 +131,14 @@ export class SessionManager {
           ctx.activeSpans.splice(i, 1);
           break;
         }
+      }
+
+      // Restore currentSpan to the previous active span (stack-like behavior)
+      if (ctx.currentSpan === span) {
+        ctx.currentSpan =
+          ctx.activeSpans.length > 0
+            ? ctx.activeSpans[ctx.activeSpans.length - 1]
+            : undefined;
       }
     } catch (e) {
       console.error(`Failed to unregister span '${name}':`, e);
@@ -307,7 +316,10 @@ export class SessionManager {
     attrValue: any
   ): void {
     try {
-      const span = trace.getActiveSpan();
+      let span = trace.getActiveSpan();
+      if (!span || !span.isRecording()) {
+        span = this.getCurrentSpan();
+      }
       if (span && span.isRecording()) {
         const value =
           typeof attrValue === "string"
@@ -319,6 +331,106 @@ export class SessionManager {
       }
     } catch (e) {
       console.error(`Failed to set attribute '${attrKey}' on active span:`, e);
+    }
+  }
+
+  /**
+   * Set an attribute on the root span of the current trace.
+   *
+   * @param attrKey - Key for the attribute to set
+   * @param attrValue - Value for the attribute to set
+   */
+  static setAttributeOnRootSpan(attrKey: string, attrValue: any): void {
+    try {
+      const value =
+        typeof attrValue === "string"
+          ? attrValue
+          : JSON.stringify(attrValue);
+
+      const activeSpan = trace.getActiveSpan() ?? this.getCurrentSpan();
+      if (activeSpan) {
+        const rootViaProcessor = RootSpanProcessor.getRootSpan(activeSpan);
+        if (rootViaProcessor && rootViaProcessor.isRecording()) {
+          rootViaProcessor.setAttribute(attrKey, value);
+          return;
+        }
+      }
+
+      console.warn(`No root or active span to set attribute '${attrKey}'`);
+    } catch (e) {
+      console.error(`Failed to set attribute '${attrKey}' on root span:`, e);
+    }
+  }
+
+  /**
+   * Serialize a value for span attributes.
+   *
+   * Objects and arrays are JSON-serialized; primitives are converted with
+   * String(). The result is truncated to Config.ATTRIBUTE_MAX_LEN characters.
+   *
+   * @param value - The value to serialize
+   * @returns The serialized and truncated string
+   */
+  private static serializeAttributeValue(value: any): string {
+    if (typeof value === "object" && value !== null) {
+      return JSON.stringify(value).substring(0, Config.ATTRIBUTE_MAX_LEN);
+    }
+    return String(value).substring(0, Config.ATTRIBUTE_MAX_LEN);
+  }
+
+  /**
+   * Set the input attribute on the current active span.
+   *
+   * @param value - The input value to record
+   */
+  static setInput(value: any): void {
+    try {
+      const serialized = this.serializeAttributeValue(value);
+      this.setAttributeOnActiveSpan("input", serialized);
+    } catch (e) {
+      console.error("SessionManager.setInput: failed to set input attribute:", e);
+    }
+  }
+
+  /**
+   * Set the output attribute on the current active span.
+   *
+   * @param value - The output value to record
+   */
+  static setOutput(value: any): void {
+    try {
+      const serialized = this.serializeAttributeValue(value);
+      this.setAttributeOnActiveSpan("output", serialized);
+    } catch (e) {
+      console.error("SessionManager.setOutput: failed to set output attribute:", e);
+    }
+  }
+
+  /**
+   * Set the input attribute on the root span of the current trace.
+   *
+   * @param value - The input value to record
+   */
+  static setRootInput(value: any): void {
+    try {
+      const serialized = this.serializeAttributeValue(value);
+      this.setAttributeOnRootSpan("input", serialized);
+    } catch (e) {
+      console.error("SessionManager.setRootInput: failed to set input attribute on root span:", e);
+    }
+  }
+
+  /**
+   * Set the output attribute on the root span of the current trace.
+   *
+   * @param value - The output value to record
+   */
+  static setRootOutput(value: any): void {
+    try {
+      const serialized = this.serializeAttributeValue(value);
+      this.setAttributeOnRootSpan("output", serialized);
+    } catch (e) {
+      console.error("SessionManager.setRootOutput: failed to set output attribute on root span:", e);
     }
   }
 }

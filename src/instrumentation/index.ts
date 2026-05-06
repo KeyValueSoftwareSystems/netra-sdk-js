@@ -14,6 +14,7 @@ import { Config, NetraInstruments } from "../config";
 import {
   InstrumentationSpanProcessor,
   LlmTraceIdentifierSpanProcessor,
+  RootSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "../processors";
@@ -651,7 +652,11 @@ function addCustomSpanProcessors(
     const llmTraceProcessor = new LlmTraceIdentifierSpanProcessor();
     provider.addSpanProcessor(llmTraceProcessor);
 
-    // 4. Scrubbing Span Processor - scrubs sensitive data (if enabled)
+    // 4. Root Span Processor - tracks root spans by trace ID for setRootInput/setRootOutput
+    const rootSpanProcessor = new RootSpanProcessor();
+    provider.addSpanProcessor(rootSpanProcessor);
+
+    // 5. Scrubbing Span Processor - scrubs sensitive data (if enabled)
     if (config.enableScrubbing) {
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);
