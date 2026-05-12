@@ -4,7 +4,7 @@
 
 export interface GetPromptParams {
   name: string;
-  label: string;
+  label?: string;
 }
 
 /**
