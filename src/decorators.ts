@@ -9,6 +9,11 @@ import { SpanType, DecoratorOptions } from "./types";
 
 type AnyFunction = (...args: any[]) => any;
 type AsyncFunction = (...args: any[]) => Promise<any>;
+type DecoratorFunction = (
+  _target: any,
+  _key: string,
+  descriptor: PropertyDescriptor,
+) => PropertyDescriptor;
 
 function serializeValue(value: any): string {
   try {
@@ -30,11 +35,20 @@ function serializeValue(value: any): string {
   }
 }
 
+function getParameterNames(func: AnyFunction): string[] {
+  const funcStr = func.toString();
+  const match = funcStr.match(/\(([^)]*)\)/);
+  if (!match) return [];
+  return match[1]
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p);
+}
+
 function addSpanAttributes(
   span: Span,
   func: AnyFunction,
   args: any[],
-  kwargs: Record<string, any>,
   entityType: string
 ): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
@@ -50,10 +64,6 @@ function addSpanAttributes(
       }
     }
 
-    for (const [key, value] of Object.entries(kwargs)) {
-      inputData[key] = serializeValue(value);
-    }
-
     if (Object.keys(inputData).length > 0) {
       span.setAttribute(
         `${Config.LIBRARY_NAME}.entity.input`,
@@ -61,231 +71,153 @@ function addSpanAttributes(
       );
     }
   } catch (e) {
-    span.setAttribute(
-      `${Config.LIBRARY_NAME}.input_error`,
-      String(e)
-    );
+    span.setAttribute(`${Config.LIBRARY_NAME}.input_error`, String(e));
   }
 }
 
 function addOutputAttributes(span: Span, result: any): void {
   try {
-    const serializedOutput = serializeValue(result);
     span.setAttribute(
       `${Config.LIBRARY_NAME}.entity.output`,
-      serializedOutput
+      serializeValue(result),
     );
   } catch (e) {
-    span.setAttribute(
-      `${Config.LIBRARY_NAME}.entity.output_error`,
-      String(e)
-    );
+    span.setAttribute(`${Config.LIBRARY_NAME}.entity.output_error`, String(e));
   }
-}
-
-function getParameterNames(func: AnyFunction): string[] {
-  const funcStr = func.toString();
-  const match = funcStr.match(/\(([^)]*)\)/);
-  if (!match) return [];
-  return match[1]
-    .split(",")
-    .map((p) => p.trim())
-    .filter((p) => p);
 }
 
 function createFunctionWrapper<T extends AnyFunction>(
   func: T,
   entityType: string,
   name?: string,
-  asType: SpanType = SpanType.SPAN
+  asType: SpanType = SpanType.SPAN,
 ): T {
   const moduleName = func.name || "unknown";
   const spanName = name || func.name || "anonymous";
   const isAsync = func.constructor.name === "AsyncFunction";
 
+  const wrapSpan = (span: Span, fn: () => any) => {
+    span.setAttribute("netra.span.type", asType);
+    SessionManager.registerSpan(spanName, span);
+    SessionManager.setCurrentSpan(span);
+    return fn();
+  };
+
+  const handleError = (span: Span, e: any) => {
+    span.setAttribute(`${Config.LIBRARY_NAME}.entity.error`, String(e));
+    span.recordException(e);
+    throw e;
+  };
+
+  const cleanup = (span: Span) => {
+    span.end();
+    SessionManager.unregisterSpan(spanName, span);
+    SessionManager.popEntity(entityType);
+  };
+
   if (isAsync) {
-    return (async function (this: any, ...args: any[]) {
+    return async function (this: any, ...args: any[]) {
       SessionManager.pushEntity(entityType, spanName);
-
       const tracer = trace.getTracer(moduleName);
-      return tracer.startActiveSpan(spanName, async span => {
-        span.setAttribute("netra.span.type", asType);
-  
-        SessionManager.registerSpan(spanName, span);
-        SessionManager.setCurrentSpan(span);
-  
+      return tracer.startActiveSpan(spanName, async (span) => {
         try {
-          const kwargs: Record<string, any> = {};
-          addSpanAttributes(span, func, args, kwargs, entityType);
-          
-          const result = await (func as AsyncFunction).call(this, ...args);
-
-          addOutputAttributes(span, result);
-          return result;
+          return await wrapSpan(span, async () => {
+            addSpanAttributes(span, func, args, entityType);
+            const result = await (func as AsyncFunction).call(this, ...args);
+            addOutputAttributes(span, result);
+            return result;
+          });
         } catch (e: any) {
-          span.setAttribute(
-            `${Config.LIBRARY_NAME}.entity.error`,
-            String(e)
-          );
-          span.recordException(e);
-          throw e;
+          handleError(span, e);
         } finally {
-          span.end();
-          SessionManager.unregisterSpan(spanName, span);
-          SessionManager.popEntity(entityType);
+          cleanup(span);
         }
       });
-    }) as T;
+    } as T;
   } else {
-    return (function (this: any, ...args: any[]) {
+    return function (this: any, ...args: any[]) {
       SessionManager.pushEntity(entityType, spanName);
-
       const tracer = trace.getTracer(moduleName);
-      return tracer.startActiveSpan(spanName, span => {
-        span.setAttribute("netra.span.type", asType);
-        SessionManager.registerSpan(spanName, span);
-        SessionManager.setCurrentSpan(span);
-  
+      return tracer.startActiveSpan(spanName, (span) => {
         try {
-          const kwargs: Record<string, any> = {};
-          addSpanAttributes(span, func, args, kwargs, entityType);
-
-          const result = (func as AnyFunction).call(this, ...args);
-          addOutputAttributes(span, result);
-
-          return result;
+          return wrapSpan(span, () => {
+            addSpanAttributes(span, func, args, entityType);
+            const result = (func as AnyFunction).call(this, ...args);
+            addOutputAttributes(span, result);
+            return result;
+          });
         } catch (e: any) {
-          span.setAttribute(
-            `${Config.LIBRARY_NAME}.entity.error`,
-            String(e)
-          );
-          span.recordException(e);
-          throw e;
+          handleError(span, e);
         } finally {
-          span.end();
-          SessionManager.unregisterSpan(spanName, span);
-          SessionManager.popEntity(entityType);
+          cleanup(span);
         }
       });
-    }) as T;
+    } as T;
   }
 }
 
-export function workflow<T extends AnyFunction>(
-  target: T,
-  options?: DecoratorOptions
-): T;
-export function workflow<T extends AnyFunction>(
-  options?: DecoratorOptions
-): (target: T) => T;
-export function workflow<T extends AnyFunction>(
-  targetOrOptions?: T | DecoratorOptions,
-  options?: DecoratorOptions
-): T | ((target: T) => T) {
+function decoratorFactory(
+  entityType: string,
+  spanType: SpanType,
+  targetOrOptions?: AnyFunction | DecoratorOptions,
+  options?: DecoratorOptions,
+): AnyFunction | DecoratorFunction {
   if (typeof targetOrOptions === "function") {
     return createFunctionWrapper(
       targetOrOptions,
-      "workflow",
+      entityType,
       options?.name,
-      SpanType.SPAN
+      spanType,
     );
-  } else {
-    return (target: T) =>
-      createFunctionWrapper(
-        target,
-        "workflow",
-        targetOrOptions?.name,
-        SpanType.SPAN
-      );
   }
+
+  return (_target: any, _key: string, descriptor: PropertyDescriptor) => {
+    descriptor.value = createFunctionWrapper(
+      descriptor.value,
+      entityType,
+      targetOrOptions?.name,
+      spanType,
+    );
+    return descriptor;
+  };
 }
 
-export function agent<T extends AnyFunction>(
-  target: T,
-  options?: DecoratorOptions
-): T;
-export function agent<T extends AnyFunction>(
-  options?: DecoratorOptions
-): (target: T) => T;
+export function workflow<T extends AnyFunction>(target: T, options?: DecoratorOptions): T;
+export function workflow(options?: DecoratorOptions): DecoratorFunction;
+export function workflow<T extends AnyFunction>(
+  targetOrOptions?: T | DecoratorOptions,
+  options?: DecoratorOptions,
+): T | DecoratorFunction {
+  return decoratorFactory("workflow", SpanType.SPAN, targetOrOptions, options) as T | DecoratorFunction;
+}
+
+export function agent<T extends AnyFunction>(target: T, options?: DecoratorOptions): T;
+export function agent(options?: DecoratorOptions): DecoratorFunction;
 export function agent<T extends AnyFunction>(
   targetOrOptions?: T | DecoratorOptions,
-  options?: DecoratorOptions
-): T | ((target: T) => T) {
-  if (typeof targetOrOptions === "function") {
-    return createFunctionWrapper(
-      targetOrOptions,
-      "agent",
-      options?.name,
-      SpanType.AGENT
-    );
-  } else {
-    return (target: T) =>
-      createFunctionWrapper(
-        target,
-        "agent",
-        targetOrOptions?.name,
-        SpanType.AGENT
-      );
-  }
+  options?: DecoratorOptions,
+): T | DecoratorFunction {
+  return decoratorFactory("agent", SpanType.AGENT, targetOrOptions, options) as T | DecoratorFunction;
 }
 
-export function task<T extends AnyFunction>(
-  target: T,
-  options?: DecoratorOptions
-): T;
-export function task<T extends AnyFunction>(
-  options?: DecoratorOptions
-): (target: T) => T;
+export function task<T extends AnyFunction>(target: T, options?: DecoratorOptions): T;
+export function task(options?: DecoratorOptions): DecoratorFunction;
 export function task<T extends AnyFunction>(
   targetOrOptions?: T | DecoratorOptions,
-  options?: DecoratorOptions
-): T | ((target: T) => T) {
-  if (typeof targetOrOptions === "function") {
-    return createFunctionWrapper(
-      targetOrOptions,
-      "task",
-      options?.name,
-      SpanType.TOOL
-    );
-  } else {
-    return (target: T) =>
-      createFunctionWrapper(
-        target,
-        "task",
-        targetOrOptions?.name,
-        SpanType.TOOL
-      );
-  }
+  options?: DecoratorOptions,
+): T | DecoratorFunction {
+  return decoratorFactory("task", SpanType.TOOL, targetOrOptions, options) as T | DecoratorFunction;
 }
 
-export function span<T extends AnyFunction>(
-  target: T,
-  options?: DecoratorOptions
-): T;
-export function span<T extends AnyFunction>(
-  options?: DecoratorOptions
-): (target: T) => T;
+export function span<T extends AnyFunction>(target: T, options?: DecoratorOptions): T;
+export function span(options?: DecoratorOptions): DecoratorFunction;
 export function span<T extends AnyFunction>(
   targetOrOptions?: T | DecoratorOptions,
-  options?: DecoratorOptions
-): T | ((target: T) => T) {
-  const asType = options?.asType || (typeof targetOrOptions !== "function" ? targetOrOptions?.asType : undefined) || SpanType.SPAN;
-  if (typeof targetOrOptions === "function") {
-    return createFunctionWrapper(
-      targetOrOptions,
-      "span",
-      options?.name,
-      asType
-    );
-  } else {
-    return (target: T) =>
-      createFunctionWrapper(
-        target,
-        "span",
-        targetOrOptions?.name,
-        asType
-      );
-  }
+  options?: DecoratorOptions,
+): T | DecoratorFunction {
+  const spanType =
+    (typeof targetOrOptions !== "function"
+      ? targetOrOptions?.asType
+      : options?.asType) ?? SpanType.SPAN;
+  return decoratorFactory("span", spanType, targetOrOptions, options) as T | DecoratorFunction;
 }
-
-
