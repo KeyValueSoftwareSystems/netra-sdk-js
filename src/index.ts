@@ -246,7 +246,7 @@ export class Netra {
     // Graceful shutdown logic
     const handleSignal = async (signal: string) => {
       console.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
-      await this.shutdown();
+      await this.shutdown(cfg);
       process.exit(0);
     };
 
@@ -254,7 +254,7 @@ export class Netra {
       console.error("Uncaught exception:", error);
       console.error("Shutting down Netra SDK due to crash...");
       try {
-        await this.shutdown();
+        await this.shutdown(cfg);
       } catch (err) {
         console.error("Error during crash shutdown:", err);
       }
@@ -265,7 +265,7 @@ export class Netra {
     process.once("beforeExit", async () => {
       // beforeExit can be called multiple times if the loop fills up again
       // but for our purpose, we just want to ensure flush happens if the script finishes
-      await this.shutdown();
+      await this.shutdown(cfg);
     });
 
     // Handle termination signals
@@ -335,14 +335,14 @@ export class Netra {
    * Optional cleanup to end the root span and uninstrument all.
    * Now async to ensure spans are flushed.
    */
-  static async shutdown(): Promise<void> {
+  static async shutdown(config: Config): Promise<void> {
     if (!this._initialized) {
       return;
     }
 
     // Unpatch any monkey-patched instrumentations first
     try {
-      uninstrumentAll();
+      uninstrumentAll(config);
     } catch (e) {
       // Ignore
       if (this._config?.debugMode) {

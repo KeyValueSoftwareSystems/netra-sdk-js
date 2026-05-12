@@ -682,12 +682,14 @@ function addCustomSpanProcessors(
  * Uninstrument all active instrumentations
  * Should be called during shutdown
  */
-export function uninstrumentAll(): void {
+export function uninstrumentAll(config: Config): void {
   // Uninstrument custom OpenAI instrumentation
   try {
     if (openAIInstrumentor.isInstrumented()) {
       openAIInstrumentor.uninstrument();
-      console.debug("Custom OpenAI instrumentation disabled");
+      if (config.debugMode) {
+        console.debug("Custom OpenAI instrumentation disabled");
+      }
     }
   } catch (e) {
     console.debug("Failed to uninstrument OpenAI:", e);
@@ -697,7 +699,9 @@ export function uninstrumentAll(): void {
   try {
     if (mistralAIInstrumentor.isInstrumented()) {
       mistralAIInstrumentor.uninstrument();
-      console.debug("Custom MistralAI instrumentation disabled");
+      if (config.debugMode) {
+        console.debug("Custom MistralAI instrumentation disabled");
+      }
     }
   } catch (e) {
     console.debug("Failed to uninstrument MistralAI:", e);
@@ -707,7 +711,9 @@ export function uninstrumentAll(): void {
   try {
     if (groqInstrumentor.isInstrumented()) {
       groqInstrumentor.uninstrument();
-      console.debug("Custom Groq instrumentation disabled");
+      if (config.debugMode) {
+        console.debug("Custom Groq instrumentation disabled");
+      }
     }
   } catch (e) {
     console.debug("Failed to uninstrument Groq:", e);
@@ -717,7 +723,9 @@ export function uninstrumentAll(): void {
   try {
     if (anthropicInstrumentor.isInstrumented()) {
       anthropicInstrumentor.uninstrument();
-      console.debug("Custom Anthropic instrumentation disabled");
+      if (config.debugMode) {
+        console.debug("Custom Anthropic instrumentation disabled");
+      }
     }
   } catch (e) {
     console.debug("Failed to uninstrument Anthropic:", e);
@@ -727,7 +735,9 @@ export function uninstrumentAll(): void {
   try {
     if (googleGenerativeAIInstrumentor.isInstrumented()) {
       googleGenerativeAIInstrumentor.uninstrument();
-      console.debug("Custom Google GenAI instrumentation disabled");
+      if (config.debugMode) {
+        console.debug("Custom Google GenAI instrumentation disabled");
+      }
     }
   } catch (e) {
     console.debug("Failed to uninstrument Google GenAI:", e);
@@ -737,7 +747,9 @@ export function uninstrumentAll(): void {
   try {
     if (langgraphInstrumentor.isInstrumented()) {
       langgraphInstrumentor.uninstrument();
-      console.debug("Custom Langgraph instrumentation disabled");
+      if (config.debugMode) {
+        console.debug("Custom Langgraph instrumentation disabled");
+      }
     }
   } catch (e) {
     console.debug("Failed to uninstrument Langgraph:", e);
@@ -747,7 +759,9 @@ export function uninstrumentAll(): void {
   try {
     if (typeORMInstrumentor.isInstrumented()) {
       typeORMInstrumentor.uninstrument();
-      console.debug("Custom TypeORM instrumentation disabled");
+      if (config.debugMode) {
+        console.debug("Custom TypeORM instrumentation disabled");
+      }
     }
   } catch (e) {
     console.debug("Failed to uninstrument TypeORM:", e);
