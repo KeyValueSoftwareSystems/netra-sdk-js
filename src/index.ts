@@ -117,6 +117,8 @@ export type {
 } from "./simulation";
 export * from "./exporters";
 
+type SpanCallback<T> = (span: SpanWrapper) => T;
+
 let _initialized = false;
 let _rootSpan: Span | undefined;
 let _config: Config | undefined;
@@ -397,7 +399,7 @@ export class Netra {
    * All spans created within this function will be children of the root span.
    *
    * @param fn The function to run within the root span context
-   * @returns The result of the function
+   * @returns The result of the function (or a Promise if fn is async)
    */
   static runWithRootSpan<T>(fn: () => T): T {
     const rootSpan = SessionManager.getRootSpan();
@@ -408,28 +410,6 @@ export class Netra {
       return fn();
     }
 
-    // Create a context with the root span and run the function within it
-    const ctxWithRoot = trace.setSpan(context.active(), rootSpan);
-    return context.with(ctxWithRoot, fn);
-  }
-
-  /**
-   * Run an async function with the root span as the active parent context.
-   * All spans created within this function will be children of the root span.
-   *
-   * @param fn The async function to run within the root span context
-   * @returns A promise that resolves with the result of the function
-   */
-  static async runWithRootSpanAsync<T>(fn: () => Promise<T>): Promise<T> {
-    const rootSpan = SessionManager.getRootSpan();
-    if (!rootSpan) {
-      console.warn(
-        "runWithRootSpanAsync: No root span available. Running function without parent context.",
-      );
-      return fn();
-    }
-
-    // Create a context with the root span and run the function within it
     const ctxWithRoot = trace.setSpan(context.active(), rootSpan);
     return context.with(ctxWithRoot, fn);
   }
@@ -577,6 +557,74 @@ export class Netra {
       asType,
       this._tracer,
     ).start();
+  }
+
+  static startActiveSpan<T>(name: string, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(name: string, attributes: Record<string, string>, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(name: string, attributes: Record<string, string>, asType: SpanType, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(name: string, attributes: Record<string, string>, moduleName: string, asType: SpanType, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(
+    name: string,
+    attributesOrFn: Record<string, string> | SpanCallback<T>,
+    moduleNameOrAsTypeOrFn?: string | SpanCallback<T>,
+    asTypeOrFn?: SpanType | SpanCallback<T>,
+    fn?: SpanCallback<T>,
+  ): T {
+    let attributes: Record<string, string> = {};
+    let moduleName = "netra_sdk";
+    let spanType: SpanType = SpanType.SPAN;
+    let callback: SpanCallback<T>;
+
+    if (typeof attributesOrFn === "function") {
+      // (name, fn)
+      callback = attributesOrFn;
+    } else if (typeof moduleNameOrAsTypeOrFn === "function") {
+      // (name, attributes, fn)
+      attributes = attributesOrFn;
+      callback = moduleNameOrAsTypeOrFn;
+    } else if (typeof asTypeOrFn === "function") {
+      // (name, attributes, asType, fn)
+      attributes = attributesOrFn;
+      spanType = moduleNameOrAsTypeOrFn as SpanType;
+      callback = asTypeOrFn;
+    } else {
+      // (name, attributes, moduleName, asType, fn)
+      attributes = attributesOrFn;
+      moduleName = moduleNameOrAsTypeOrFn as string;
+      spanType = asTypeOrFn as SpanType;
+      callback = fn!;
+    }
+
+    const spanWrapper = new SpanWrapper(
+      name,
+      attributes,
+      moduleName,
+      spanType,
+      this._tracer,
+    ).start();
+
+    return spanWrapper.withActive(() => {
+      let result: T;
+      try {
+        result = callback(spanWrapper);
+      } catch (e) {
+        spanWrapper.setError(e instanceof Error ? e.message : String(e));
+        spanWrapper.end();
+        throw e;
+      }
+
+      if (result instanceof Promise) {
+        return (result as Promise<unknown>)
+          .catch((e) => {
+            spanWrapper.setError(e instanceof Error ? e.message : String(e));
+            throw e;
+          })
+          .finally(() => spanWrapper.end()) as T;
+      }
+
+      spanWrapper.end();
+      return result;
+    });
   }
 
   static withBlockedSpansLocal = withBlockedSpansLocal;

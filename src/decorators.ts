@@ -68,24 +68,18 @@ function addSpanAttributes(
     }
 
     if (Object.keys(inputData).length > 0) {
-      span.setAttribute(
-        `${Config.LIBRARY_NAME}.entity.input`,
-        JSON.stringify(inputData),
-      );
+      span.setAttribute("input", JSON.stringify(inputData));
     }
   } catch (e) {
-    span.setAttribute(`${Config.LIBRARY_NAME}.input_error`, String(e));
+    span.setAttribute("input_error", String(e));
   }
 }
 
 function addOutputAttributes(span: Span, result: any): void {
   try {
-    span.setAttribute(
-      `${Config.LIBRARY_NAME}.entity.output`,
-      serializeValue(result),
-    );
+    span.setAttribute("output", serializeValue(result));
   } catch (e) {
-    span.setAttribute(`${Config.LIBRARY_NAME}.entity.output_error`, String(e));
+    span.setAttribute("output_error", String(e));
   }
 }
 
