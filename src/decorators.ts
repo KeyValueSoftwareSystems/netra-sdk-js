@@ -39,18 +39,19 @@ function serializeValue(value: any): string {
 }
 
 function getParameterNames(func: AnyFunction): string[] {
+  if ((func as any).__paramNames) return (func as any).__paramNames;
   const funcStr = func.toString();
   const match = funcStr.match(/\(([^)]*)\)/);
   if (!match) return [];
   return match[1]
     .split(",")
-    .map((p) => p.trim())
+    .map((p) => p.trim().replace(/^\.\.\./, ""))
     .filter((p) => p);
 }
 
 function addSpanAttributes(
   span: Span,
-  func: AnyFunction,
+  paramNames: string[],
   args: any[],
   entityType: string,
 ): void {
@@ -58,7 +59,6 @@ function addSpanAttributes(
 
   try {
     const inputData: Record<string, string> = {};
-    const paramNames = getParameterNames(func);
 
     for (let i = 0; i < args.length && i < paramNames.length; i++) {
       const paramName = paramNames[i];
@@ -96,12 +96,12 @@ function createFunctionWrapper<T extends AnyFunction>(
   const moduleName = func.name || "unknown";
   const spanName = name || func.name || "anonymous";
   const isAsync = func.constructor.name === "AsyncFunction";
+  const capturedParamNames = getParameterNames(func);
 
-  const wrapSpan = (span: Span, fn: () => any) => {
+  const initSpan = (span: Span): void => {
     span.setAttribute("netra.span.type", asType);
     SessionManager.registerSpan(spanName, span);
     SessionManager.setCurrentSpan(span);
-    return fn();
   };
 
   const handleError = (span: Span, e: any) => {
@@ -117,43 +117,45 @@ function createFunctionWrapper<T extends AnyFunction>(
   };
 
   if (isAsync) {
-    return async function (this: any, ...args: any[]) {
+    const wrapper = async function (this: any, ...args: any[]) {
       SessionManager.pushEntity(entityType, spanName);
       const tracer = trace.getTracer(moduleName);
       return tracer.startActiveSpan(spanName, async (span) => {
         try {
-          return await wrapSpan(span, async () => {
-            addSpanAttributes(span, func, args, entityType);
-            const result = await (func as AsyncFunction).call(this, ...args);
-            addOutputAttributes(span, result);
-            return result;
-          });
+          initSpan(span);
+          addSpanAttributes(span, capturedParamNames, args, entityType);
+          const result = await (func as AsyncFunction).call(this, ...args);
+          addOutputAttributes(span, result);
+          return result;
         } catch (e: any) {
           handleError(span, e);
         } finally {
           cleanup(span);
         }
       });
-    } as T;
+    };
+    (wrapper as any).__paramNames = capturedParamNames;
+    return wrapper as T;
   } else {
-    return function (this: any, ...args: any[]) {
+    const wrapper = function (this: any, ...args: any[]) {
       SessionManager.pushEntity(entityType, spanName);
       const tracer = trace.getTracer(moduleName);
       return tracer.startActiveSpan(spanName, (span) => {
         try {
-          return wrapSpan(span, () => {
-            addSpanAttributes(span, func, args, entityType);
-            const result = (func as AnyFunction).call(this, ...args);
-            addOutputAttributes(span, result);
-            return result;
-          });
+          initSpan(span);
+          addSpanAttributes(span, capturedParamNames, args, entityType);
+          const result = (func as AnyFunction).call(this, ...args);
+          addOutputAttributes(span, result);
+          return result;
         } catch (e: any) {
           handleError(span, e);
         } finally {
           cleanup(span);
         }
       });
-    } as T;
+    };
+    (wrapper as any).__paramNames = capturedParamNames;
+    return wrapper as T;
   }
 }
 
@@ -165,7 +167,7 @@ const SKIP_STATIC_PROPS = new Set([
   "caller",
 ]);
 
-function wrapClassMethods(
+function createClassWrapper(
   cls: AnyClass,
   entityType: string,
   name?: string,
@@ -205,7 +207,7 @@ function decoratorFactory(
   options?: DecoratorOptions,
 ): AnyFunction | AnyClass | UnifiedDecorator {
   if (isClassConstructor(targetOrOptions)) {
-    wrapClassMethods(targetOrOptions, entityType, options?.name, spanType);
+    createClassWrapper(targetOrOptions, entityType, options?.name, spanType);
     return targetOrOptions;
   }
 
@@ -225,7 +227,7 @@ function decoratorFactory(
     descriptor?: PropertyDescriptor,
   ): void {
     if (isClassConstructor(target)) {
-      wrapClassMethods(target, entityType, opts?.name, spanType);
+      createClassWrapper(target, entityType, opts?.name, spanType);
       return;
     }
     if (descriptor) {
