@@ -10,11 +10,8 @@ import { Dashboard } from "./api/dashboard";
 import { Evaluation } from "./api/evaluation";
 import { Usage } from "./api/usage";
 import { Config, NetraConfig } from "./config";
-import {
-  initInstrumentations,
-  instrumentationsReady,
-  uninstrumentAll,
-} from "./instrumentation";
+import { instrumentationsReady, uninstrumentAll } from "./instrumentation";
+import { Tracer } from "./tracer";
 import { withBlockedSpansLocal } from "./processors/localfiltering-span-processor";
 import { setSessionBaggage } from "./processors/session-span-processor";
 import {
@@ -195,30 +192,12 @@ export class Netra {
     const cfg = new Config(config);
     this._config = cfg;
 
-    // Initialize instrumentations and get effective provider
-    const effectiveProvider = initInstrumentations(
-      cfg,
-      config.instruments,
-      config.blockInstruments,
-    );
+    // Extract Instruments and Block Instruments
+    const { instruments, blockInstruments } = config;
 
-    // If we found an effective provider (delegate), get a tracer from IT.
-    // This ensures the tracer has the processors we added.
-    if (
-      effectiveProvider &&
-      typeof (effectiveProvider as any).getTracer === "function"
-    ) {
-      this._tracer = (effectiveProvider as any).getTracer(
-        Config.LIBRARY_NAME,
-        Config.LIBRARY_VERSION,
-      );
-    } else {
-      // Fallback
-      this._tracer = trace.getTracer(
-        Config.LIBRARY_NAME,
-        Config.LIBRARY_VERSION,
-      );
-    }
+    // Create the tracer
+    const tracer = new Tracer(cfg, instruments, blockInstruments);
+    this._tracer = tracer.tracer;
 
     // Initialize API clients
     this.usage = new Usage(cfg);
@@ -560,9 +539,24 @@ export class Netra {
   }
 
   static startActiveSpan<T>(name: string, fn: SpanCallback<T>): T;
-  static startActiveSpan<T>(name: string, attributes: Record<string, string>, fn: SpanCallback<T>): T;
-  static startActiveSpan<T>(name: string, attributes: Record<string, string>, asType: SpanType, fn: SpanCallback<T>): T;
-  static startActiveSpan<T>(name: string, attributes: Record<string, string>, moduleName: string, asType: SpanType, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(
+    name: string,
+    attributes: Record<string, string>,
+    fn: SpanCallback<T>,
+  ): T;
+  static startActiveSpan<T>(
+    name: string,
+    attributes: Record<string, string>,
+    asType: SpanType,
+    fn: SpanCallback<T>,
+  ): T;
+  static startActiveSpan<T>(
+    name: string,
+    attributes: Record<string, string>,
+    moduleName: string,
+    asType: SpanType,
+    fn: SpanCallback<T>,
+  ): T;
   static startActiveSpan<T>(
     name: string,
     attributesOrFn: Record<string, string> | SpanCallback<T>,
