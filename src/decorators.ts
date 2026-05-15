@@ -38,35 +38,16 @@ function serializeValue(value: any): string {
   }
 }
 
-function getParameterNames(func: AnyFunction): string[] {
-  if ((func as any).__paramNames) return (func as any).__paramNames;
-  const funcStr = func.toString();
-  const match = funcStr.match(/\(([^)]*)\)/);
-  if (!match) return [];
-  return match[1]
-    .split(",")
-    .map((p) => p.trim().replace(/^\.\.\./, ""))
-    .filter((p) => p);
-}
-
-function addSpanAttributes(
+function addInputAttributes(
   span: Span,
-  paramNames: string[],
+  func: AnyFunction,
   args: any[],
   entityType: string,
 ): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
 
   try {
-    const inputData: Record<string, string> = {};
-
-    for (let i = 0; i < args.length && i < paramNames.length; i++) {
-      const paramName = paramNames[i];
-      if (paramName !== "self" && paramName !== "cls") {
-        inputData[paramName] = serializeValue(args[i]);
-      }
-    }
-
+    const inputData = { args };
     if (Object.keys(inputData).length > 0) {
       span.setAttribute("input", JSON.stringify(inputData));
     }
@@ -96,7 +77,6 @@ function createFunctionWrapper<T extends AnyFunction>(
   const moduleName = func.name || "unknown";
   const spanName = name || func.name || "anonymous";
   const isAsync = func.constructor.name === "AsyncFunction";
-  const capturedParamNames = getParameterNames(func);
 
   const initSpan = (span: Span): void => {
     span.setAttribute("netra.span.type", asType);
@@ -123,7 +103,7 @@ function createFunctionWrapper<T extends AnyFunction>(
       return tracer.startActiveSpan(spanName, async (span) => {
         try {
           initSpan(span);
-          addSpanAttributes(span, capturedParamNames, args, entityType);
+          addInputAttributes(span, func, args, entityType);
           const result = await (func as AsyncFunction).call(this, ...args);
           addOutputAttributes(span, result);
           return result;
@@ -134,7 +114,6 @@ function createFunctionWrapper<T extends AnyFunction>(
         }
       });
     };
-    (wrapper as any).__paramNames = capturedParamNames;
     return wrapper as T;
   } else {
     const wrapper = function (this: any, ...args: any[]) {
@@ -143,7 +122,7 @@ function createFunctionWrapper<T extends AnyFunction>(
       return tracer.startActiveSpan(spanName, (span) => {
         try {
           initSpan(span);
-          addSpanAttributes(span, capturedParamNames, args, entityType);
+          addInputAttributes(span, func, args, entityType);
           const result = (func as AnyFunction).call(this, ...args);
           addOutputAttributes(span, result);
           return result;
@@ -154,7 +133,6 @@ function createFunctionWrapper<T extends AnyFunction>(
         }
       });
     };
-    (wrapper as any).__paramNames = capturedParamNames;
     return wrapper as T;
   }
 }
