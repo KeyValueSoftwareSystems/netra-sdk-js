@@ -47,7 +47,7 @@ function addInputAttributes(
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
 
   try {
-    const inputData = { args };
+    const inputData = args;
     if (Object.keys(inputData).length > 0) {
       span.setAttribute("input", JSON.stringify(inputData));
     }
