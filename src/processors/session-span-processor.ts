@@ -118,9 +118,6 @@ export class SessionSpanProcessor implements SpanProcessor {
    */
   onStart(span: Span, parentContext: Context): void {
     try {
-      // Store the current span in SessionManager
-      SessionManager.setCurrentSpan(span);
-
       // Add library metadata
       span.setAttribute("library.name", Config.LIBRARY_NAME);
       span.setAttribute("library.version", Config.LIBRARY_VERSION);

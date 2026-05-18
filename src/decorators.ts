@@ -33,23 +33,38 @@ function serializeValue(value: any): string {
     } else {
       return String(value).substring(0, 1000);
     }
-  } catch {
+  } catch (e) {
+    console.warn("serializeValue: serialization failed, falling back to type name:", e);
     return String(typeof value);
   }
 }
 
+/**
+ * Returns true if the span already has a non-empty `output` attribute.
+ * Checks both the public `attributes` property and the internal `_attributes`
+ * store to handle SDK implementations that buffer attributes before export.
+ */
+function spanHasOutput(span: Span): boolean {
+  try {
+    for (const field of ["attributes", "_attributes"]) {
+      const attrs = (span as any)[field];
+      if (attrs && typeof attrs === "object" && attrs["output"]) return true;
+    }
+  } catch (e) {
+    console.warn("spanHasOutput: error inspecting span attributes:", e);
+  }
+  return false;
+}
+
 function addInputAttributes(
   span: Span,
-  func: AnyFunction,
   args: any[],
   entityType: string,
 ): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
-
   try {
-    const inputData = args;
-    if (Object.keys(inputData).length > 0) {
-      span.setAttribute("input", JSON.stringify(inputData));
+    if (args.length > 0) {
+      span.setAttribute("input", JSON.stringify(args));
     }
   } catch (e) {
     span.setAttribute("input_error", String(e));
@@ -57,6 +72,8 @@ function addInputAttributes(
 }
 
 function addOutputAttributes(span: Span, result: any): void {
+  // Skip if the user already set output explicitly inside the decorated function
+  if (spanHasOutput(span)) return;
   try {
     span.setAttribute("output", serializeValue(result));
   } catch (e) {
@@ -81,7 +98,6 @@ function createFunctionWrapper<T extends AnyFunction>(
   const initSpan = (span: Span): void => {
     span.setAttribute("netra.span.type", asType);
     SessionManager.registerSpan(spanName, span);
-    SessionManager.setCurrentSpan(span);
   };
 
   const handleError = (span: Span, e: any) => {
@@ -103,7 +119,7 @@ function createFunctionWrapper<T extends AnyFunction>(
       return tracer.startActiveSpan(spanName, async (span) => {
         try {
           initSpan(span);
-          addInputAttributes(span, func, args, entityType);
+          addInputAttributes(span, args, entityType);
           const result = await (func as AsyncFunction).call(this, ...args);
           addOutputAttributes(span, result);
           return result;
@@ -122,7 +138,7 @@ function createFunctionWrapper<T extends AnyFunction>(
       return tracer.startActiveSpan(spanName, (span) => {
         try {
           initSpan(span);
-          addInputAttributes(span, func, args, entityType);
+          addInputAttributes(span, args, entityType);
           const result = (func as AnyFunction).call(this, ...args);
           addOutputAttributes(span, result);
           return result;

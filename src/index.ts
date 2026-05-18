@@ -256,14 +256,6 @@ export class Netra {
           Config.LIBRARY_VERSION,
         );
 
-        try {
-          SessionManager.setCurrentSpan(this._rootSpan);
-          // Also store the root span in SessionManager for access by SpanWrapper/decorators
-          SessionManager.setRootSpan(this._rootSpan);
-        } catch (e) {
-          // ignore
-        }
-
         console.info(
           "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
         );
@@ -356,16 +348,13 @@ export class Netra {
    * Note: required in JS because OTel JS has no persistent context.attach()
    */
   static runWithRootSpan<T>(fn: () => T): T {
-    const rootSpan = SessionManager.getRootSpan();
-    if (!rootSpan) {
+    if (!this._rootSpan) {
       console.warn(
         "runWithRootSpan: No root span available. Running function without parent context.",
       );
       return fn();
     }
-
-    const ctxWithRoot = trace.setSpan(context.active(), rootSpan);
-    return context.with(ctxWithRoot, fn);
+    return context.with(trace.setSpan(context.active(), this._rootSpan), fn);
   }
 
   static setSessionId(sessionId: string): void {
@@ -377,7 +366,6 @@ export class Netra {
     }
     if (sessionId) {
       setSessionBaggage("session_id", sessionId);
-      SessionManager.setSessionContext("session_id", sessionId);
     } else {
       console.warn(
         "setSessionId: Session ID must be provided for setting session_id.",
@@ -395,9 +383,7 @@ export class Netra {
       return;
     }
     if (userId) {
-      // Store in OpenTelemetry baggage - automatically propagates across async boundaries
       setSessionBaggage("user_id", userId);
-      SessionManager.setSessionContext("user_id", userId);
     } else {
       console.warn("setUserId: User ID must be provided for setting user_id.");
     }
@@ -415,9 +401,7 @@ export class Netra {
       return;
     }
     if (tenantId) {
-      // Store in OpenTelemetry baggage - automatically propagates across async boundaries
       setSessionBaggage("tenant_id", tenantId);
-      SessionManager.setSessionContext("tenant_id", tenantId);
     } else {
       console.warn(
         "setTenantId: Tenant ID must be provided for setting tenant_id.",

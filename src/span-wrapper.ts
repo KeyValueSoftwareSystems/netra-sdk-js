@@ -60,7 +60,6 @@ export class SpanWrapper {
 
     if (this.span) {
       SessionManager.registerSpan(this.name, this.span);
-      SessionManager.setCurrentSpan(this.span);
     }
 
     return this;

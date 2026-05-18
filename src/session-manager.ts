@@ -1,14 +1,16 @@
 /**
- * Session Manager for tracking user sessions and context
+ * Session Manager — entity stack tracking and span annotation utilities.
  *
- * Uses AsyncLocalStorage for entity stacks (workflow, task, agent)
- * and OpenTelemetry's baggage API for session context (session_id, user_id, tenant_id).
- * This provides proper concurrency support for multi-request environments.
+ * Uses AsyncLocalStorage for per-async-scope entity stacks (workflow, task,
+ * agent, span) so concurrent requests stay isolated. All span resolution and
+ * attribute writes delegate to OpenTelemetry's native APIs; no shadow copies
+ * of spans are kept here.
  */
 
 import { Span, context, trace } from "@opentelemetry/api";
 import { AsyncLocalStorage } from "async_hooks";
 import { Config } from "./config";
+import { RootSpanProcessor } from "./processors/root-span-processor";
 
 export enum ConversationType {
   INPUT = "input",
@@ -16,96 +18,69 @@ export enum ConversationType {
 }
 
 /**
- * Context for entity tracking (workflow, task, agent, span hierarchies)
- * This is request-scoped via AsyncLocalStorage and does NOT propagate across process boundaries
+ * Per-async-scope state: entity name stacks and a name→span registry.
+ * Deliberately minimal — live span references belong to OTel's context, not here.
  */
 interface EntityContext {
-  currentSpan?: Span;
-  rootSpan?: Span;
   workflowStack: string[];
   taskStack: string[];
   agentStack: string[];
   spanStack: string[];
   spansByName: Map<string, Span[]>;
-  activeSpans: Span[];
 }
 
-// AsyncLocalStorage for entity context (internal SDK state)
 const entityStorage = new AsyncLocalStorage<EntityContext>();
 
-// Global fallback context for single-threaded applications
+// Global fallback for single-threaded / non-async entry points
 const globalFallbackContext: EntityContext = {
   workflowStack: [],
   taskStack: [],
   agentStack: [],
   spanStack: [],
   spansByName: new Map(),
-  activeSpans: [],
 };
 
-/**
- * Get or create entity context for the current async scope
- */
-function getOrCreateEntityContext(): EntityContext {
-  let ctx = entityStorage.getStore();
-  if (!ctx) {
-    // Fallback to global context for backwards compatibility
-    ctx = globalFallbackContext;
-  }
-  return ctx;
+function getEntityContext(): EntityContext {
+  return entityStorage.getStore() ?? globalFallbackContext;
 }
 
 /**
- * Run a function with an isolated entity context
- * This is useful for concurrent operations that need separate entity tracking
+ * Run `fn` with a fresh, isolated entity context.
+ * Use this when spawning concurrent async operations that should have
+ * independent entity stacks.
  */
 export function runWithEntityContext<T>(fn: () => T): T {
-  const newContext: EntityContext = {
+  const ctx: EntityContext = {
     workflowStack: [],
     taskStack: [],
     agentStack: [],
     spanStack: [],
     spansByName: new Map(),
-    activeSpans: [],
   };
-  return entityStorage.run(newContext, fn);
+  return entityStorage.run(ctx, fn);
 }
 
-function _serializeSpanValue(value: any): string {
+// Internal serialization
+
+function serializeValue(value: any): string {
   if (typeof value === "string") {
     return value.substring(0, Config.ATTRIBUTE_MAX_LEN);
   }
   return JSON.stringify(value).substring(0, Config.ATTRIBUTE_MAX_LEN);
 }
 
+// SessionManager
+
 export class SessionManager {
-  static setCurrentSpan(span: Span | undefined): void {
-    const ctx = getOrCreateEntityContext();
-    ctx.currentSpan = span;
-  }
 
-  static getCurrentSpan(): Span | undefined {
-    const ctx = getOrCreateEntityContext();
-    return ctx.currentSpan;
-  }
-
-  static setRootSpan(span: Span | undefined): void {
-    const ctx = getOrCreateEntityContext();
-    ctx.rootSpan = span;
-  }
-
-  static getRootSpan(): Span | undefined {
-    const ctx = getOrCreateEntityContext();
-    return ctx.rootSpan;
-  }
+  // Span registry (name → stack)
 
   static registerSpan(name: string, span: Span): void {
     try {
-      const ctx = getOrCreateEntityContext();
-      const stack = ctx.spansByName.get(name) || [];
+      const ctx = getEntityContext();
+      const stack = ctx.spansByName.get(name) ?? [];
       stack.push(span);
       ctx.spansByName.set(name, stack);
-      ctx.activeSpans.push(span);
     } catch (e) {
       console.error(`Failed to register span '${name}':`, e);
     }
@@ -113,276 +88,232 @@ export class SessionManager {
 
   static unregisterSpan(name: string, span: Span): void {
     try {
-      const ctx = getOrCreateEntityContext();
+      const ctx = getEntityContext();
       const stack = ctx.spansByName.get(name);
-      if (!stack) {
-        return;
-      }
-
-      // Remove the last matching instance
+      if (!stack) return;
       for (let i = stack.length - 1; i >= 0; i--) {
         if (stack[i] === span) {
           stack.splice(i, 1);
           break;
         }
       }
-
-      if (stack.length === 0) {
-        ctx.spansByName.delete(name);
-      }
-
-      // Remove from global active list
-      for (let i = ctx.activeSpans.length - 1; i >= 0; i--) {
-        if (ctx.activeSpans[i] === span) {
-          ctx.activeSpans.splice(i, 1);
-          break;
-        }
-      }
+      if (stack.length === 0) ctx.spansByName.delete(name);
     } catch (e) {
       console.error(`Failed to unregister span '${name}':`, e);
     }
   }
 
   static getSpanByName(name: string): Span | undefined {
-    const ctx = getOrCreateEntityContext();
+    const ctx = getEntityContext();
     const stack = ctx.spansByName.get(name);
-    return stack && stack.length > 0 ? stack[stack.length - 1] : undefined;
+    return stack?.length ? stack[stack.length - 1] : undefined;
   }
 
+  // Entity stacks (workflow / task / agent / span)
+
   static pushEntity(entityType: string, entityName: string): void {
-    const ctx = getOrCreateEntityContext();
+    const ctx = getEntityContext();
     switch (entityType) {
-      case "workflow":
-        ctx.workflowStack.push(entityName);
-        break;
-      case "task":
-        ctx.taskStack.push(entityName);
-        break;
-      case "agent":
-        ctx.agentStack.push(entityName);
-        break;
-      case "span":
-        ctx.spanStack.push(entityName);
-        break;
+      case "workflow": ctx.workflowStack.push(entityName); break;
+      case "task":     ctx.taskStack.push(entityName);     break;
+      case "agent":    ctx.agentStack.push(entityName);    break;
+      case "span":     ctx.spanStack.push(entityName);     break;
     }
   }
 
   static popEntity(entityType: string): string | undefined {
-    const ctx = getOrCreateEntityContext();
+    const ctx = getEntityContext();
     switch (entityType) {
-      case "workflow":
-        return ctx.workflowStack.pop();
-      case "task":
-        return ctx.taskStack.pop();
-      case "agent":
-        return ctx.agentStack.pop();
-      case "span":
-        return ctx.spanStack.pop();
-      default:
-        return undefined;
+      case "workflow": return ctx.workflowStack.pop();
+      case "task":     return ctx.taskStack.pop();
+      case "agent":    return ctx.agentStack.pop();
+      case "span":     return ctx.spanStack.pop();
+      default:         return undefined;
     }
   }
 
   static getCurrentEntityAttributes(): Record<string, string> {
-    const ctx = getOrCreateEntityContext();
-    const attributes: Record<string, string> = {};
-
-    if (ctx.workflowStack.length > 0) {
-      attributes[`${Config.LIBRARY_NAME}.workflow.name`] =
-        ctx.workflowStack[ctx.workflowStack.length - 1];
-    }
-
-    if (ctx.taskStack.length > 0) {
-      attributes[`${Config.LIBRARY_NAME}.task.name`] =
-        ctx.taskStack[ctx.taskStack.length - 1];
-    }
-
-    if (ctx.agentStack.length > 0) {
-      attributes[`${Config.LIBRARY_NAME}.agent.name`] =
-        ctx.agentStack[ctx.agentStack.length - 1];
-    }
-
-    if (ctx.spanStack.length > 0) {
-      attributes[`${Config.LIBRARY_NAME}.span.name`] =
-        ctx.spanStack[ctx.spanStack.length - 1];
-    }
-
-    return attributes;
+    const ctx = getEntityContext();
+    const attrs: Record<string, string> = {};
+    const last = <T>(arr: T[]) => arr[arr.length - 1];
+    if (ctx.workflowStack.length) attrs[`${Config.LIBRARY_NAME}.workflow.name`] = last(ctx.workflowStack)!;
+    if (ctx.taskStack.length)     attrs[`${Config.LIBRARY_NAME}.task.name`]     = last(ctx.taskStack)!;
+    if (ctx.agentStack.length)    attrs[`${Config.LIBRARY_NAME}.agent.name`]    = last(ctx.agentStack)!;
+    if (ctx.spanStack.length)     attrs[`${Config.LIBRARY_NAME}.span.name`]     = last(ctx.spanStack)!;
+    return attrs;
   }
 
   static clearEntityStacks(): void {
-    const ctx = getOrCreateEntityContext();
+    const ctx = getEntityContext();
     ctx.workflowStack = [];
-    ctx.taskStack = [];
-    ctx.agentStack = [];
-    ctx.spanStack = [];
+    ctx.taskStack     = [];
+    ctx.agentStack    = [];
+    ctx.spanStack     = [];
   }
 
-  static setSessionContext(
-    sessionKey: string,
-    value: string | Record<string, string>
-  ): void {
+  // OTel context helpers
+
+  /**
+   * Returns the trace ID of the currently active span, or undefined if none.
+   */
+  static getTraceId(): string | undefined {
+    const ctx = trace.getActiveSpan()?.spanContext();
+    return ctx && trace.isSpanContextValid(ctx) ? ctx.traceId : undefined;
+  }
+
+  // Span attribute writers
+
+  /**
+   * Set an attribute on the currently active OTel span.
+   */
+  static setAttributeOnActiveSpan(key: string, value: any): void {
     try {
-      if (typeof value === "string" && value) {
-        // Set session context as span attributes on the active span
-        const span = trace.getActiveSpan();
-        if (span && span.isRecording()) {
-          span.setAttribute(`${Config.LIBRARY_NAME}.${sessionKey}`, value);
-        }
+      const span = trace.getActiveSpan();
+      if (span?.isRecording()) {
+        span.setAttribute(key, typeof value === "string" ? value : JSON.stringify(value));
+      } else {
+        console.warn(`setAttributeOnActiveSpan: no recording span for key '${key}'`);
       }
     } catch (e) {
-      console.error(`Failed to set session context for key=${sessionKey}:`, e);
+      console.error(`Failed to set attribute '${key}' on active span:`, e);
     }
   }
+
+  /**
+   * Set input on the currently active span.
+   */
+  static setInput(value: any): void {
+    try {
+      SessionManager.setAttributeOnActiveSpan("input", serializeValue(value));
+    } catch (e) {
+      console.error("setInput failed:", e);
+    }
+  }
+
+  /**
+   * Set output on the currently active span.
+   */
+  static setOutput(value: any): void {
+    try {
+      SessionManager.setAttributeOnActiveSpan("output", serializeValue(value));
+    } catch (e) {
+      console.error("setOutput failed:", e);
+    }
+  }
+
+  /**
+   * Set input on the root span of the current trace.
+   * Delegates to RootSpanProcessor which owns root span bookkeeping.
+   */
+  static setRootInput(value: any): void {
+    try {
+      RootSpanProcessor.setAttributeOnRootSpan("input", serializeValue(value));
+    } catch (e) {
+      console.error("setRootInput failed:", e);
+    }
+  }
+
+  /**
+   * Set output on the root span of the current trace.
+   * Delegates to RootSpanProcessor which owns root span bookkeeping.
+   */
+  static setRootOutput(value: any): void {
+    try {
+      RootSpanProcessor.setAttributeOnRootSpan("output", serializeValue(value));
+    } catch (e) {
+      console.error("setRootOutput failed:", e);
+    }
+  }
+
+  // Events and conversations
 
   static setCustomEvent(name: string, attributes: Record<string, any>): void {
     try {
-      const currentSpan = this.getCurrentSpan();
+      const span = trace.getActiveSpan();
       const timestamp = Date.now();
-
-      if (currentSpan && currentSpan.isRecording()) {
-        currentSpan.addEvent(name, attributes, timestamp);
+      if (span?.isRecording()) {
+        span.addEvent(name, attributes, timestamp);
       } else {
-        const ctx = context.active();
-        const tracer = trace.getTracer(__filename);
-        tracer.startActiveSpan(
+        // Fallback: create a short-lived span to carry the event
+        trace.getTracer(__filename).startActiveSpan(
           `${Config.LIBRARY_NAME}.${name}`,
           { attributes },
-          ctx,
-          (span: Span) => {
-            span.addEvent(name, attributes, timestamp);
-            span.end();
-          }
+          context.active(),
+          (newSpan: Span) => {
+            newSpan.addEvent(name, attributes, timestamp);
+            newSpan.end();
+          },
         );
       }
     } catch (e) {
-      console.error(`Failed to add custom event: ${name} -`, e);
+      console.error(`setCustomEvent '${name}' failed:`, e);
     }
   }
 
+  /**
+   * Append a conversation entry to the active span's `conversation` attribute.
+   *
+   * Reads and re-serialises the existing JSON array so entries accumulate
+   * rather than overwrite — matching the Python SDK's behaviour.
+   * Writes directly to the span's internal attribute store to bypass OTel's
+   * per-attribute length truncation on the final payload.
+   */
   static addConversation(
     conversationType: ConversationType,
     role: string,
-    content: string | Record<string, any>
+    content: string | Record<string, any>,
   ): void {
     if (!role || !content) {
-      console.error("add_conversation: role and content must be provided");
+      console.error("addConversation: role and content must be provided");
       return;
     }
 
     try {
       const span = trace.getActiveSpan();
-      if (!span || !span.isRecording()) {
-        console.warn("No active span to add conversation attribute.");
+      if (!span?.isRecording()) {
+        console.warn("addConversation: no active recording span");
         return;
       }
 
-      // Get existing conversation
-      const existing: Array<{
+      // Read existing entries from the span's internal attribute store
+      let existing: Array<{
         type: string;
         role: string;
         content: string | Record<string, any>;
         format: string;
       }> = [];
+      try {
+        const raw = (span as any)._attributes?.["conversation"];
+        if (typeof raw === "string") {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) existing = parsed;
+        }
+      } catch (e) {
+        console.warn("addConversation: failed to parse existing conversation, starting fresh:", e);
+      }
 
-      // Try to get existing conversation from span attributes
-      // Note: This is a simplified version - in production you'd need to access span internals
       const maxLen = Config.CONVERSATION_MAX_LEN;
       const processedContent =
-        typeof content === "string"
-          ? content.substring(0, maxLen)
-          : content;
+        typeof content === "string" ? content.substring(0, maxLen) : content;
 
-      const entry = {
+      existing.push({
         type: conversationType,
         role,
         content: processedContent,
         format: typeof processedContent === "string" ? "text" : "json",
-      };
+      });
 
-      existing.push(entry);
+      const payload = JSON.stringify(existing);
 
-      // Set conversation attribute
-      span.setAttribute("conversation", JSON.stringify(existing));
-    } catch (e) {
-      console.error("Failed to add conversation attribute:", e);
-    }
-  }
-
-  static setAttributeOnActiveSpan(
-    attrKey: string,
-    attrValue: any
-  ): void {
-    try {
-      const span = trace.getActiveSpan();
-      if (span && span.isRecording()) {
-        const value =
-          typeof attrValue === "string"
-            ? attrValue
-            : JSON.stringify(attrValue);
-        span.setAttribute(attrKey, value);
+      // Bypass per-attribute truncation by writing to the internal store directly
+      const internalAttrs = (span as any)._attributes;
+      if (internalAttrs && typeof internalAttrs === "object") {
+        internalAttrs["conversation"] = payload;
       } else {
-        console.warn(`No active span to set attribute '${attrKey}'`);
+        span.setAttribute("conversation", payload);
       }
     } catch (e) {
-      console.error(`Failed to set attribute '${attrKey}' on active span:`, e);
-    }
-  }
-
-  static getTraceId(): string | undefined {
-    const span = trace.getActiveSpan();
-    const ctx = span?.spanContext();
-    if (ctx && trace.isSpanContextValid(ctx)) {
-      return ctx.traceId;
-    }
-    return undefined;
-  }
-
-  static setInput(value: any): void {
-    try {
-      const serialized = _serializeSpanValue(value);
-      this.setAttributeOnActiveSpan("input", serialized);
-    } catch (e) {
-      console.error("SessionManager.setInput: failed to set input attribute", e);
-    }
-  }
-
-  static setOutput(value: any): void {
-    try {
-      const serialized = _serializeSpanValue(value);
-      this.setAttributeOnActiveSpan("output", serialized);
-    } catch (e) {
-      console.error("SessionManager.setOutput: failed to set output attribute", e);
-    }
-  }
-
-  static setRootInput(value: any): void {
-    try {
-      const serialized = _serializeSpanValue(value);
-      const rootSpan = this.getRootSpan();
-      if (rootSpan && rootSpan.isRecording()) {
-        rootSpan.setAttribute("input", serialized);
-      } else {
-        console.warn("setRootInput: no root span available, falling back to active span");
-        this.setAttributeOnActiveSpan("input", serialized);
-      }
-    } catch (e) {
-      console.error("SessionManager.setRootInput: failed to set input attribute", e);
-    }
-  }
-
-  static setRootOutput(value: any): void {
-    try {
-      const serialized = _serializeSpanValue(value);
-      const rootSpan = this.getRootSpan();
-      if (rootSpan && rootSpan.isRecording()) {
-        rootSpan.setAttribute("output", serialized);
-      } else {
-        console.warn("setRootOutput: no root span available, falling back to active span");
-        this.setAttributeOnActiveSpan("output", serialized);
-      }
-    } catch (e) {
-      console.error("SessionManager.setRootOutput: failed to set output attribute", e);
+      console.error("addConversation failed:", e);
     }
   }
 }
