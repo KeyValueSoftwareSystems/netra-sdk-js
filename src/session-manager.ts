@@ -71,6 +71,13 @@ export function runWithEntityContext<T>(fn: () => T): T {
   return entityStorage.run(newContext, fn);
 }
 
+function _serializeSpanValue(value: any): string {
+  if (typeof value === "string") {
+    return value.substring(0, Config.ATTRIBUTE_MAX_LEN);
+  }
+  return JSON.stringify(value).substring(0, Config.ATTRIBUTE_MAX_LEN);
+}
+
 export class SessionManager {
   static setCurrentSpan(span: Span | undefined): void {
     const ctx = getOrCreateEntityContext();
@@ -319,6 +326,63 @@ export class SessionManager {
       }
     } catch (e) {
       console.error(`Failed to set attribute '${attrKey}' on active span:`, e);
+    }
+  }
+
+  static getTraceId(): string | undefined {
+    const span = trace.getActiveSpan();
+    const ctx = span?.spanContext();
+    if (ctx && trace.isSpanContextValid(ctx)) {
+      return ctx.traceId;
+    }
+    return undefined;
+  }
+
+  static setInput(value: any): void {
+    try {
+      const serialized = _serializeSpanValue(value);
+      this.setAttributeOnActiveSpan("input", serialized);
+    } catch (e) {
+      console.error("SessionManager.setInput: failed to set input attribute", e);
+    }
+  }
+
+  static setOutput(value: any): void {
+    try {
+      const serialized = _serializeSpanValue(value);
+      this.setAttributeOnActiveSpan("output", serialized);
+    } catch (e) {
+      console.error("SessionManager.setOutput: failed to set output attribute", e);
+    }
+  }
+
+  static setRootInput(value: any): void {
+    try {
+      const serialized = _serializeSpanValue(value);
+      const rootSpan = this.getRootSpan();
+      if (rootSpan && rootSpan.isRecording()) {
+        rootSpan.setAttribute("input", serialized);
+      } else {
+        console.warn("setRootInput: no root span available, falling back to active span");
+        this.setAttributeOnActiveSpan("input", serialized);
+      }
+    } catch (e) {
+      console.error("SessionManager.setRootInput: failed to set input attribute", e);
+    }
+  }
+
+  static setRootOutput(value: any): void {
+    try {
+      const serialized = _serializeSpanValue(value);
+      const rootSpan = this.getRootSpan();
+      if (rootSpan && rootSpan.isRecording()) {
+        rootSpan.setAttribute("output", serialized);
+      } else {
+        console.warn("setRootOutput: no root span available, falling back to active span");
+        this.setAttributeOnActiveSpan("output", serialized);
+      }
+    } catch (e) {
+      console.error("SessionManager.setRootOutput: failed to set output attribute", e);
     }
   }
 }

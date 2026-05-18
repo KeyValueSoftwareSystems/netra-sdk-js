@@ -14,11 +14,7 @@ import { instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Tracer } from "./tracer";
 import { withBlockedSpansLocal } from "./processors/localfiltering-span-processor";
 import { setSessionBaggage } from "./processors/session-span-processor";
-import {
-  ConversationType,
-  runWithEntityContext,
-  SessionManager,
-} from "./session-manager";
+import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { SpanType } from "./types";
@@ -116,45 +112,19 @@ export * from "./exporters";
 
 type SpanCallback<T> = (span: SpanWrapper) => T;
 
-let _initialized = false;
-let _rootSpan: Span | undefined;
-let _config: Config | undefined;
-
 export class Netra {
   private static _initialized = false;
   private static _config: Config | undefined;
-
   private static _tracer: any;
+  private static _rootSpan: Span | undefined;
+  private static _metricsEnabled = false;
 
-  /**
-   * Usage API client for usage and traces
-   * Available after calling Netra.init()
-   */
   static usage: Usage;
-
-  /**
-   * Evaluation API client for datasets, runs, and test suites
-   * Available after calling Netra.init()
-   */
   static evaluation: Evaluation;
-
-  /**
-   * Dashboard API client for querying metrics and time-series data
-   * Available after calling Netra.init()
-   */
   static dashboard: Dashboard;
-
   static simulation: Simulation;
-
-  /**
-   * Prompts API client for prompt versioning
-   * Available after calling Netra.init()
-   */
   static prompts: Prompts;
 
-  /**
-   * Get the current Netra configuration
-   */
   static getConfig(): Config {
     if (!this._config) {
       throw new Error("Netra SDK not initialized. Call Netra.init() first.");
@@ -162,24 +132,10 @@ export class Netra {
     return this._config;
   }
 
-  /**
-   * Check if Netra has been initialized
-   */
   static isInitialized(): boolean {
     return this._initialized;
   }
 
-  /**
-   * Initialize the Netra SDK
-   *
-   * This method is async and must be awaited to ensure all instrumentations
-   * are ready before your application starts using instrumented modules.
-   *
-   * @example
-   * await Netra.init({ appName: 'my-app', instruments: new Set([NetraInstruments.OPENAI]) });
-   * // Now all instrumentations are ready
-   * const openai = new OpenAI();
-   */
   static async init(config: NetraConfig = {}): Promise<void> {
     if (this._initialized) {
       console.warn(
@@ -188,7 +144,6 @@ export class Netra {
       return;
     }
 
-    // Build Config
     const cfg = new Config(config);
     this._config = cfg;
 
@@ -199,15 +154,39 @@ export class Netra {
     const tracer = new Tracer(cfg, instruments, blockInstruments);
     this._tracer = tracer.tracer;
 
-    // Initialize API clients
-    this.usage = new Usage(cfg);
-    this.evaluation = new Evaluation(cfg);
-    this.dashboard = new Dashboard(cfg);
-    this.simulation = new Simulation(cfg);
-    this.prompts = new Prompts(cfg);
+    try {
+      this.usage = new Usage(cfg);
+    } catch (e) {
+      console.warn("Netra: failed to initialize usage client:", e);
+    }
+
+    try {
+      this.evaluation = new Evaluation(cfg);
+    } catch (e) {
+      console.warn("Netra: failed to initialize evaluation client:", e);
+    }
+
+    try {
+      this.dashboard = new Dashboard(cfg);
+    } catch (e) {
+      console.warn("Netra: failed to initialize dashboard client:", e);
+    }
+
+    try {
+      this.simulation = new Simulation(cfg);
+    } catch (e) {
+      console.warn("Netra: failed to initialize simulation client:", e);
+    }
+
+    try {
+      this.prompts = new Prompts(cfg);
+    } catch (e) {
+      console.warn("Netra: failed to initialize prompts client:", e);
+    }
 
     this._initialized = true;
     console.info("Netra successfully initialized.");
+
     if (cfg.debugMode) {
       let pkgVersion = Config.LIBRARY_VERSION;
       let pkgPath = "unknown";
@@ -263,23 +242,26 @@ export class Netra {
       const rootName = `${Config.LIBRARY_NAME}.root.span`;
 
       // Create the root span
-      _rootSpan = tracer.startSpan(rootName, {
+      this._rootSpan = tracer.startSpan(rootName, {
         kind: SpanKind.INTERNAL,
       });
 
-      if (_rootSpan) {
+      if (this._rootSpan) {
         if (cfg.appName) {
-          _rootSpan.setAttribute("service.name", cfg.appName);
+          this._rootSpan.setAttribute("service.name", cfg.appName);
         }
-        _rootSpan.setAttribute("netra.environment", cfg.environment);
-        _rootSpan.setAttribute("netra.library.version", Config.LIBRARY_VERSION);
+        this._rootSpan.setAttribute("netra.environment", cfg.environment);
+        this._rootSpan.setAttribute(
+          "netra.library.version",
+          Config.LIBRARY_VERSION,
+        );
 
         try {
-          SessionManager.setCurrentSpan(_rootSpan);
+          SessionManager.setCurrentSpan(this._rootSpan);
           // Also store the root span in SessionManager for access by SpanWrapper/decorators
-          SessionManager.setRootSpan(_rootSpan);
+          SessionManager.setRootSpan(this._rootSpan);
         } catch (e) {
-          // Ignore
+          // ignore
         }
 
         console.info(
@@ -292,30 +274,6 @@ export class Netra {
     await instrumentationsReady;
   }
 
-  /**
-   * @deprecated Use `Netra.init()` instead. The init method is now async by default.
-   *
-   * Initialize the Netra SDK and wait for all instrumentations to be ready.
-   * This method is kept for backwards compatibility.
-   */
-  static async initAsync(config: NetraConfig = {}): Promise<void> {
-    await this.init(config);
-  }
-
-  /**
-   * @deprecated Since `Netra.init()` is now async and waits for instrumentations,
-   * this method is no longer necessary. It's kept for backwards compatibility.
-   *
-   * Returns a promise that resolves when all async instrumentations are ready.
-   */
-  static async ready(): Promise<void> {
-    await instrumentationsReady;
-  }
-
-  /**
-   * Optional cleanup to end the root span and uninstrument all.
-   * Now async to ensure spans are flushed.
-   */
   static async shutdown(config: Config): Promise<void> {
     if (!this._initialized) {
       return;
@@ -325,47 +283,46 @@ export class Netra {
     try {
       uninstrumentAll(config);
     } catch (e) {
-      // Ignore
       if (this._config?.debugMode) {
         console.error("Error during uninstrumentAll:", e);
       }
     }
 
-    if (_rootSpan) {
+    if (this._rootSpan) {
       try {
-        _rootSpan.end();
+        this._rootSpan.end();
       } catch (e) {
       } finally {
-        _rootSpan = undefined;
+        this._rootSpan = undefined;
       }
     }
 
+    const FLUSH_TIMEOUT_MS = 5000;
+
     try {
-      const provider = trace.getTracerProvider();
-
-      // Define timeouts
-      const FLUSH_TIMEOUT_MS = 5000;
-
+      const traceProvider = trace.getTracerProvider();
       const flushPromise = (async () => {
         if (
-          "forceFlush" in provider &&
-          typeof provider.forceFlush === "function"
+          "forceFlush" in traceProvider &&
+          typeof traceProvider.forceFlush === "function"
         ) {
-          await provider.forceFlush();
+          await traceProvider.forceFlush();
         }
-        if ("shutdown" in provider && typeof provider.shutdown === "function") {
-          await provider.shutdown();
+        if (
+          "shutdown" in traceProvider &&
+          typeof traceProvider.shutdown === "function"
+        ) {
+          await traceProvider.shutdown();
         }
       })();
 
-      // Race against timeout
       await Promise.race([
         flushPromise,
         new Promise((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
       ]);
     } catch (e) {
       if (this._config?.debugMode) {
-        console.error("Error during Netra shutdown flush:", e);
+        console.error("Error during Netra trace shutdown:", e);
       }
     }
 
@@ -373,12 +330,30 @@ export class Netra {
     this._tracer = undefined;
   }
 
+  static getTraceId(): string | undefined {
+    return SessionManager.getTraceId();
+  }
+
+  static setInput(value: any): void {
+    SessionManager.setInput(value);
+  }
+
+  static setOutput(value: any): void {
+    SessionManager.setOutput(value);
+  }
+
+  static setRootInput(value: any): void {
+    SessionManager.setRootInput(value);
+  }
+
+  static setRootOutput(value: any): void {
+    SessionManager.setRootOutput(value);
+  }
+
   /**
    * Run a function with the root span as the active parent context.
    * All spans created within this function will be children of the root span.
-   *
-   * @param fn The function to run within the root span context
-   * @returns The result of the function (or a Promise if fn is async)
+   * Note: required in JS because OTel JS has no persistent context.attach()
    */
   static runWithRootSpan<T>(fn: () => T): T {
     const rootSpan = SessionManager.getRootSpan();
@@ -393,31 +368,6 @@ export class Netra {
     return context.with(ctxWithRoot, fn);
   }
 
-  /**
-   * Run a function within an isolated entity context.
-   * This ensures that entity stacks (workflow, task, agent, span) are isolated
-   * per request in concurrent environments.
-   *
-   * Note: Session context (session_id, user_id, tenant_id) is automatically
-   * isolated via OpenTelemetry's baggage API and AsyncLocalStorage.
-   * This method is primarily needed if you're using workflow/task/agent decorators
-   * or span wrappers in concurrent environments.
-   *
-   * @param fn The function to run with isolated entity context
-   * @returns The result of the function
-   *
-   */
-  static runWithContext<T>(fn: () => T): T {
-    return runWithEntityContext(fn);
-  }
-
-  /**
-   * Set session_id context attributes for all spans.
-   * Uses OpenTelemetry baggage API for automatic context propagation.
-   *
-   * Context automatically propagates across async boundaries in concurrent environments
-   * thanks to AsyncLocalStorage in @opentelemetry/sdk-node.
-   */
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
       console.error(
@@ -426,7 +376,6 @@ export class Netra {
       return;
     }
     if (sessionId) {
-      // Store in OpenTelemetry baggage - automatically propagates across async boundaries
       setSessionBaggage("session_id", sessionId);
       SessionManager.setSessionContext("session_id", sessionId);
     } else {
@@ -624,5 +573,4 @@ export class Netra {
   static withBlockedSpansLocal = withBlockedSpansLocal;
 }
 
-// Default export
 export default Netra;
