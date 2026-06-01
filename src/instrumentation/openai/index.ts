@@ -5,6 +5,7 @@
  * to ensure we patch the same module instance the application uses.
  */
 
+import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { __version__ } from "./version";
 import { chatWrapper, embeddingsWrapper, responsesWrapper } from "./wrappers";
@@ -12,48 +13,66 @@ import { chatWrapper, embeddingsWrapper, responsesWrapper } from "./wrappers";
 const INSTRUMENTATION_NAME = "netra.instrumentation.openai";
 const INSTRUMENTS = ["openai >= 4.0.0"];
 
-// Store original methods for uninstrumentation
+// Store original methods for uninstrumentation, keyed by "<classIdx>:<method>"
 const originalMethods: Map<string, Function> = new Map();
 
 // Track instrumentation state
 let isInstrumented = false;
 
-// Cache the resolved OpenAI class
-let OpenAIClass: any = null;
+// Cache all resolved OpenAI classes (ESM + CJS builds of dual-package)
+let OpenAIClasses: any[] = [];
 
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
 }
 
 /**
- * Dynamically resolve the OpenAI module from the application's context.
- * This ensures we patch the same module instance that the application uses.
+ * Resolve all OpenAI class instances the app may be using.
  *
- * IMPORTANT: We use dynamic import() to ensure we get the same ES module
- * instance that the application uses. Using require() would give us a
- * different instance due to ESM/CJS dual package handling in Node.js.
+ * openai@4+ ships as a dual-package (ESM: index.mjs, CJS: index.js).
+ * In Node.js these are separate module instances with separate prototypes.
+ * A CJS app's `require('openai')` gets index.js; our `import('openai')`
+ * gets index.mjs. Patching only one leaves the other unpatched.
+ *
+ * We resolve both and deduplicate so ESM-only apps aren't double-patched.
  */
-async function resolveOpenAIAsync(): Promise<any> {
-  if (OpenAIClass) return OpenAIClass;
+async function resolveOpenAIAsync(): Promise<any[]> {
+  if (OpenAIClasses.length > 0) return OpenAIClasses;
 
+  // ESM build — what import('openai') resolves to
   try {
-    // Use dynamic import to get the same ES module instance
     // @ts-ignore - openai is an optional peer dependency
-    const openaiModule = await import("openai");
-    OpenAIClass = openaiModule.OpenAI || openaiModule.default || openaiModule;
-    return OpenAIClass;
+    const esm = await import("openai");
+    const ESMClass = esm.OpenAI ?? esm.default ?? esm;
+    if (ESMClass) OpenAIClasses.push(ESMClass);
   } catch {
-    // Package not installed - this is fine, it's optional
-    return null;
+    // openai not installed — skip
   }
+
+  // CJS build — what the app's require('openai') resolves to.
+  // createRequire from this file's URL resolves through the same node_modules
+  // tree, so require('openai') hits the same CJS cache entry as the app's own
+  // require('openai') call.
+  try {
+    const req = createRequire(import.meta.url);
+    const cjs = req("openai");
+    const CJSClass = cjs.OpenAI ?? cjs.default ?? cjs;
+    if (CJSClass && !OpenAIClasses.includes(CJSClass)) {
+      OpenAIClasses.push(CJSClass);
+    }
+  } catch {
+    // createRequire failed or openai CJS build absent — skip
+  }
+
+  return OpenAIClasses;
 }
 
 /**
- * Synchronous version that returns cached class or null.
+ * Synchronous version that returns cached classes.
  * Must call resolveOpenAIAsync() first to populate cache.
  */
-function resolveOpenAI(): any {
-  return OpenAIClass;
+function resolveOpenAI(): any[] {
+  return OpenAIClasses;
 }
 
 /**
@@ -87,9 +106,9 @@ export class NetraOpenAIInstrumentor {
       return this;
     }
 
-    // Resolve OpenAI from application context using dynamic import
-    const OpenAI = await resolveOpenAIAsync();
-    if (!OpenAI) {
+    // Resolve all OpenAI class instances (ESM + CJS builds)
+    const classes = await resolveOpenAIAsync();
+    if (classes.length === 0) {
       // openai package not installed - skip silently (it's optional)
       return this;
     }
@@ -104,9 +123,11 @@ export class NetraOpenAIInstrumentor {
       return this;
     }
 
-    this._instrumentChatCompletions(OpenAI);
-    this._instrumentEmbeddings(OpenAI);
-    this._instrumentResponses(OpenAI);
+    classes.forEach((OpenAI, idx) => {
+      this._instrumentChatCompletions(OpenAI, idx);
+      this._instrumentEmbeddings(OpenAI, idx);
+      this._instrumentResponses(OpenAI, idx);
+    });
 
     isInstrumented = true;
     return this;
@@ -122,9 +143,9 @@ export class NetraOpenAIInstrumentor {
       return this;
     }
 
-    // Try to get cached OpenAI class (must have called instrumentAsync first)
-    const OpenAI = resolveOpenAI();
-    if (!OpenAI) {
+    // Try to get cached OpenAI classes (must have called instrumentAsync first)
+    const classes = resolveOpenAI();
+    if (classes.length === 0) {
       // Fall back to async initialization
       this.instrumentAsync(options).catch((e) => {
         console.error("Failed to instrument OpenAI:", e);
@@ -142,9 +163,11 @@ export class NetraOpenAIInstrumentor {
       return this;
     }
 
-    this._instrumentChatCompletions(OpenAI);
-    this._instrumentEmbeddings(OpenAI);
-    this._instrumentResponses(OpenAI);
+    classes.forEach((OpenAI, idx) => {
+      this._instrumentChatCompletions(OpenAI, idx);
+      this._instrumentEmbeddings(OpenAI, idx);
+      this._instrumentResponses(OpenAI, idx);
+    });
 
     isInstrumented = true;
     return this;
@@ -159,12 +182,11 @@ export class NetraOpenAIInstrumentor {
       return;
     }
 
-    const OpenAI = resolveOpenAI();
-    if (OpenAI) {
-      this._uninstrumentChatCompletions(OpenAI);
-      this._uninstrumentEmbeddings(OpenAI);
-      this._uninstrumentResponses(OpenAI);
-    }
+    resolveOpenAI().forEach((OpenAI, idx) => {
+      this._uninstrumentChatCompletions(OpenAI, idx);
+      this._uninstrumentEmbeddings(OpenAI, idx);
+      this._uninstrumentResponses(OpenAI, idx);
+    });
 
     originalMethods.clear();
     isInstrumented = false;
@@ -177,7 +199,7 @@ export class NetraOpenAIInstrumentor {
     return isInstrumented;
   }
 
-  private _instrumentChatCompletions(OpenAI: any): void {
+  private _instrumentChatCompletions(OpenAI: any, classIdx: number): void {
     if (!this.tracer) return;
 
     try {
@@ -189,7 +211,7 @@ export class NetraOpenAIInstrumentor {
         return;
       }
       const originalCreate = CompletionsClass.prototype.create;
-      originalMethods.set("chat.completions.create", originalCreate);
+      originalMethods.set(`${classIdx}:chat.completions.create`, originalCreate);
 
       const tracer = this.tracer;
       const wrapper = chatWrapper(tracer);
@@ -207,7 +229,7 @@ export class NetraOpenAIInstrumentor {
     }
   }
 
-  private _instrumentEmbeddings(OpenAI: any): void {
+  private _instrumentEmbeddings(OpenAI: any, classIdx: number): void {
     if (!this.tracer) return;
 
     try {
@@ -218,7 +240,7 @@ export class NetraOpenAIInstrumentor {
       }
 
       const originalCreate = EmbeddingsClass.prototype.create;
-      originalMethods.set("embeddings.create", originalCreate);
+      originalMethods.set(`${classIdx}:embeddings.create`, originalCreate);
 
       const tracer = this.tracer;
       const wrapper = embeddingsWrapper(tracer);
@@ -236,7 +258,7 @@ export class NetraOpenAIInstrumentor {
     }
   }
 
-  private _instrumentResponses(OpenAI: any): void {
+  private _instrumentResponses(OpenAI: any, classIdx: number): void {
     if (!this.tracer) return;
 
     try {
@@ -247,7 +269,7 @@ export class NetraOpenAIInstrumentor {
       }
 
       const originalCreate = ResponsesClass.prototype.create;
-      originalMethods.set("responses.create", originalCreate);
+      originalMethods.set(`${classIdx}:responses.create`, originalCreate);
 
       const tracer = this.tracer;
       const wrapper = responsesWrapper(tracer);
@@ -265,10 +287,10 @@ export class NetraOpenAIInstrumentor {
     }
   }
 
-  private _uninstrumentChatCompletions(OpenAI: any): void {
+  private _uninstrumentChatCompletions(OpenAI: any, classIdx: number): void {
     try {
       const CompletionsClass = OpenAI.Chat?.Completions;
-      const originalCreate = originalMethods.get("chat.completions.create");
+      const originalCreate = originalMethods.get(`${classIdx}:chat.completions.create`);
 
       if (originalCreate && CompletionsClass?.prototype?.create) {
         CompletionsClass.prototype.create =
@@ -280,10 +302,10 @@ export class NetraOpenAIInstrumentor {
     return;
   }
 
-  private _uninstrumentEmbeddings(OpenAI: any): void {
+  private _uninstrumentEmbeddings(OpenAI: any, classIdx: number): void {
     try {
       const EmbeddingsClass = OpenAI.Embeddings;
-      const originalCreate = originalMethods.get("embeddings.create");
+      const originalCreate = originalMethods.get(`${classIdx}:embeddings.create`);
 
       if (originalCreate && EmbeddingsClass?.prototype?.create) {
         EmbeddingsClass.prototype.create =
@@ -294,10 +316,10 @@ export class NetraOpenAIInstrumentor {
     }
   }
 
-  private _uninstrumentResponses(OpenAI: any): void {
+  private _uninstrumentResponses(OpenAI: any, classIdx: number): void {
     try {
       const ResponsesClass = OpenAI.Responses;
-      const originalCreate = originalMethods.get("responses.create");
+      const originalCreate = originalMethods.get(`${classIdx}:responses.create`);
 
       if (originalCreate && ResponsesClass?.prototype?.create) {
         ResponsesClass.prototype.create =
