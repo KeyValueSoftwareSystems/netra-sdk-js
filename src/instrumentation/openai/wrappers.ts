@@ -1,172 +1,134 @@
 import {
+  context,
   Span,
   SpanKind,
   SpanStatusCode,
   Tracer,
-  context,
 } from "@opentelemetry/api";
 import {
   isPromise,
   modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
-import { setRequestAttributes, setResponseAttributes } from "./utils";
+import {
+  setInputAttribute,
+  setOutputAttribute,
+  setRequestAttributes,
+  setResponseAttributes,
+} from "./utils";
+import { OpenAIRequestType, StreamResponse, WrapperFn } from "./types";
 
-type OpenAIRequestType = "chat" | "embedding" | "response";
+const SPAN_NAMES: Record<OpenAIRequestType, string> = {
+  chat: "openai.chat",
+  embedding: "openai.embedding",
+  response: "openai.response",
+};
 
-const CHAT_SPAN_NAME = "openai.chat";
-const EMBEDDING_SPAN_NAME = "openai.embedding";
-const RESPONSE_SPAN_NAME = "openai.response";
-const STREAM_ENABLED_REQUESTS: OpenAIRequestType[] = ["chat", "response"];
+const STREAMING_TYPES = new Set<OpenAIRequestType>(["chat", "response"]);
 
-function openAIWrapper(
-  tracer: Tracer,
-  spanName: string,
-  requestType: OpenAIRequestType
-) {
-  return function wrapper<F extends (...args: any[]) => any>(
-    wrapped: F,
-    instance: unknown,
-    args: Parameters<F>,
-    kwargs: Record<string, unknown> & { stream?: boolean }
-  ): unknown {
-    if (shouldSuppressInstrumentation()) {
-      const result = wrapped.call(instance, ...args);
-      return isPromise(result) ? result.then((value) => value) : result;
-    }
-
-    const isStreaming = kwargs.stream === true;
-    if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
-      // IMPORTANT: Pass the active context to inherit parent span
-      const currentContext = context.active();
-      const span = tracer.startSpan(
-        spanName,
-        {
-          kind: SpanKind.CLIENT,
-          attributes: { "llm.request.type": requestType },
-        },
-        currentContext
-      );
-
-      try {
-        setRequestAttributes(span, kwargs, requestType);
-        const startTime = Date.now();
-        const response = wrapped.call(instance, ...args);
-        if (isPromise(response)) {
-          return (async () => {
-            try {
-              const stream = await response;
-              return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
-            } catch (error) {
-              console.error("netra.instrumentation.openai:", error);
-              span.setStatus({
-                code: SpanStatusCode.ERROR,
-                message: error instanceof Error ? error.message : String(error),
-              });
-              span.recordException(error as Error);
-              span.end();
-              throw error;
-            }
-          })();
-        } else {
-          return new StreamingWrapper(span, response, startTime, kwargs);
-        }
-      } catch (error) {
-        console.error("netra.instrumentation.openai:", error);
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        span.recordException(error as Error);
-        span.end();
-        throw error;
-      }
-    } else {
-      return tracer.startActiveSpan(
-        spanName,
-        {
-          kind: SpanKind.CLIENT,
-          attributes: { "llm.request.type": requestType },
-        },
-        (span: Span) => {
-          try {
-            setRequestAttributes(span, kwargs, requestType);
-            const startTime = Date.now();
-            const response = wrapped.call(instance, ...args);
-            if (isPromise(response)) {
-              return (async () => {
-                try {
-                  const value = await response;
-                  const endTime = Date.now();
-                  const responseDict = modelAsDict(value);
-                  setResponseAttributes(span, responseDict);
-                  span.setAttribute(
-                    "llm.response.duration",
-                    (endTime - startTime) / 1000
-                  );
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  span.end();
-                  return value;
-                } catch (error) {
-                  console.error("netra.instrumentation.openai:", error);
-                  span.setStatus({
-                    code: SpanStatusCode.ERROR,
-                    message:
-                      error instanceof Error ? error.message : String(error),
-                  });
-                  span.recordException(error as Error);
-                  span.end();
-                  throw error;
-                }
-              })();
-            } else {
-              const endTime = Date.now();
-              const responseDict = modelAsDict(response);
-              setResponseAttributes(span, responseDict);
-              span.setAttribute(
-                "llm.response.duration",
-                (endTime - startTime) / 1000
-              );
-              span.setStatus({ code: SpanStatusCode.OK });
-              span.end();
-              return response;
-            }
-          } catch (error) {
-            console.error("netra.instrumentation.openai:", error);
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: error instanceof Error ? error.message : String(error),
-            });
-            span.recordException(error as Error);
-            span.end();
-            throw error;
-          }
-        }
-      );
-    }
-  };
-}
-
-/* Specific wrappers for different requests */
-export const chatWrapper = (tracer: Tracer) =>
-  openAIWrapper(tracer, CHAT_SPAN_NAME, "chat");
-
-export const embeddingsWrapper = (tracer: Tracer) =>
-  openAIWrapper(tracer, EMBEDDING_SPAN_NAME, "embedding");
-
-export const responsesWrapper = (tracer: Tracer) =>
-  openAIWrapper(tracer, RESPONSE_SPAN_NAME, "response");
-
-export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
-  private iterator: Iterator<unknown> | null = null;
-  private completeResponse: Record<string, any> = { choices: [], model: "" };
+abstract class BaseStreamHandler {
+  protected completeResponse: StreamResponse = { choices: [], model: "" };
 
   constructor(
-    private span: Span,
-    private response: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
+    protected span: Span,
+    protected startTime: number,
+    protected requestKwargs: Record<string, unknown>,
   ) {}
+
+  protected processChunk(chunk: unknown): void {
+    const chunkDict = modelAsDict(chunk);
+
+    if (chunkDict.model) {
+      this.completeResponse.model = String(chunkDict.model);
+    }
+
+    const chunkChoices = chunkDict.choices;
+    if (Array.isArray(chunkChoices)) {
+      for (const choice of chunkChoices as Array<Record<string, unknown>>) {
+        const index = Number(choice.index ?? 0);
+        this.ensureChoice(index);
+        const delta = (choice.delta ?? {}) as Record<string, unknown>;
+        if (delta.content) {
+          const entry = this.completeResponse.choices[index];
+          if (!entry.message) {
+            entry.message = { role: "assistant", content: "" };
+          }
+          const msg = entry.message as Record<string, unknown>;
+          msg.content = String(msg.content ?? "") + String(delta.content);
+        }
+        if (choice.finish_reason) {
+          this.completeResponse.choices[index].finish_reason =
+            choice.finish_reason;
+        }
+      }
+    }
+
+    if (chunkDict.usage) {
+      this.completeResponse.usage = chunkDict.usage;
+    }
+
+    // Responses API: final response object arrives in a chunk
+    const responseChunk = chunkDict.response as
+      | Record<string, unknown>
+      | undefined;
+    if (responseChunk?.status === "completed") {
+      const outputs = (responseChunk.output ?? []) as Array<
+        Record<string, unknown>
+      >;
+      for (const out of outputs) {
+        const content = out.content as
+          | Array<Record<string, unknown>>
+          | undefined;
+        if (Array.isArray(content)) {
+          for (const item of content) {
+            this.completeResponse.choices.push({
+              message: { role: "assistant", content: String(item.text ?? "") },
+            });
+          }
+        }
+      }
+      this.completeResponse.usage = responseChunk.usage ?? {};
+    }
+
+    this.span.addEvent("llm.content.completion.chunk");
+  }
+
+  protected ensureChoice(index: number): void {
+    const isChat = Array.isArray(this.requestKwargs.messages);
+    while (this.completeResponse.choices.length <= index) {
+      this.completeResponse.choices.push(
+        isChat ? { message: { role: "assistant", content: "" } } : { text: "" },
+      );
+    }
+  }
+
+  protected finalizeSpan(code: SpanStatusCode): void {
+    const duration = (Date.now() - this.startTime) / 1000;
+    if (code === SpanStatusCode.OK) {
+      const response = this.completeResponse as Record<string, unknown>;
+      setResponseAttributes(this.span, response);
+      setOutputAttribute(this.span, response);
+    }
+    this.span.setAttribute("llm.response.duration", duration);
+    this.span.setStatus({ code });
+    this.span.end();
+  }
+}
+
+export class StreamingWrapper
+  extends BaseStreamHandler
+  implements Iterable<unknown>
+{
+  private iterator: Iterator<unknown> | null = null;
+
+  constructor(
+    span: Span,
+    private response: unknown,
+    startTime: number,
+    requestKwargs: Record<string, unknown>,
+  ) {
+    super(span, startTime, requestKwargs);
+  }
 
   [Symbol.iterator](): Iterator<unknown> {
     return this;
@@ -174,34 +136,15 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
   next(): IteratorResult<unknown> {
     try {
-      const isObject = this.response && typeof this.response === "object";
-      if (!isObject) {
-        throw new Error("Response is not an iterable");
-      }
-
       if (!this.iterator) {
-        if (typeof this.response[Symbol.iterator] === "function") {
-          this.iterator = this.response[Symbol.iterator]();
-        } else if (
-          typeof (this.response as Iterator<unknown>).next === "function"
-        ) {
-          this.iterator = this.response as Iterator<unknown>;
-        } else {
-          throw new Error("Response is not an iterable");
-        }
+        this.iterator = this.resolveIterator();
       }
-
-      if (!this.iterator) {
-        throw new Error("Iterator not initialized");
-      }
-
       const result = this.iterator.next();
       if (result.done) {
         this.finalizeSpan(SpanStatusCode.OK);
-        return result;
+      } else {
+        this.processChunk(result.value);
       }
-
-      this.processChunk(result.value);
       return result;
     } catch (error) {
       this.finalizeSpan(SpanStatusCode.ERROR);
@@ -209,84 +152,34 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     }
   }
 
-  private processChunk(chunk: any): void {
-    const chunkDict =
-      typeof chunk?.toDict === "function" ? chunk.toDict() : chunk;
-    const choices = this.completeResponse.choices as any[];
-
-    if (chunkDict.model) this.completeResponse.model = chunkDict.model;
-
-    const chunkChoices = chunkDict.choices || [];
-    if (Array.isArray(chunkChoices)) {
-      chunkChoices.forEach((choice: any) => {
-        const index = Number(choice.index || 0);
-        this.ensureChoice(index);
-
-        const delta = choice.delta || {};
-        if (delta?.content) {
-          if (!choices[index].message) {
-            choices[index].message = { role: "assistant", content: "" };
-          }
-          choices[index].message.content += String(delta.content);
-        }
-
-        if (choice.finish_reason) {
-          choices[index].finish_reason = choice.finish_reason;
-        }
-      });
+  private resolveIterator(): Iterator<unknown> {
+    if (!this.response || typeof this.response !== "object") {
+      throw new Error("Response is not iterable");
     }
-
-    if (chunkDict.usage) this.completeResponse.usage = chunkDict.usage;
-
-    if (chunkDict.response?.status === "completed") {
-      const outputs = chunkDict.response.output || [];
-      outputs.forEach((output: any) => {
-        const content = output.content || [];
-        content.forEach((item: any) => {
-          choices.push({
-            message: { role: "assistant", content: item.text || "" },
-          });
-        });
-      });
-      this.completeResponse.usage = chunkDict.response.usage || {};
+    if (Symbol.iterator in (this.response as object)) {
+      return (this.response as Iterable<unknown>)[Symbol.iterator]();
     }
-
-    this.span.addEvent("llm.content.completion.chunk");
-  }
-
-  private ensureChoice(index: number): void {
-    const choices = this.completeResponse.choices as any[];
-    const isChat = !!this.requestKwargs?.messages;
-    while (choices.length <= index) {
-      choices.push(
-        isChat ? { message: { role: "assistant", content: "" } } : { text: "" }
-      );
+    if (typeof (this.response as Iterator<unknown>).next === "function") {
+      return this.response as Iterator<unknown>;
     }
-  }
-
-  private finalizeSpan(code: SpanStatusCode): void {
-    const duration = (Date.now() - this.startTime) / 1000;
-    this.span.setAttribute("llm.response.duration", duration);
-    this.span.setStatus({ code });
-    this.span.end();
+    throw new Error("Response is not iterable");
   }
 }
 
 export class AsyncStreamingWrapper
-  implements AsyncIterable<unknown>, AsyncIterator<unknown>
+  extends BaseStreamHandler
+  implements AsyncIterable<unknown>
 {
   private iterator: AsyncIterator<unknown> | null = null;
-  private completeResponse: Record<string, unknown> = {
-    choices: [],
-    model: "",
-  };
 
   constructor(
-    private span: Span,
-    private response: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
-  ) {}
+    span: Span,
+    private response: unknown,
+    startTime: number,
+    requestKwargs: Record<string, unknown>,
+  ) {
+    super(span, startTime, requestKwargs);
+  }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
     return this;
@@ -295,39 +188,14 @@ export class AsyncStreamingWrapper
   async next(): Promise<IteratorResult<unknown>> {
     try {
       if (!this.iterator) {
-        const isObject = this.response && typeof this.response === "object";
-        if (!isObject) {
-          throw new Error("Response is not an iterable");
-        }
-
-        if (Symbol.asyncIterator in this.response) {
-          this.iterator = (this.response as AsyncIterable<unknown>)[
-            Symbol.asyncIterator
-          ]();
-        } else if (Symbol.iterator in (this.response as any)) {
-          const syncIterator = (this.response as Iterable<unknown>)[
-            Symbol.iterator
-          ]();
-          this.iterator = {
-            async next() {
-              return syncIterator.next();
-            },
-          };
-        } else if (
-          typeof (this.response as AsyncIterator<unknown>).next === "function"
-        ) {
-          this.iterator = this.response as AsyncIterator<unknown>;
-        } else {
-          throw new Error("Response is not iterable");
-        }
+        this.iterator = this.resolveIterator();
       }
-
       const result = await this.iterator.next();
       if (result.done) {
         this.finalizeSpan(SpanStatusCode.OK);
-        return result;
+      } else {
+        this.processChunk(result.value);
       }
-      this.processChunk(result.value);
       return result;
     } catch (error) {
       this.finalizeSpan(SpanStatusCode.ERROR);
@@ -335,85 +203,142 @@ export class AsyncStreamingWrapper
     }
   }
 
-  private processChunk(chunk: any): void {
-    const chunkDict = modelAsDict(chunk);
-    const choices = this.completeResponse.choices as Array<
-      Record<string, unknown>
-    >;
-    if (chunkDict.model) {
-      this.completeResponse.model = chunkDict.model;
+  private resolveIterator(): AsyncIterator<unknown> {
+    if (!this.response || typeof this.response !== "object") {
+      throw new Error("Response is not iterable");
     }
-
-    const chunkChoices = (chunkDict.choices || []) as Array<
-      Record<string, unknown>
-    >;
-
-    // Completion API
-    if (Array.isArray(chunkChoices)) {
-      chunkChoices.forEach((choice: any) => {
-        const index = Number(choice.index || 0);
-        this.ensureChoice(index);
-        const delta = (choice.delta || {}) as Record<string, unknown>;
-        if (typeof delta === "object" && delta.content) {
-          const contentPiece = String(delta.content || "");
-          const choiceEntry = choices[index];
-          if (!choiceEntry.message) {
-            choiceEntry.message = { role: "assistant", content: "" };
-          }
-          const message = choiceEntry.message as Record<string, unknown>;
-          message.content = String(message.content || "") + contentPiece;
-        }
-
-        if (choice.finish_reason) {
-          choices[index].finish_reason = choice.finish_reason;
-        }
-      });
+    if (Symbol.asyncIterator in (this.response as object)) {
+      return (this.response as AsyncIterable<unknown>)[Symbol.asyncIterator]();
     }
-
-    if (chunkDict.usage) this.completeResponse.usage = chunkDict.usage;
-
-    // Response API
-    if ((chunkDict.response as any)?.status === "completed") {
-      const response = chunkDict.response as Record<string, unknown>;
-      const responseOutput = (response.output || []) as Array<
-        Record<string, unknown>
-      >;
-      responseOutput.forEach((output: any) => {
-        const content = output.content as Array<Record<string, unknown>>;
-        if (content) {
-          for (const contentItem of content) {
-            const assistantText = contentItem.text || "";
-            // Append to choices array instead of replacing
-            (
-              this.completeResponse.choices as Array<Record<string, unknown>>
-            ).push({
-              message: { role: "assistant", content: assistantText },
-            });
-          }
-        }
-        const usage = response.usage || {};
-        this.completeResponse.usage = usage;
-      });
+    if (Symbol.iterator in (this.response as object)) {
+      const syncIter = (this.response as Iterable<unknown>)[Symbol.iterator]();
+      return {
+        async next() {
+          return syncIter.next();
+        },
+      };
     }
-    this.span.addEvent("llm.content.completion.chunk");
-  }
-
-  private ensureChoice(index: number): void {
-    const choices = this.completeResponse.choices as any[];
-    const isChat = !!this.requestKwargs?.messages;
-    while (choices.length <= index) {
-      choices.push(
-        isChat ? { message: { role: "assistant", content: "" } } : { text: "" }
-      );
+    if (typeof (this.response as AsyncIterator<unknown>).next === "function") {
+      return this.response as AsyncIterator<unknown>;
     }
-  }
-
-  private finalizeSpan(code: SpanStatusCode): void {
-    const endTime = Date.now();
-    const duration = (endTime - this.startTime) / 1000;
-    setResponseAttributes(this.span, this.completeResponse);
-    this.span.setAttribute("llm.response.duration", duration);
-    this.span.setStatus({ code });
-    this.span.end();
+    throw new Error("Response is not iterable");
   }
 }
+
+function handleSpanError(span: Span, error: unknown): void {
+  span.setStatus({
+    code: SpanStatusCode.ERROR,
+    message: error instanceof Error ? error.message : String(error),
+  });
+  span.recordException(error as Error);
+  span.end();
+}
+
+function executeNonStreaming(
+  span: Span,
+  kwargs: Record<string, unknown>,
+  requestType: OpenAIRequestType,
+  call: () => unknown,
+): unknown {
+  const startTime = Date.now();
+  try {
+    setRequestAttributes(span, kwargs, requestType);
+    setInputAttribute(span, kwargs, requestType);
+    const result = call();
+    if (isPromise(result)) {
+      return result.then(
+        (value) => {
+          const responseDict = modelAsDict(value);
+          setResponseAttributes(span, responseDict);
+          setOutputAttribute(span, responseDict);
+          span.setAttribute(
+            "llm.response.duration",
+            (Date.now() - startTime) / 1000,
+          );
+          span.setStatus({ code: SpanStatusCode.OK });
+          span.end();
+          return value;
+        },
+        (error) => {
+          handleSpanError(span, error);
+          throw error;
+        },
+      );
+    }
+    const responseDict = modelAsDict(result);
+    setResponseAttributes(span, responseDict);
+    setOutputAttribute(span, responseDict);
+    span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
+    span.setStatus({ code: SpanStatusCode.OK });
+    span.end();
+    return result;
+  } catch (error) {
+    handleSpanError(span, error);
+    throw error;
+  }
+}
+
+function openAIWrapper(
+  tracer: Tracer,
+  requestType: OpenAIRequestType,
+): WrapperFn {
+  const spanName = SPAN_NAMES[requestType];
+  const spanAttrs = { "llm.request.type": requestType };
+
+  return (wrapped, instance, args, kwargs) => {
+    if (shouldSuppressInstrumentation()) {
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((v) => v) : result;
+    }
+
+    const isStreaming =
+      kwargs.stream === true && STREAMING_TYPES.has(requestType);
+
+    if (isStreaming) {
+      const span = tracer.startSpan(
+        spanName,
+        { kind: SpanKind.CLIENT, attributes: spanAttrs },
+        context.active(),
+      );
+      try {
+        setRequestAttributes(span, kwargs, requestType);
+        setInputAttribute(span, kwargs, requestType);
+        const startTime = Date.now();
+        const response = wrapped.call(instance, ...args);
+        if (isPromise(response)) {
+          return (async () => {
+            try {
+              const stream = await response;
+              return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
+            } catch (error) {
+              handleSpanError(span, error);
+              throw error;
+            }
+          })();
+        }
+        return new StreamingWrapper(span, response, startTime, kwargs);
+      } catch (error) {
+        handleSpanError(span, error);
+        throw error;
+      }
+    }
+
+    return tracer.startActiveSpan(
+      spanName,
+      { kind: SpanKind.CLIENT, attributes: spanAttrs },
+      (span) =>
+        executeNonStreaming(span, kwargs, requestType, () =>
+          wrapped.call(instance, ...args),
+        ),
+    );
+  };
+}
+
+export const chatWrapper = (tracer: Tracer): WrapperFn =>
+  openAIWrapper(tracer, "chat");
+
+export const embeddingsWrapper = (tracer: Tracer): WrapperFn =>
+  openAIWrapper(tracer, "embedding");
+
+export const responsesWrapper = (tracer: Tracer): WrapperFn =>
+  openAIWrapper(tracer, "response");

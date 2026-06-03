@@ -388,7 +388,7 @@ async function initCustomInstrumentationsAsync(
     !blockInstruments?.has(NetraInstruments.OPENAI)
   ) {
     try {
-      await openAIInstrumentor.instrumentAsync({ tracerProvider });
+      await openAIInstrumentor.instrument({ tracerProvider });
       if (config.debugMode) {
         console.debug("Custom OpenAI instrumentation enabled");
       }
