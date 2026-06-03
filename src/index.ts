@@ -6,19 +6,16 @@
 
 import { context, Span, SpanKind, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
-import { Dashboard } from "./api/dashboard";
-import { Evaluation } from "./api/evaluation";
-import { Usage } from "./api/usage";
+import { Prompts, Dashboard, Evaluation, Usage } from "./api";
 import { Config, NetraConfig } from "./config";
 import { instrumentationsReady, uninstrumentAll } from "./instrumentation";
-import { Tracer } from "./tracer";
-import { withBlockedSpansLocal } from "./processors/localfiltering-span-processor";
-import { setSessionBaggage } from "./processors/session-span-processor";
+import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
 import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
-import { SpanType } from "./types";
-import { Prompts } from "./api";
+import { Tracer } from "./tracer";
+import { isEnumValue } from "./utils";
+import { SpanType, SpanCallback } from "./types";
 
 export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
@@ -110,9 +107,9 @@ export type {
 } from "./simulation";
 export * from "./exporters";
 
-type SpanCallback<T> = (span: SpanWrapper) => T;
-
 export class Netra {
+  private static _SDK_NAME = "netra_sdk";
+
   private static _initialized = false;
   private static _config: Config | undefined;
   private static _tracer: any;
@@ -366,7 +363,10 @@ export class Netra {
     }
     if (sessionId) {
       setSessionBaggage("session_id", sessionId);
-      SessionManager.setAttributeOnActiveSpan(`${Config.LIBRARY_NAME}.session_id`, sessionId);
+      SessionManager.setAttributeOnActiveSpan(
+        `${Config.LIBRARY_NAME}.session_id`,
+        sessionId,
+      );
     } else {
       console.warn(
         "setSessionId: Session ID must be provided for setting session_id.",
@@ -385,7 +385,10 @@ export class Netra {
     }
     if (userId) {
       setSessionBaggage("user_id", userId);
-      SessionManager.setAttributeOnActiveSpan(`${Config.LIBRARY_NAME}.user_id`, userId);
+      SessionManager.setAttributeOnActiveSpan(
+        `${Config.LIBRARY_NAME}.user_id`,
+        userId,
+      );
     } else {
       console.warn("setUserId: User ID must be provided for setting user_id.");
     }
@@ -404,7 +407,10 @@ export class Netra {
     }
     if (tenantId) {
       setSessionBaggage("tenant_id", tenantId);
-      SessionManager.setAttributeOnActiveSpan(`${Config.LIBRARY_NAME}.tenant_id`, tenantId);
+      SessionManager.setAttributeOnActiveSpan(
+        `${Config.LIBRARY_NAME}.tenant_id`,
+        tenantId,
+      );
     } else {
       console.warn(
         "setTenantId: Tenant ID must be provided for setting tenant_id.",
@@ -458,18 +464,51 @@ export class Netra {
   /**
    * Start a new span
    */
+  static startSpan(name: string): SpanWrapper;
   static startSpan(
     name: string,
-    attributes: Record<string, string> = {},
-    moduleName: string = "netra_sdk",
-    asType: SpanType = SpanType.SPAN,
+    attributes: Record<string, string>,
+  ): SpanWrapper;
+  static startSpan(
+    name: string,
+    attributes: Record<string, string>,
+    asType: SpanType,
+  ): SpanWrapper;
+  static startSpan(
+    name: string,
+    attributes: Record<string, string>,
+    moduleName: string,
+    asType: SpanType,
+  ): SpanWrapper;
+  static startSpan(
+    name: string,
+    attributes?: Record<string, string>,
+    moduleNameOrAsType?: string | SpanType,
+    asType?: SpanType,
   ): SpanWrapper {
-    // Pass the effective tracer derived from the provider we control
+    let finalAttributes: Record<string, string> = {};
+    let moduleName = this._SDK_NAME;
+    let spanType: SpanType = SpanType.SPAN;
+
+    if (moduleNameOrAsType === undefined) {
+      // (name) or (name, attributes)
+      finalAttributes = attributes ?? {};
+    } else if (isEnumValue(SpanType, moduleNameOrAsType)) {
+      // (name, attributes, asType)
+      finalAttributes = attributes ?? {};
+      spanType = moduleNameOrAsType;
+    } else {
+      // (name, attributes, moduleName, asType)
+      finalAttributes = attributes ?? {};
+      moduleName = moduleNameOrAsType;
+      spanType = asType ?? SpanType.SPAN;
+    }
+
     return new SpanWrapper(
       name,
-      attributes,
+      finalAttributes,
       moduleName,
-      asType,
+      spanType,
       this._tracer,
     ).start();
   }
@@ -501,7 +540,7 @@ export class Netra {
     fn?: SpanCallback<T>,
   ): T {
     let attributes: Record<string, string> = {};
-    let moduleName = "netra_sdk";
+    let moduleName = this._SDK_NAME;
     let spanType: SpanType = SpanType.SPAN;
     let callback: SpanCallback<T>;
 

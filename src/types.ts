@@ -2,7 +2,7 @@
  * Type definitions for Netra SDK
  */
 
-import { Span } from "@opentelemetry/api";
+import { SpanWrapper } from "./span-wrapper";
 
 export enum SpanType {
   SPAN = "SPAN",
@@ -45,4 +45,4 @@ export interface DecoratorOptions {
   asType?: SpanType;
 }
 
-
+export type SpanCallback<T> = (span: SpanWrapper) => T;
