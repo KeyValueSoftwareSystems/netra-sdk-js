@@ -480,17 +480,23 @@ function initOpenTelemetryInstrumentations(
   instruments?: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
 ): void {
-  // HTTP/HTTPS instrumentation
-  if (
+  // HTTP instrumentation — also auto-enabled with EXPRESS because HttpInstrumentation
+  // is what extracts traceparent from incoming request headers. Without it, Express
+  // apps create a new root trace on every request instead of inheriting the caller's trace.
+  const httpEnabled =
     !blockInstruments?.has(NetraInstruments.HTTP) &&
-    (!instruments || instruments.has(NetraInstruments.HTTP))
-  ) {
+    (!instruments ||
+      instruments.has(NetraInstruments.HTTP) ||
+      instruments.has(NetraInstruments.EXPRESS));
+
+  if (httpEnabled) {
     try {
-      const {
-        HttpInstrumentation,
-      } = require("@opentelemetry/instrumentation-http");
-      const httpInstrumentation = new HttpInstrumentation();
-      // Note: This would need to be registered with the SDK
+      const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
+      const { registerInstrumentations } = require("@opentelemetry/instrumentation");
+      registerInstrumentations({ instrumentations: [new HttpInstrumentation()] });
+      if (config.debugMode) {
+        console.debug("HTTP instrumentation enabled");
+      }
     } catch (e) {
       if (config.debugMode) {
         console.debug("HTTP instrumentation not available:", e);
@@ -548,10 +554,12 @@ function initOpenTelemetryInstrumentations(
     (!instruments || instruments.has(NetraInstruments.EXPRESS))
   ) {
     try {
-      const {
-        ExpressInstrumentation,
-      } = require("@opentelemetry/instrumentation-express");
-      // Note: This would need to be registered with the SDK
+      const { ExpressInstrumentation } = require("@opentelemetry/instrumentation-express");
+      const { registerInstrumentations } = require("@opentelemetry/instrumentation");
+      registerInstrumentations({ instrumentations: [new ExpressInstrumentation()] });
+      if (config.debugMode) {
+        console.debug("Express instrumentation enabled");
+      }
     } catch (e) {
       if (config.debugMode) {
         console.debug("Express instrumentation not available:", e);
