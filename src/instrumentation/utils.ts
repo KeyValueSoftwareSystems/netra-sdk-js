@@ -7,6 +7,7 @@ import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
 import { SpanAttributes } from "./span-attributes";
 
+// Suppression
 const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
 
 export function shouldSuppressInstrumentation(): boolean {
@@ -14,6 +15,7 @@ export function shouldSuppressInstrumentation(): boolean {
   return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
 }
 
+// Type Utilities
 export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
   return value instanceof Promise;
 }
@@ -46,6 +48,17 @@ export function modelAsDict(obj: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * A normalized input or output message used for span attribute recording.
+ * Providers can build TracedMessage[] using their own extraction logic and
+ * pass it directly to writePromptAttributes / writeCompletionAttributes.
+ */
+export interface TracedMessage {
+  role: string;
+  content: string;
+}
+
+// Internal Helpers
 function isTraceContentEnabled(): boolean {
   const raw =
     process.env.TRACELOOP_TRACE_CONTENT ??
@@ -72,13 +85,14 @@ function truncate(value: string, maxLen: number): string {
  * Returns true if `value` represents meaningful content worth recording.
  * Guards against setting empty-string attributes on spans.
  */
-function hasContent(value: unknown): boolean {
+export function hasContent(value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (typeof value === "string") return value.length > 0;
   if (Array.isArray(value)) return value.length > 0;
   return true;
 }
 
+// Attribute Mapping (model params → span attributes)
 const PARAM_ATTRIBUTE_MAP: Record<string, string> = {
   model: SpanAttributes.LLM_REQUEST_MODEL,
   temperature: SpanAttributes.LLM_REQUEST_TEMPERATURE,
@@ -103,6 +117,235 @@ function setModelParams(span: Span, kwargs: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Extracts input messages for OpenAI-compatible request shapes:
+ *   - "chat": messages[] (standard Chat Completions API)
+ *   - "response": instructions + input (Responses API)
+ *   - everything else: prompt string or embedding input
+ *
+ * Google GenAI and other providers with different shapes should build their
+ * own TracedMessage[] and call writePromptAttributes directly.
+ */
+export function buildInputMessages(
+  kwargs: Record<string, unknown>,
+  requestType: string,
+): TracedMessage[] {
+  const messages: TracedMessage[] = [];
+
+  if (requestType === "chat") {
+    const rawMessages = kwargs.messages;
+    if (!Array.isArray(rawMessages)) return messages;
+    for (const msg of rawMessages) {
+      if (!isDict(msg)) continue;
+      if (hasContent(msg.role) && hasContent(msg.content)) {
+        messages.push({
+          role: msg.role,
+          content: safeStringify(msg.content),
+        });
+      }
+    }
+  } else if (requestType === "response") {
+    if (hasContent(kwargs.instructions)) {
+      messages.push({ role: "system", content: String(kwargs.instructions) });
+    }
+    const input = kwargs.input;
+    if (typeof input === "string" && input.length > 0) {
+      messages.push({ role: "user", content: input });
+    } else if (Array.isArray(input)) {
+      for (const msg of input) {
+        if (!isDict(msg)) continue;
+        if (hasContent(msg.role) && hasContent(msg.content)) {
+          messages.push({
+            role: msg.role,
+            content: safeStringify(msg.content),
+          });
+        }
+      }
+    }
+  } else if (kwargs.prompt !== undefined) {
+    // Legacy single-prompt (e.g.,completions)
+    const content = String(kwargs.prompt);
+    if (content.length > 0) {
+      messages.push({ role: "user", content });
+    }
+  } else {
+    // Embeddings / genericinput
+    const input = kwargs.input ?? kwargs.inputs;
+    if (hasContent(input)) {
+      const content = truncate(
+        safeStringify(input),
+        Config.CONVERSATION_MAX_LEN,
+      );
+      messages.push({ role: "user", content });
+    }
+  }
+
+  return messages;
+}
+
+/**
+ * Extracts output messages for OpenAI-compatible response shapes:
+ *   - choices[].message (Chat Completions API) — with optional tool_calls
+ *   - output[].content[].text (Responses API)
+ *   - content[] text/tool_use blocks (Anthropic-style)
+ *   - scalar output_text shorthand
+ *
+ * Skips messages with empty content to avoid polluting traces.
+ */
+export function buildOutputMessages(
+  response: Record<string, unknown>,
+): TracedMessage[] {
+  const messages: TracedMessage[] = [];
+
+  // 1. Scalar output_text (highest priority, single completion)
+  if (
+    typeof response.output_text === "string" &&
+    response.output_text.length > 0
+  ) {
+    messages.push({ role: "assistant", content: response.output_text });
+  }
+
+  // 2. Array content blocks (Anthropic-style:content[].type="text"|"tool_use")
+  if (Array.isArray(response.content)) {
+    for (const block of response.content as Array<any>) {
+      if (block.type === "text" && hasContent(block.text)) {
+        messages.push({ role: "assistant", content: String(block.text) });
+      } else if (block.type === "tool_use" && block.name) {
+        messages.push({
+          role: "tool",
+          content: JSON.stringify({ name: block.name, input: block.input }),
+        });
+      }
+    }
+  }
+
+  // 3. Responses API:output[].content[].text
+  if (Array.isArray(response.output)) {
+    for (const element of response.output as Array<Record<string, unknown>>) {
+      if (!Array.isArray(element.content)) continue;
+      for (const chunk of element.content as Array<Record<string, unknown>>) {
+        if (hasContent(chunk.text)) {
+          messages.push({ role: "assistant", content: String(chunk.text) });
+        }
+      }
+    }
+  }
+
+  // 4. Chat Completions API: choices[].message (with tool_calls)
+  if (Array.isArray(response.choices)) {
+    for (const choice of response.choices as Array<Record<string, any>>) {
+      const msg = choice.message ?? choice.delta;
+      if (!msg) continue;
+
+      // Response message
+      if (hasContent(msg.role) && hasContent(msg.content)) {
+        messages.push({
+          role: msg.role,
+          content: String(msg.content),
+        });
+      }
+
+      // Tool calls attached to the message
+      if (Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
+          const fn = tc.function as Record<string, unknown> | undefined;
+          messages.push({
+            role: "tool",
+            content: JSON.stringify({
+              name: fn?.name ?? "",
+              arguments: fn?.arguments ?? "",
+            }),
+          });
+        }
+      }
+    }
+  }
+
+  return messages;
+}
+
+/**
+ * Writes a TracedMessage[] in two formats:
+ *   1. gen_ai.prompt.{i}.role / gen_ai.prompt.{i}.content  (OTel GenAI conventions)
+ *   2. "input" JSON blob (Netra dashboard attribute)
+ */
+export function writePromptAttributes(
+  span: Span,
+  messages: TracedMessage[],
+): void {
+  if (messages.length === 0) return;
+
+  for (let i = 0; i < messages.length; i++) {
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
+      messages[i].role,
+    );
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+      messages[i].content,
+    );
+  }
+
+  span.setAttribute("input", JSON.stringify(messages));
+}
+
+/**
+ * Writes a TracedMessage[] in two formats:
+ *   1. gen_ai.completion.{i}.role / gen_ai.completion.{i}.content  (OTel GenAI conventions)
+ *   2. "output" JSON blob (Netra dashboard attribute)
+ *
+ * Tool-call blocks in the messages are also written to gen_ai.response.tool_calls.*.
+ */
+export function writeCompletionAttributes(
+  span: Span,
+  messages: TracedMessage[],
+): void {
+  if (messages.length === 0) return;
+
+  let completionIdx = 0;
+  let toolCallIdx = 0;
+
+  for (const msg of messages) {
+    if (msg.role === "tool") {
+      // Tool entries are emitted as tool_call attributes, not completion entries
+      try {
+        const parsed = JSON.parse(msg.content) as Record<string, unknown>;
+        const toolData = {
+          name: parsed.name,
+          id: parsed.id,
+          input: parsed.input,
+          arguments: parsed.arguments,
+        };
+        span.setAttribute(
+          `gen_ai.response.completion.${completionIdx}.role`,
+          "tool",
+        );
+        span.setAttribute(
+          `gen_ai.response.completion.${completionIdx}.content`,
+          JSON.stringify(toolData),
+        );
+        completionIdx++;
+      } catch (error) {
+        console.error("Error parsing tool content:", error);
+      }
+    } else {
+      span.setAttribute(
+        `${SpanAttributes.LLM_COMPLETIONS}.${completionIdx}.role`,
+        msg.role,
+      );
+      span.setAttribute(
+        `${SpanAttributes.LLM_COMPLETIONS}.${completionIdx}.content`,
+        msg.content,
+      );
+      completionIdx++;
+    }
+  }
+
+  span.setAttribute("output", JSON.stringify(messages));
+}
+
+
+// Request Attributes
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
@@ -130,167 +373,29 @@ export function setRequestAttributes(
     );
   }
 
-  // Content tracing (guarded by config/env)
+  // Content tracing — extract once, write in bothformats
   if (isTraceContentEnabled()) {
-    setPromptContent(span, kwargs, requestType);
-  }
-}
+    const messages = buildInputMessages(kwargs, requestType);
+    writePromptAttributes(span, messages);
 
-function setPromptContent(
-  span: Span,
-  kwargs: Record<string, unknown>,
-  requestType: string,
-): void {
-  if (requestType === "chat") {
-    setChatPromptAttributes(span, kwargs);
-  } else if (requestType === "response") {
-    setResponsesApiPromptAttributes(span, kwargs);
-  } else if (kwargs.prompt !== undefined) {
-    setSinglePromptAttribute(span, kwargs);
-  } else {
-    setEmbeddingPromptAttribute(span, kwargs);
-  }
-}
-
-/**
- * Chat Completions API: messages[] → gen_ai.prompt.{i}.role / .content
- */
-function setChatPromptAttributes(
-  span: Span,
-  kwargs: Record<string, unknown>,
-): void {
-  const messages = kwargs.messages;
-  if (!Array.isArray(messages)) return;
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (!isDict(msg)) continue;
-
-    if (!hasContent(msg.role) || !hasContent(msg.content)) {
-      continue;
-    }
-
-    const content = msg.content;
-    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.${i}.role`, msg.role);
-    if (typeof content === "string") {
-      span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.${i}.content`, content);
-    } else if (Array.isArray(content)) {
-      setArrayContentBlocks(span, i, content);
-    } else {
+    // Legacy: FIMsuffix
+    if (kwargs.suffix !== undefined) {
       span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
-        JSON.stringify(content),
+        "llm.request.suffix",
+        truncate(safeStringify(kwargs.suffix), Config.CONVERSATION_MAX_LEN),
       );
     }
   }
 }
 
-/**
- * Handles multimodal/tool_result content blocks within a single message.
- */
-function setArrayContentBlocks(
-  span: Span,
-  messageIndex: number,
-  blocks: Array<any>,
-): void {
-  for (let b = 0; b < blocks.length; b++) {
-    const block = blocks[b];
-    if (block.type === "tool_result") {
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.tool_result.${b}.tool_use_id`,
-        block.tool_use_id,
-      );
-      if (hasContent(block.content)) {
-        span.setAttribute(
-          `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.tool_result.${b}.content`,
-          typeof block.content === "string"
-            ? block.content
-            : JSON.stringify(block.content),
-        );
-      }
-    } else if (block.type === "text" && hasContent(block.text)) {
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.content.${b}`,
-        block.text,
-      );
-    }
-  }
-}
-
-/**
- * Responses API: instructions + input → gen_ai.prompt.{i}.*
- */
-function setResponsesApiPromptAttributes(
-  span: Span,
-  kwargs: Record<string, unknown>,
-): void {
-  let idx = 0;
-
-  if (hasContent(kwargs.instructions)) {
-    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.${idx}.role`, "system");
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${idx}.content`,
-      String(kwargs.instructions),
-    );
-    idx++;
-  }
-
-  const input = kwargs.input;
-  if (typeof input === "string" && input.length > 0) {
-    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.${idx}.role`, "user");
-    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.${idx}.content`, input);
-  } else if (Array.isArray(input)) {
-    for (const msg of input) {
-      if (!isDict(msg)) continue;
-      const content = msg.content;
-      if (!hasContent(content)) continue;
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${idx}.role`,
-        msg.role ?? "user",
-      );
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${idx}.content`,
-        safeStringify(content),
-      );
-      idx++;
-    }
-  }
-}
-
-/**
- * Simple single-prompt case (e.g., legacy completions).
- */
-function setSinglePromptAttribute(
-  span: Span,
-  kwargs: Record<string, unknown>,
-): void {
-  const content = String(kwargs.prompt);
-  if (content.length === 0) return;
-  span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.role`, "user");
-  span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.content`, content);
-}
-
-/**
- * Embedding input as a single prompt attribute.
- */
-function setEmbeddingPromptAttribute(
-  span: Span,
-  kwargs: Record<string, unknown>,
-): void {
-  const content = kwargs.input ?? kwargs.inputs;
-  if (!hasContent(content)) return;
-  const prompt = truncate(safeStringify(content), Config.CONVERSATION_MAX_LEN);
-  span.setAttribute(SpanAttributes.LLM_PROMPTS, prompt);
-  span.setAttribute("llm.request.input", prompt);
-}
-
+// Response Attributes
 export function setResponseAttributes(
   span: Span,
   response: Record<string, unknown>,
 ): void {
   if (!span.isRecording()) return;
 
-  // Response ID
+  // ResponseID
   if (response.id) {
     span.setAttribute("llm.response.id", String(response.id));
   }
@@ -301,21 +406,23 @@ export function setResponseAttributes(
     span.setAttribute(SpanAttributes.LLM_RESPONSE_MODEL, String(model));
   }
 
-  // Token usage
+  // Tokenusage
   setUsageAttributes(span, response);
 
-  // Finish reason (from first choice)
+  // Finish reason (from firstchoice)
   setFinishReason(span, response);
 
-  // Completion content (guarded)
-  if (isTraceContentEnabled()) {
-    setCompletionContent(span, response);
-  }
-
-  // Embedding metadata
+  // Embeddingmetadata
   setEmbeddingResponseMeta(span, response);
+
+  // Content tracing — extract once, write in bothformats
+  if (isTraceContentEnabled()) {
+    const messages = buildOutputMessages(response);
+    writeCompletionAttributes(span, messages);
+  }
 }
 
+// Response Sub-helpers
 function setFinishReason(span: Span, response: Record<string, unknown>): void {
   const choices = response.choices as
     | Array<Record<string, unknown>>
@@ -401,144 +508,4 @@ function setEmbeddingResponseMeta(
   if (Array.isArray(embedding)) {
     span.setAttribute("llm.response.embedding_dimensions", embedding.length);
   }
-}
-
-/**
- * Populates gen_ai.completion.{i}.role and .content from the response.
- * Handles three response shapes:
- *   1. Scalar output_text (Responses API shorthand)
- *   2. Array content blocks (Anthropic-style / Responses API output[])
- *   3. Choices array (Chat Completions API)
- *
- * Skips setting attributes when content is empty to avoid polluting traces.
- */
-function setCompletionContent(
-  span: Span,
-  response: Record<string, unknown>,
-): void {
-  let idx = 0;
-
-  // 1. Scalar output_text (highest priority, single completion)
-  if (
-    typeof response.output_text === "string" &&
-    response.output_text.length > 0
-  ) {
-    span.setAttribute(
-      `${SpanAttributes.LLM_COMPLETIONS}.${idx}.role`,
-      "assistant",
-    );
-    span.setAttribute(
-      `${SpanAttributes.LLM_COMPLETIONS}.${idx}.content`,
-      response.output_text,
-    );
-    idx++;
-  }
-
-  // 2. Array content blocks (e.g., Anthropic response.content)
-  if (Array.isArray(response.content)) {
-    idx = setContentBlockCompletions(span, response.content, idx);
-  }
-
-  // 3. Responses API: output[].content[]
-  if (Array.isArray(response.output)) {
-    for (const element of response.output as Array<Record<string, unknown>>) {
-      if (!Array.isArray(element.content)) continue;
-      for (const chunk of element.content as Array<Record<string, unknown>>) {
-        if (!hasContent(chunk.text)) continue;
-        span.setAttribute(
-          `${SpanAttributes.LLM_COMPLETIONS}.${idx}.role`,
-          "assistant",
-        );
-        span.setAttribute(
-          `${SpanAttributes.LLM_COMPLETIONS}.${idx}.content`,
-          String(chunk.text),
-        );
-        idx++;
-      }
-    }
-  }
-
-  // 4. Chat Completions API: choices[]
-  const choices = response.choices as Array<Record<string, any>> | undefined;
-  if (Array.isArray(choices)) {
-    idx = setChoiceCompletions(span, choices, idx);
-  }
-}
-
-/**
- * Processes array-style content blocks (text + tool_use).
- */
-function setContentBlockCompletions(
-  span: Span,
-  content: Array<any>,
-  startIdx: number,
-): number {
-  let idx = startIdx;
-  let toolCallIndex = 0;
-
-  for (const block of content) {
-    if (block.type === "text" && hasContent(block.text)) {
-      span.setAttribute(
-        `${SpanAttributes.LLM_COMPLETIONS}.${idx}.role`,
-        "assistant",
-      );
-      span.setAttribute(
-        `${SpanAttributes.LLM_COMPLETIONS}.${idx}.content`,
-        String(block.text),
-      );
-      idx++;
-    } else if (block.type === "tool_use") {
-      span.setAttribute(
-        `gen_ai.response.tool_calls.${toolCallIndex}.name`,
-        block.name,
-      );
-      span.setAttribute(
-        `gen_ai.response.tool_calls.${toolCallIndex}.id`,
-        block.id,
-      );
-      span.setAttribute(
-        `gen_ai.response.tool_calls.${toolCallIndex}.input`,
-        JSON.stringify(block.input),
-      );
-      toolCallIndex++;
-    }
-  }
-
-  if (toolCallIndex > 0) {
-    span.setAttribute("gen_ai.response.tool_calls_count", toolCallIndex);
-  }
-
-  return idx;
-}
-
-/**
- * Processes Chat Completions API choices[].message or choices[].delta.
- * Only sets content when it is non-empty.
- */
-function setChoiceCompletions(
-  span: Span,
-  choices: Array<Record<string, any>>,
-  startIdx: number,
-): number {
-  let idx = startIdx;
-
-  for (const choice of choices) {
-    const msg = choice.message ?? choice.delta;
-    if (!msg) continue;
-
-    const content = msg.content;
-    if (!hasContent(content)) continue;
-
-    span.setAttribute(
-      `${SpanAttributes.LLM_COMPLETIONS}.${idx}.role`,
-      msg.role ?? "assistant",
-    );
-    span.setAttribute(
-      `${SpanAttributes.LLM_COMPLETIONS}.${idx}.content`,
-      String(content),
-    );
-    idx++;
-  }
-
-  return idx;
 }

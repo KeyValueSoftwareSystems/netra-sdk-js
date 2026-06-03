@@ -10,12 +10,7 @@ import {
   modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
-import {
-  setInputAttribute,
-  setOutputAttribute,
-  setRequestAttributes,
-  setResponseAttributes,
-} from "./utils";
+import { setRequestAttributes, setResponseAttributes } from "./utils";
 import { OpenAIRequestType, StreamResponse, WrapperFn } from "./types";
 
 const SPAN_NAMES: Record<OpenAIRequestType, string> = {
@@ -25,6 +20,34 @@ const SPAN_NAMES: Record<OpenAIRequestType, string> = {
 };
 
 const STREAMING_TYPES = new Set<OpenAIRequestType>(["chat", "response"]);
+
+function handleSpanError(span: Span, error: unknown): void {
+  span.setStatus({
+    code: SpanStatusCode.ERROR,
+    message: error instanceof Error ? error.message : String(error),
+  });
+  span.recordException(error as Error);
+  span.end();
+}
+
+function setSpanRequestContext(
+  span: Span,
+  kwargs: Record<string, unknown>,
+  requestType: OpenAIRequestType,
+): void {
+  setRequestAttributes(span, kwargs, requestType);
+}
+
+function finalizeSpanSuccess(
+  span: Span,
+  response: Record<string, unknown>,
+  startTime: number,
+): void {
+  setResponseAttributes(span, response);
+  span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
+  span.setStatus({ code: SpanStatusCode.OK });
+  span.end();
+}
 
 abstract class BaseStreamHandler {
   protected completeResponse: StreamResponse = { choices: [], model: "" };
@@ -103,15 +126,20 @@ abstract class BaseStreamHandler {
   }
 
   protected finalizeSpan(code: SpanStatusCode): void {
-    const duration = (Date.now() - this.startTime) / 1000;
     if (code === SpanStatusCode.OK) {
-      const response = this.completeResponse as Record<string, unknown>;
-      setResponseAttributes(this.span, response);
-      setOutputAttribute(this.span, response);
+      finalizeSpanSuccess(
+        this.span,
+        this.completeResponse as Record<string, unknown>,
+        this.startTime,
+      );
+    } else {
+      this.span.setAttribute(
+        "llm.response.duration",
+        (Date.now() - this.startTime) / 1000,
+      );
+      this.span.setStatus({ code });
+      this.span.end();
     }
-    this.span.setAttribute("llm.response.duration", duration);
-    this.span.setStatus({ code });
-    this.span.end();
   }
 }
 
@@ -225,13 +253,34 @@ export class AsyncStreamingWrapper
   }
 }
 
-function handleSpanError(span: Span, error: unknown): void {
-  span.setStatus({
-    code: SpanStatusCode.ERROR,
-    message: error instanceof Error ? error.message : String(error),
-  });
-  span.recordException(error as Error);
-  span.end();
+function executeStreaming(
+  span: Span,
+  kwargs: Record<string, unknown>,
+  requestType: OpenAIRequestType,
+  call: () => unknown,
+): unknown {
+  const startTime = Date.now();
+  try {
+    setSpanRequestContext(span, kwargs, requestType);
+    const response = call();
+
+    if (isPromise(response)) {
+      return (async () => {
+        try {
+          const stream = await response;
+          return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
+        } catch (error) {
+          handleSpanError(span, error);
+          throw error;
+        }
+      })();
+    }
+
+    return new StreamingWrapper(span, response, startTime, kwargs);
+  } catch (error) {
+    handleSpanError(span, error);
+    throw error;
+  }
 }
 
 function executeNonStreaming(
@@ -242,21 +291,13 @@ function executeNonStreaming(
 ): unknown {
   const startTime = Date.now();
   try {
-    setRequestAttributes(span, kwargs, requestType);
-    setInputAttribute(span, kwargs, requestType);
+    setSpanRequestContext(span, kwargs, requestType);
     const result = call();
+
     if (isPromise(result)) {
       return result.then(
         (value) => {
-          const responseDict = modelAsDict(value);
-          setResponseAttributes(span, responseDict);
-          setOutputAttribute(span, responseDict);
-          span.setAttribute(
-            "llm.response.duration",
-            (Date.now() - startTime) / 1000,
-          );
-          span.setStatus({ code: SpanStatusCode.OK });
-          span.end();
+          finalizeSpanSuccess(span, modelAsDict(value), startTime);
           return value;
         },
         (error) => {
@@ -265,12 +306,8 @@ function executeNonStreaming(
         },
       );
     }
-    const responseDict = modelAsDict(result);
-    setResponseAttributes(span, responseDict);
-    setOutputAttribute(span, responseDict);
-    span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
-    span.setStatus({ code: SpanStatusCode.OK });
-    span.end();
+
+    finalizeSpanSuccess(span, modelAsDict(result), startTime);
     return result;
   } catch (error) {
     handleSpanError(span, error);
@@ -283,7 +320,7 @@ function openAIWrapper(
   requestType: OpenAIRequestType,
 ): WrapperFn {
   const spanName = SPAN_NAMES[requestType];
-  const spanAttrs = { "llm.request.type": requestType };
+  const spanOpts = { kind: SpanKind.CLIENT, attributes: { "llm.request.type": requestType } };
 
   return (wrapped, instance, args, kwargs) => {
     if (shouldSuppressInstrumentation()) {
@@ -291,45 +328,16 @@ function openAIWrapper(
       return isPromise(result) ? result.then((v) => v) : result;
     }
 
-    const isStreaming =
-      kwargs.stream === true && STREAMING_TYPES.has(requestType);
+    const call = () => wrapped.call(instance, ...args);
+    const isStreaming = kwargs.stream === true && STREAMING_TYPES.has(requestType);
 
     if (isStreaming) {
-      const span = tracer.startSpan(
-        spanName,
-        { kind: SpanKind.CLIENT, attributes: spanAttrs },
-        context.active(),
-      );
-      try {
-        setRequestAttributes(span, kwargs, requestType);
-        setInputAttribute(span, kwargs, requestType);
-        const startTime = Date.now();
-        const response = wrapped.call(instance, ...args);
-        if (isPromise(response)) {
-          return (async () => {
-            try {
-              const stream = await response;
-              return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
-            } catch (error) {
-              handleSpanError(span, error);
-              throw error;
-            }
-          })();
-        }
-        return new StreamingWrapper(span, response, startTime, kwargs);
-      } catch (error) {
-        handleSpanError(span, error);
-        throw error;
-      }
+      const span = tracer.startSpan(spanName, spanOpts, context.active());
+      return executeStreaming(span, kwargs, requestType, call);
     }
 
-    return tracer.startActiveSpan(
-      spanName,
-      { kind: SpanKind.CLIENT, attributes: spanAttrs },
-      (span) =>
-        executeNonStreaming(span, kwargs, requestType, () =>
-          wrapped.call(instance, ...args),
-        ),
+    return tracer.startActiveSpan(spanName, spanOpts, (span) =>
+      executeNonStreaming(span, kwargs, requestType, call),
     );
   };
 }
