@@ -366,6 +366,7 @@ export class Netra {
     }
     if (sessionId) {
       setSessionBaggage("session_id", sessionId);
+      SessionManager.setAttributeOnActiveSpan(`${Config.LIBRARY_NAME}.session_id`, sessionId);
     } else {
       console.warn(
         "setSessionId: Session ID must be provided for setting session_id.",
@@ -384,6 +385,7 @@ export class Netra {
     }
     if (userId) {
       setSessionBaggage("user_id", userId);
+      SessionManager.setAttributeOnActiveSpan(`${Config.LIBRARY_NAME}.user_id`, userId);
     } else {
       console.warn("setUserId: User ID must be provided for setting user_id.");
     }
@@ -402,6 +404,7 @@ export class Netra {
     }
     if (tenantId) {
       setSessionBaggage("tenant_id", tenantId);
+      SessionManager.setAttributeOnActiveSpan(`${Config.LIBRARY_NAME}.tenant_id`, tenantId);
     } else {
       console.warn(
         "setTenantId: Tenant ID must be provided for setting tenant_id.",
