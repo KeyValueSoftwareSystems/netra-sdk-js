@@ -154,8 +154,7 @@ export class FilteringSpanExporter implements SpanExporter {
       }
 
       if (changed) {
-        // Mutate the internal field directly (OTel JS SDK stores it as _parentSpanContext)
-        (span as any)._parentSpanContext = parent;
+        (span as any).parentSpanContext = parent;
       }
     }
   }
