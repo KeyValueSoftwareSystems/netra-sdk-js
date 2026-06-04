@@ -11,6 +11,7 @@
 import { context, Context, propagation, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
+import { Logger } from "../logger";
 import { SessionManager } from "../session-manager";
 
 /**
@@ -69,7 +70,7 @@ function safeEnterWith(newContext: Context): void {
     return;
   }
 
-  console.warn("SessionSpanProcessor: enterWith not available on context manager; baggage will not propagate.");
+  Logger.warn("SessionSpanProcessor: enterWith not available on context manager; baggage will not propagate.");
 }
 
 /**
@@ -123,7 +124,7 @@ export function clearSessionBaggage(): void {
     const newContext = propagation.setBaggage(context.active(), emptyBaggage);
     safeEnterWith(newContext);
   } catch (e) {
-    console.warn("SessionSpanProcessor: Failed to clear baggage:", e);
+    Logger.warn("SessionSpanProcessor: Failed to clear baggage:", e);
   }
 }
 
@@ -174,7 +175,7 @@ export class SessionSpanProcessor implements SpanProcessor {
         span.setAttribute(attrKey, attrValue);
       }
     } catch (e) {
-      console.error("SessionSpanProcessor: Error setting span attributes:", e);
+      Logger.error("SessionSpanProcessor: Error setting span attributes:", e);
     }
   }
 

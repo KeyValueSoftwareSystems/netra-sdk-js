@@ -1,4 +1,5 @@
 import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import { isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
@@ -26,10 +27,8 @@ function anthropicWrapper(
     }
     const isStreaming = args[0]?.stream === true;
     
-    if (process.env.NETRA_DEBUG_LOGS) {
-        const activeSpan = trace.getSpan(context.active());
-        console.log(`[Netra Debug] Anthropic invoke (${requestType}). Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
-    }
+    const activeSpan = trace.getSpan(context.active());
+    Logger.debug(`Anthropic invoke (${requestType}). Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
 
     if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
       const currentContext = context.active();
@@ -57,7 +56,7 @@ function anthropicWrapper(
               // which will track streaming events and finalize the span when done
               return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
             } catch (error) {
-               console.error("netra.instrumentation.anthropic:", error);
+               Logger.error("netra.instrumentation.anthropic:", error);
                 span.setStatus({
                   code: SpanStatusCode.ERROR,
                   message: error instanceof Error ? error.message : String(error),
@@ -73,7 +72,7 @@ function anthropicWrapper(
         }
 
       } catch (error) {
-        console.error("netra.instrumentation.anthropic:", error);
+        Logger.error("netra.instrumentation.anthropic:", error);
         span.setStatus({
           code: SpanStatusCode.ERROR,
           message: error instanceof Error ? error.message : String(error),
@@ -112,7 +111,7 @@ function anthropicWrapper(
                   span.end();
                   return value;
                 } catch (error) {
-                  console.error("netra.instrumentation.anthropic:", error);
+                  Logger.error("netra.instrumentation.anthropic:", error);
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
                     message:
@@ -168,7 +167,7 @@ function anthropicWrapper(
               return response;
             }
           } catch (error) {
-            console.error("netra.instrumentation.anthropic:", error);
+            Logger.error("netra.instrumentation.anthropic:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -295,7 +294,7 @@ export class MessageStreamWrapper {
       }
       this.finalizeSpan(SpanStatusCode.OK);
     } catch (err) {
-      console.error("netra.instrumentation.anthropic: Stream error", err);
+      Logger.error("netra.instrumentation.anthropic: Stream error", err);
       this.finalizeSpan(SpanStatusCode.ERROR);
       throw err;
     }

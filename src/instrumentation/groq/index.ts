@@ -6,6 +6,7 @@
  */
 
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import { __version__ } from "./version";
 import { chatWrapper } from "./wrappers";
 
@@ -70,7 +71,7 @@ export class NetraGroqInstrumentor {
     options: InstrumentorOptions = {}
   ): Promise<NetraGroqInstrumentor> {
     if (isInstrumented) {
-      console.warn("Groq is already instrumented");
+      Logger.warn("Groq is already instrumented");
       return this;
     }
 
@@ -92,7 +93,7 @@ export class NetraGroqInstrumentor {
         this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
       }
     } catch (error) {
-      console.error(`Failed to initialize tracer: ${error}`);
+      Logger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -108,7 +109,7 @@ export class NetraGroqInstrumentor {
    */
   instrument(options: InstrumentorOptions = {}): NetraGroqInstrumentor {
     if (isInstrumented) {
-      console.warn("Groq is already instrumented");
+      Logger.warn("Groq is already instrumented");
       return this;
     }
 
@@ -117,7 +118,7 @@ export class NetraGroqInstrumentor {
     if (!Groq) {
       // Fall back to async initialization
       this.instrumentAsync(options).catch((e) => {
-        console.error("Failed to instrument Groq:", e);
+        Logger.error("Failed to instrument Groq:", e);
       });
       return this;
     }
@@ -133,7 +134,7 @@ export class NetraGroqInstrumentor {
         this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
       }
     } catch (error) {
-      console.error(`Failed to initialize tracer: ${error}`);
+      Logger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -145,7 +146,7 @@ export class NetraGroqInstrumentor {
 
   uninstrument(): void {
     if (!isInstrumented) {
-      console.warn("Groq is not instrumented");
+      Logger.warn("Groq is not instrumented");
       return;
     }
 
@@ -164,7 +165,7 @@ export class NetraGroqInstrumentor {
 
   private _instrumentChatCompletions(Groq: any): void {
     if (!this.tracer) {
-      console.warn("Groq instrumentation: No tracer available");
+      Logger.warn("Groq instrumentation: No tracer available");
       return;
     }
 
@@ -172,7 +173,7 @@ export class NetraGroqInstrumentor {
       const CompletionsClass = Groq.Chat?.Completions;
 
       if (!CompletionsClass?.prototype?.create) {
-        console.error(
+        Logger.error(
           "Groq instrumentation: Could not find Groq chat completions class to instrument"
         );
         return;
@@ -193,7 +194,7 @@ export class NetraGroqInstrumentor {
         return wrapper(wrappedFn, this, args, kwargs);
       } as typeof CompletionsClass.prototype.create;
     } catch (error) {
-      console.error(
+      Logger.error(
         `Groq instrumentation: Failed to instrument chat completions: ${error}`
       );
     }
@@ -209,7 +210,7 @@ export class NetraGroqInstrumentor {
           originalCreate as typeof CompletionsClass.prototype.create;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument chat completions: ${error}`);
+      Logger.error(`Failed to uninstrument chat completions: ${error}`);
     }
   }
 }

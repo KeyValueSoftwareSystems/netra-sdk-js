@@ -1,5 +1,6 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import { __version__ } from "./version";
 import { LanggraphWrapper } from "./wrappers";
 
@@ -20,21 +21,19 @@ export interface InstrumentorOptions {
  */
 function findModuleInCache(moduleName: string): any {
   // Try require.cache first (CommonJS)
-  if (typeof require !== 'undefined' && require.cache) {
+    if (typeof require !== 'undefined' && require.cache) {
     const cache = require.cache;
     for (const key of Object.keys(cache)) {
       // Match the module name in the path, but exclude our own SDK's copy
       if (key.includes(moduleName.replace(/\//g, '/')) && !key.includes('netra-sdk')) {
-        if (process.env.NETRA_DEBUG_LOGS) {
-          console.log(`Found module in require.cache: ${key}`);
-        }
+        Logger.debug(`Found module in require.cache: ${key}`);
         return cache[key]?.exports;
       }
     }
-    if (process.env.NETRA_DEBUG_LOGS) {
-      console.log(`Module ${moduleName} not found in require.cache. Cache keys containing 'langgraph':`,
-        Object.keys(cache).filter(k => k.includes('langgraph')));
-    }
+    Logger.debug(
+      `Module ${moduleName} not found in require.cache. Cache keys containing 'langgraph':`,
+      Object.keys(cache).filter(k => k.includes('langgraph')),
+    );
   }
   return null;
 }
@@ -47,44 +46,40 @@ async function resolveLanggraph(): Promise<any> {
     let langgraphModule = findModuleInCache('@langchain/langgraph');
 
     if (langgraphModule) {
-      if (process.env.NETRA_DEBUG_LOGS) {
-        console.log("Found @langchain/langgraph in require.cache (using app's module instance)");
-      }
+      Logger.debug("Found @langchain/langgraph in require.cache (using app's module instance)");
     } else {
       // Fallback to dynamic import if not in cache
       langgraphModule = await import("@langchain/langgraph");
-      if (process.env.NETRA_DEBUG_LOGS) {
-        console.log("Loaded @langchain/langgraph via dynamic import");
-      }
+      Logger.debug("Loaded @langchain/langgraph via dynamic import");
     }
 
-    if (process.env.NETRA_DEBUG_LOGS) {
-        console.log("LangGraph Module Exports:", Object.keys(langgraphModule));
-    }
+    Logger.debug("LangGraph Module Exports:", Object.keys(langgraphModule));
     LanggraphClass = langgraphModule.CompiledStateGraph ?? langgraphModule.StateGraph;
-    if (process.env.NETRA_DEBUG_LOGS) {
-        console.log("Resolved LanggraphClass:", !!LanggraphClass);
-        console.log("LanggraphClass name:", LanggraphClass?.name);
-        console.log("LanggraphClass.prototype keys:", LanggraphClass?.prototype ? Object.getOwnPropertyNames(LanggraphClass.prototype) : "no prototype");
-        console.log("Has invoke on prototype:", !!LanggraphClass?.prototype?.invoke);
-        console.log("Has stream on prototype:", !!LanggraphClass?.prototype?.stream);
+    Logger.debug("Resolved LanggraphClass:", !!LanggraphClass);
+    Logger.debug("LanggraphClass name:", LanggraphClass?.name);
+    Logger.debug(
+      "LanggraphClass.prototype keys:",
+      LanggraphClass?.prototype ? Object.getOwnPropertyNames(LanggraphClass.prototype) : "no prototype",
+    );
+    Logger.debug("Has invoke on prototype:", !!LanggraphClass?.prototype?.invoke);
+    Logger.debug("Has stream on prototype:", !!LanggraphClass?.prototype?.stream);
 
-        // Check prototype chain to find where invoke is defined
-        console.log("Checking prototype chain for invoke location:");
-        let proto = LanggraphClass?.prototype;
-        while (proto) {
-          const hasOwn = Object.getOwnPropertyNames(proto).includes('invoke');
-          console.log(`  ${proto.constructor?.name}: hasOwnProperty('invoke')=${hasOwn}`);
-          if (hasOwn) {
-            console.log(`  -> invoke is defined on: ${proto.constructor?.name}`);
-            break;
-          }
-          proto = Object.getPrototypeOf(proto);
-        }
+    // Check prototype chain to find where invoke is defined
+    Logger.debug("Checking prototype chain for invoke location:");
+    let proto = LanggraphClass?.prototype;
+    while (proto) {
+      const hasOwn = Object.getOwnPropertyNames(proto).includes('invoke');
+      Logger.debug(`  ${proto.constructor?.name}: hasOwnProperty('invoke')=${hasOwn}`);
+      if (hasOwn) {
+        Logger.debug(`  -> invoke is defined on: ${proto.constructor?.name}`);
+        break;
+      }
+      proto = Object.getPrototypeOf(proto);
     }
+
     return LanggraphClass;
   } catch (e) {
-    console.error("Failed to resolve LangGraph:", e);
+    Logger.error("Failed to resolve LangGraph:", e);
     return null;
   }
 }
@@ -107,13 +102,13 @@ export class NetraLanggraphInstrumentor {
     options: InstrumentorOptions = {},
   ): Promise<NetraLanggraphInstrumentor> {
     if (isInstrumented) {
-      console.warn("Langgraph is already instrumented");
+      Logger.warn("Langgraph is already instrumented");
       return this;
     }
 
     const Langgraph = await resolveLanggraph();
     if (!Langgraph) {
-      if (process.env.NETRA_DEBUG_LOGS) console.warn("LangGraph class not found, skipping instrumentation");
+      Logger.warn("LangGraph class not found, skipping instrumentation");
       return this;
     }
 
@@ -123,7 +118,7 @@ export class NetraLanggraphInstrumentor {
         ? this.tracerProvider.getTracer(INSTRUMENTATION_NAME, __version__)
         : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
-      console.error(`Failed to initialize tracer: ${error}`);
+      Logger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -135,7 +130,7 @@ export class NetraLanggraphInstrumentor {
 
   async uninstrument(): Promise<void> {
     if (!isInstrumented) {
-      console.warn("LangGraph is not instrumented");
+      Logger.warn("LangGraph is not instrumented");
       return;
     }
 
@@ -160,13 +155,11 @@ export class NetraLanggraphInstrumentor {
       }
 
       if (!targetProto?.invoke) {
-        console.error("Failed to find langgraph invoke function to instrument");
+        Logger.error("Failed to find langgraph invoke function to instrument");
         return;
       }
 
-      if (process.env.NETRA_DEBUG_LOGS) {
-        console.log(`Found invoke on prototype: ${targetProto.constructor?.name}`);
-      }
+      Logger.debug(`Found invoke on prototype: ${targetProto.constructor?.name}`);
 
       const originalInvoke = targetProto.invoke;
       originalMethods.set("langgraph.graph.invoke", originalInvoke);
@@ -182,9 +175,7 @@ export class NetraLanggraphInstrumentor {
         config?: RunnableConfig,
         ...rest: any[]
       ): Promise<any> {
-        if (process.env.NETRA_DEBUG_LOGS) {
-          console.log("[Netra Debug] LangGraph invoke intercepted!");
-        }
+        Logger.debug("LangGraph invoke intercepted!");
         return await wrapper.invoke(
           originalInvoke,
           this,
@@ -197,12 +188,10 @@ export class NetraLanggraphInstrumentor {
       (patchedInvoke as any).__netra_patched = true;
       targetProto.invoke = patchedInvoke;
 
-      if (process.env.NETRA_DEBUG_LOGS) {
-        console.log(`Successfully instrumented LangGraph invoke method on ${targetProto.constructor?.name}`);
-        console.log(`Patched Pregel class identity:`, targetProto.constructor);
-      }
+      Logger.debug(`Successfully instrumented LangGraph invoke method on ${targetProto.constructor?.name}`);
+      Logger.debug(`Patched Pregel class identity:`, targetProto.constructor);
     } catch (error) {
-      console.error(`Failed to instrument langgraph invoke: ${error}`);
+      Logger.error(`Failed to instrument langgraph invoke: ${error}`);
     }
   }
 
@@ -217,13 +206,11 @@ export class NetraLanggraphInstrumentor {
       }
 
       if (!targetProto?.stream) {
-        console.error("Failed to find langgraph stream function to instrument");
+        Logger.error("Failed to find langgraph stream function to instrument");
         return;
       }
 
-      if (process.env.NETRA_DEBUG_LOGS) {
-        console.log(`Found stream on prototype: ${targetProto.constructor?.name}`);
-      }
+      Logger.debug(`Found stream on prototype: ${targetProto.constructor?.name}`);
 
       const originalStream = targetProto.stream;
       originalMethods.set("langgraph.graph.stream", originalStream);
@@ -239,9 +226,7 @@ export class NetraLanggraphInstrumentor {
         config?: RunnableConfig,
         ...rest: any[]
       ): Promise<any> {
-        if (process.env.NETRA_DEBUG_LOGS) {
-          console.log("[Netra Debug] LangGraph stream intercepted!");
-        }
+        Logger.debug("LangGraph stream intercepted!");
         return await wrapper.stream(
           originalStream,
           this,
@@ -251,11 +236,9 @@ export class NetraLanggraphInstrumentor {
         );
       };
 
-      if (process.env.NETRA_DEBUG_LOGS) {
-        console.log(`Successfully instrumented LangGraph stream method on ${targetProto.constructor?.name}`);
-      }
+      Logger.debug(`Successfully instrumented LangGraph stream method on ${targetProto.constructor?.name}`);
     } catch (error) {
-      console.error(`Failed to instrument langgraph stream: ${error}`);
+      Logger.error(`Failed to instrument langgraph stream: ${error}`);
     }
   }
 
@@ -267,7 +250,7 @@ export class NetraLanggraphInstrumentor {
         targetProto.invoke = originalInvoke;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument langgraph invoke: ${error}`);
+      Logger.error(`Failed to uninstrument langgraph invoke: ${error}`);
     }
     return;
   }
@@ -280,7 +263,7 @@ export class NetraLanggraphInstrumentor {
         targetProto.stream = originalStream;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument langgraph stream: ${error}`);
+      Logger.error(`Failed to uninstrument langgraph stream: ${error}`);
     }
     return;
   }

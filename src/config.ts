@@ -2,6 +2,8 @@
  * Configuration management for Netra SDK
  */
 
+import { Logger } from "./logger";
+
 export interface NetraConfig {
   appName?: string;
   headers?: string | Record<string, string>;
@@ -177,10 +179,10 @@ export class Config {
       this.otlpEndpoint.toLowerCase().includes("getnetra") &&
       !this.apiKey
     ) {
-      console.error(
+      Logger.error(
         "Error: Missing Netra API key, go to netra dashboard to create one",
       );
-      console.error("Set the NETRA_API_KEY environment variable to the key");
+      Logger.error("Set the NETRA_API_KEY environment variable to the key");
     }
   }
 
@@ -230,7 +232,7 @@ export class Config {
     try {
       return JSON.parse(envRa);
     } catch (e) {
-      console.warn(`Failed to parse NETRA_RESOURCE_ATTRS: ${e}`);
+      Logger.warn(`Failed to parse NETRA_RESOURCE_ATTRS: ${e}`);
       return {};
     }
   }

@@ -9,6 +9,7 @@
 import { Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
+import { Logger } from "../logger";
 
 // Allowed instrumentation names that we recognize and tag
 const ALLOWED_INSTRUMENTATION_NAMES = new Set([
@@ -147,7 +148,7 @@ export class InstrumentationSpanProcessor implements SpanProcessor {
         span.setAttribute(`${Config.LIBRARY_NAME}.instrumentation.name`, name);
       }
     } catch (e) {
-      console.error(
+      Logger.error(
         "InstrumentationSpanProcessor: Error on span start:",
         e
       );

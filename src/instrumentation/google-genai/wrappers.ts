@@ -5,6 +5,7 @@ import {
   Tracer,
   context,
 } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import {
   isPromise,
   modelAsDict,
@@ -73,7 +74,7 @@ function googleGenAIWrapper(
                   span.end();
                   return value;
                 } catch (error) {
-                  console.error("netra.instrumentation.google-genai:", error);
+                  Logger.error("netra.instrumentation.google-genai:", error);
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
                     message:
@@ -97,7 +98,7 @@ function googleGenAIWrapper(
               return response;
             }
           } catch (error) {
-            console.error("netra.instrumentation.google-genai:", error);
+            Logger.error("netra.instrumentation.google-genai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -293,7 +294,7 @@ function googleGenAIStreamWrapper(
                   stream: wrappedStream,
                 };
               } catch (error) {
-                console.error("netra.instrumentation.google-genai:", error);
+                Logger.error("netra.instrumentation.google-genai:", error);
                 span.setStatus({
                   code: SpanStatusCode.ERROR,
                   message:
@@ -305,7 +306,7 @@ function googleGenAIStreamWrapper(
               }
             })();
           } catch (error) {
-            console.error("netra.instrumentation.google-genai:", error);
+            Logger.error("netra.instrumentation.google-genai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),

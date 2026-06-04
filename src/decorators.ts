@@ -2,8 +2,9 @@
  * Decorators for easy instrumentation
  */
 
-import { trace, Span } from "@opentelemetry/api";
+import { trace, Span, SpanStatusCode } from "@opentelemetry/api";
 import { Config } from "./config";
+import { Logger } from "./logger";
 import { SessionManager } from "./session-manager";
 import { SpanType, DecoratorOptions } from "./types";
 
@@ -34,7 +35,7 @@ function serializeValue(value: any): string {
       return String(value).substring(0, 1000);
     }
   } catch (e) {
-    console.warn("serializeValue: serialization failed, falling back to type name:", e);
+    Logger.warn("serializeValue: serialization failed, falling back to type name:", e);
     return String(typeof value);
   }
 }
@@ -51,7 +52,7 @@ function spanHasOutput(span: Span): boolean {
       if (attrs && typeof attrs === "object" && attrs["output"]) return true;
     }
   } catch (e) {
-    console.warn("spanHasOutput: error inspecting span attributes:", e);
+    Logger.warn("spanHasOutput: error inspecting span attributes:", e);
   }
   return false;
 }
@@ -102,6 +103,10 @@ function createFunctionWrapper<T extends AnyFunction>(
 
   const handleError = (span: Span, e: any) => {
     span.setAttribute(`${Config.LIBRARY_NAME}.entity.error`, String(e));
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: e instanceof Error ? e.message : String(e),
+    });
     span.recordException(e);
     throw e;
   };
@@ -136,16 +141,36 @@ function createFunctionWrapper<T extends AnyFunction>(
       SessionManager.pushEntity(entityType, spanName);
       const tracer = trace.getTracer(moduleName);
       return tracer.startActiveSpan(spanName, (span) => {
+        // Track whether the function returned a promise so the finally block
+        // can skip its cleanup — the promise chain owns span lifecycle in that case.
+        let returnedPromise = false;
         try {
           initSpan(span);
           addInputAttributes(span, args, entityType);
           const result = (func as AnyFunction).call(this, ...args);
+
+          // Detect promise-returning non-async functions (e.g. `function foo() { return fetch(...) }`)
+          // Without this check, addOutputAttributes would capture the raw Promise object and
+          // cleanup() would end the span before the async work completes.
+          if (result != null && typeof (result as any).then === "function") {
+            returnedPromise = true;
+            return (result as Promise<any>)
+              .then((resolved: any) => {
+                addOutputAttributes(span, resolved);
+                return resolved;
+              })
+              .catch((e: any) => handleError(span, e))
+              .finally(() => cleanup(span));
+          }
+
           addOutputAttributes(span, result);
           return result;
         } catch (e: any) {
           handleError(span, e);
         } finally {
-          cleanup(span);
+          if (!returnedPromise) {
+            cleanup(span);
+          }
         }
       });
     };

@@ -9,6 +9,7 @@ import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage } from "./api";
 import { Config, NetraConfig } from "./config";
 import { instrumentationsReady, uninstrumentAll } from "./instrumentation";
+import { Logger } from "./logger";
 import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
 import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
@@ -135,14 +136,15 @@ export class Netra {
 
   static async init(config: NetraConfig = {}): Promise<void> {
     if (this._initialized) {
-      console.warn(
-        "Netra.init() called more than once; ignoring subsequent calls.",
-      );
+      Logger.warn("Netra.init() called more than once; ignoring subsequent calls.");
       return;
     }
 
     const cfg = new Config(config);
     this._config = cfg;
+
+    // Wire the logger before anything else so all modules respect debugMode.
+    Logger.setDebugMode(cfg.debugMode);
 
     // Extract Instruments and Block Instruments
     const { instruments, blockInstruments } = config;
@@ -154,37 +156,37 @@ export class Netra {
     try {
       this.usage = new Usage(cfg);
     } catch (e) {
-      console.warn("Netra: failed to initialize usage client:", e);
+      Logger.warn("Netra: failed to initialize usage client:", e);
     }
 
     try {
       this.evaluation = new Evaluation(cfg);
     } catch (e) {
-      console.warn("Netra: failed to initialize evaluation client:", e);
+      Logger.warn("Netra: failed to initialize evaluation client:", e);
     }
 
     try {
       this.dashboard = new Dashboard(cfg);
     } catch (e) {
-      console.warn("Netra: failed to initialize dashboard client:", e);
+      Logger.warn("Netra: failed to initialize dashboard client:", e);
     }
 
     try {
       this.simulation = new Simulation(cfg);
     } catch (e) {
-      console.warn("Netra: failed to initialize simulation client:", e);
+      Logger.warn("Netra: failed to initialize simulation client:", e);
     }
 
     try {
       this.prompts = new Prompts(cfg);
     } catch (e) {
-      console.warn("Netra: failed to initialize prompts client:", e);
+      Logger.warn("Netra: failed to initialize prompts client:", e);
     }
 
     this._initialized = true;
-    console.info("Netra successfully initialized.");
+    Logger.info("Netra successfully initialized.");
 
-    if (cfg.debugMode) {
+    {
       let pkgVersion = Config.LIBRARY_VERSION;
       let pkgPath = "unknown";
       try {
@@ -195,25 +197,25 @@ export class Netra {
       } catch {
         // keep defaults
       }
-      console.debug(
-        `[Netra Debug] SDK version=${pkgVersion} libraryVersion=${Config.LIBRARY_VERSION} build=langgraph-parenting-v3 packageJson=${pkgPath}`,
+      Logger.debug(
+        `SDK version=${pkgVersion} libraryVersion=${Config.LIBRARY_VERSION} build=langgraph-parenting-v3 packageJson=${pkgPath}`,
       );
     }
 
     // Graceful shutdown logic
     const handleSignal = async (signal: string) => {
-      console.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
-      await this.shutdown(cfg);
+      Logger.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
+      await this.shutdown();
       process.exit(0);
     };
 
     const handleUncaughtException = async (error: Error) => {
-      console.error("Uncaught exception:", error);
-      console.error("Shutting down Netra SDK due to crash...");
+      Logger.error("Uncaught exception:", error);
+      Logger.error("Shutting down Netra SDK due to crash...");
       try {
-        await this.shutdown(cfg);
+        await this.shutdown();
       } catch (err) {
-        console.error("Error during crash shutdown:", err);
+        Logger.error("Error during crash shutdown:", err);
       }
       process.exit(1);
     };
@@ -222,7 +224,7 @@ export class Netra {
     process.once("beforeExit", async () => {
       // beforeExit can be called multiple times if the loop fills up again
       // but for our purpose, we just want to ensure flush happens if the script finishes
-      await this.shutdown(cfg);
+      await this.shutdown();
     });
 
     // Handle termination signals
@@ -253,7 +255,7 @@ export class Netra {
           Config.LIBRARY_VERSION,
         );
 
-        console.info(
+        Logger.info(
           "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
         );
       }
@@ -263,18 +265,16 @@ export class Netra {
     await instrumentationsReady;
   }
 
-  static async shutdown(config: Config): Promise<void> {
+  static async shutdown(): Promise<void> {
     if (!this._initialized) {
       return;
     }
 
     // Unpatch any monkey-patched instrumentations first
     try {
-      uninstrumentAll(config);
+      uninstrumentAll();
     } catch (e) {
-      if (this._config?.debugMode) {
-        console.error("Error during uninstrumentAll:", e);
-      }
+      Logger.error("Error during uninstrumentAll:", e);
     }
 
     if (this._rootSpan) {
@@ -310,9 +310,7 @@ export class Netra {
         new Promise((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
       ]);
     } catch (e) {
-      if (this._config?.debugMode) {
-        console.error("Error during Netra trace shutdown:", e);
-      }
+      Logger.error("Error during Netra trace shutdown:", e);
     }
 
     this._initialized = false;
@@ -346,7 +344,7 @@ export class Netra {
    */
   static runWithRootSpan<T>(fn: () => T): T {
     if (!this._rootSpan) {
-      console.warn(
+      Logger.warn(
         "runWithRootSpan: No root span available. Running function without parent context.",
       );
       return fn();
@@ -356,9 +354,7 @@ export class Netra {
 
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
-      console.error(
-        `setSessionId: sessionId must be a string, got ${typeof sessionId}`,
-      );
+      Logger.error(`setSessionId: sessionId must be a string, got ${typeof sessionId}`);
       return;
     }
     if (sessionId) {
@@ -368,9 +364,7 @@ export class Netra {
         sessionId,
       );
     } else {
-      console.warn(
-        "setSessionId: Session ID must be provided for setting session_id.",
-      );
+      Logger.warn("setSessionId: Session ID must be provided for setting session_id.");
     }
   }
 
@@ -380,7 +374,7 @@ export class Netra {
    */
   static setUserId(userId: string): void {
     if (typeof userId !== "string") {
-      console.error(`setUserId: userId must be a string, got ${typeof userId}`);
+      Logger.error(`setUserId: userId must be a string, got ${typeof userId}`);
       return;
     }
     if (userId) {
@@ -390,7 +384,7 @@ export class Netra {
         userId,
       );
     } else {
-      console.warn("setUserId: User ID must be provided for setting user_id.");
+      Logger.warn("setUserId: User ID must be provided for setting user_id.");
     }
   }
 
@@ -400,9 +394,7 @@ export class Netra {
    */
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
-      console.error(
-        `setTenantId: tenantId must be a string, got ${typeof tenantId}`,
-      );
+      Logger.error(`setTenantId: tenantId must be a string, got ${typeof tenantId}`);
       return;
     }
     if (tenantId) {
@@ -412,9 +404,7 @@ export class Netra {
         tenantId,
       );
     } else {
-      console.warn(
-        "setTenantId: Tenant ID must be provided for setting tenant_id.",
-      );
+      Logger.warn("setTenantId: Tenant ID must be provided for setting tenant_id.");
     }
   }
 
@@ -428,9 +418,7 @@ export class Netra {
         value,
       );
     } else {
-      console.warn(
-        "Both key and value must be provided for custom attributes.",
-      );
+      Logger.warn("Both key and value must be provided for custom attributes.");
     }
   }
 
@@ -444,9 +432,7 @@ export class Netra {
     if (eventName && attributes) {
       SessionManager.setCustomEvent(eventName, attributes);
     } else {
-      console.warn(
-        "Both eventName and attributes must be provided for custom events.",
-      );
+      Logger.warn("Both eventName and attributes must be provided for custom events.");
     }
   }
 

@@ -3,6 +3,7 @@
  */
 
 import { propagation, context as otelContext } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import { DatasetRecord, EvaluatorConfig, ItemContext } from "./models";
 
 /**
@@ -181,15 +182,15 @@ export function validateRunInputs(
     task: ((arg: any) => any) | null | undefined,
 ): boolean {
     if (!name) {
-        console.error("netra.evaluation: run name is required");
+        Logger.error("netra.evaluation: run name is required");
         return false;
     }
     if (!data) {
-        console.error("netra.evaluation: data is required");
+        Logger.error("netra.evaluation: data is required");
         return false;
     }
     if (task == null) {
-        console.error("netra.evaluation: task function is required");
+        Logger.error("netra.evaluation: task function is required");
         return false;
     }
     return true;

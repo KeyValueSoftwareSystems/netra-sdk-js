@@ -1,5 +1,6 @@
 import { Context, Span, trace } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { Logger } from "../logger";
 import { RootSpanProcessor } from "./root-span-processor";
 
 /**
@@ -57,7 +58,7 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
 
       this._markRootSpan(traceId);
     } catch (e) {
-      console.warn("LlmTraceIdentifierSpanProcessor: error in onEnd:", e);
+      Logger.warn("LlmTraceIdentifierSpanProcessor: error in onEnd:", e);
     }
   }
 
@@ -84,13 +85,13 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
     this._markedTraces.add(traceId);
     if (!root) return;
     if (!root.isRecording()) {
-      console.warn(`LlmTraceIdentifierSpanProcessor: root span for trace ${traceId} is not recording`);
+      Logger.warn(`LlmTraceIdentifierSpanProcessor: root span for trace ${traceId} is not recording`);
       return;
     }
     try {
       root.setAttribute(this._rootMarkerKey, true);
     } catch (e) {
-      console.warn(`LlmTraceIdentifierSpanProcessor: failed to mark root span for trace ${traceId}:`, e);
+      Logger.warn(`LlmTraceIdentifierSpanProcessor: failed to mark root span for trace ${traceId}:`, e);
     }
   }
 }

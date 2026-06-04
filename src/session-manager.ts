@@ -10,7 +10,11 @@
 import { Span, context, trace } from "@opentelemetry/api";
 import { AsyncLocalStorage } from "async_hooks";
 import { Config } from "./config";
+import { Logger } from "./logger";
 import { RootSpanProcessor } from "./processors/root-span-processor";
+
+
+const MODULE_NAME = "netra.session-manager";
 
 export enum ConversationType {
   INPUT = "input",
@@ -82,7 +86,7 @@ export class SessionManager {
       stack.push(span);
       ctx.spansByName.set(name, stack);
     } catch (e) {
-      console.error(`Failed to register span '${name}':`, e);
+      Logger.error(`Failed to register span '${name}':`, e);
     }
   }
 
@@ -99,7 +103,7 @@ export class SessionManager {
       }
       if (stack.length === 0) ctx.spansByName.delete(name);
     } catch (e) {
-      console.error(`Failed to unregister span '${name}':`, e);
+      Logger.error(`Failed to unregister span '${name}':`, e);
     }
   }
 
@@ -172,10 +176,10 @@ export class SessionManager {
       if (span?.isRecording()) {
         span.setAttribute(key, typeof value === "string" ? value : JSON.stringify(value));
       } else {
-        console.warn(`setAttributeOnActiveSpan: no recording span for key '${key}'`);
+        Logger.warn(`setAttributeOnActiveSpan: no recording span for key '${key}'`);
       }
     } catch (e) {
-      console.error(`Failed to set attribute '${key}' on active span:`, e);
+      Logger.error(`Failed to set attribute '${key}' on active span:`, e);
     }
   }
 
@@ -186,7 +190,7 @@ export class SessionManager {
     try {
       SessionManager.setAttributeOnActiveSpan("input", serializeValue(value));
     } catch (e) {
-      console.error("setInput failed:", e);
+      Logger.error("setInput failed:", e);
     }
   }
 
@@ -197,7 +201,7 @@ export class SessionManager {
     try {
       SessionManager.setAttributeOnActiveSpan("output", serializeValue(value));
     } catch (e) {
-      console.error("setOutput failed:", e);
+      Logger.error("setOutput failed:", e);
     }
   }
 
@@ -209,7 +213,7 @@ export class SessionManager {
     try {
       RootSpanProcessor.setAttributeOnRootSpan("input", serializeValue(value));
     } catch (e) {
-      console.error("setRootInput failed:", e);
+      Logger.error("setRootInput failed:", e);
     }
   }
 
@@ -221,7 +225,7 @@ export class SessionManager {
     try {
       RootSpanProcessor.setAttributeOnRootSpan("output", serializeValue(value));
     } catch (e) {
-      console.error("setRootOutput failed:", e);
+      Logger.error("setRootOutput failed:", e);
     }
   }
 
@@ -235,7 +239,7 @@ export class SessionManager {
         span.addEvent(name, attributes, timestamp);
       } else {
         // Fallback: create a short-lived span to carry the event
-        trace.getTracer(__filename).startActiveSpan(
+        trace.getTracer(MODULE_NAME).startActiveSpan(
           `${Config.LIBRARY_NAME}.${name}`,
           { attributes },
           context.active(),
@@ -246,7 +250,7 @@ export class SessionManager {
         );
       }
     } catch (e) {
-      console.error(`setCustomEvent '${name}' failed:`, e);
+      Logger.error(`setCustomEvent '${name}' failed:`, e);
     }
   }
 
@@ -264,14 +268,14 @@ export class SessionManager {
     content: string | Record<string, any>,
   ): void {
     if (!role || !content) {
-      console.error("addConversation: role and content must be provided");
+      Logger.error("addConversation: role and content must be provided");
       return;
     }
 
     try {
       const span = trace.getActiveSpan();
       if (!span?.isRecording()) {
-        console.warn("addConversation: no active recording span");
+        Logger.warn("addConversation: no active recording span");
         return;
       }
 
@@ -289,7 +293,7 @@ export class SessionManager {
           if (Array.isArray(parsed)) existing = parsed;
         }
       } catch (e) {
-        console.warn("addConversation: failed to parse existing conversation, starting fresh:", e);
+        Logger.warn("addConversation: failed to parse existing conversation, starting fresh:", e);
       }
 
       const maxLen = Config.CONVERSATION_MAX_LEN;
@@ -313,7 +317,7 @@ export class SessionManager {
         span.setAttribute("conversation", payload);
       }
     } catch (e) {
-      console.error("addConversation failed:", e);
+      Logger.error("addConversation failed:", e);
     }
   }
 }

@@ -1,5 +1,6 @@
 import { createRequire } from "module";
 import { trace, Tracer } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import { __version__ } from "./version";
 import { chatWrapper, embeddingsWrapper, responsesWrapper } from "./wrappers";
 import { InstrumentorOptions, PatchTarget } from "./types";
@@ -22,15 +23,21 @@ async function resolveOpenAI(): Promise<any[]> {
     const mod = await import("openai");
     openAIClasses.push(mod.OpenAI ?? mod.default ?? mod);
   } catch {
-    console.warn("Failed to resolve OpenAI ESM module");
+    Logger.warn("Failed to resolve OpenAI ESM module");
   }
 
   try {
     const req = createRequire(import.meta.url);
     const mod = req("openai");
-    openAIClasses.push(mod.OpenAI ?? mod.default ?? mod);
+    const cjsClass = mod.OpenAI ?? mod.default ?? mod;
+    // Only add if it resolves to a different class identity than what ESM gave us.
+    // In bundler / dual-package setups the two could resolve to the same object,
+    // and patching the same prototype twice would wrap methods redundantly.
+    if (!openAIClasses.includes(cjsClass)) {
+      openAIClasses.push(cjsClass);
+    }
   } catch {
-    console.warn("Failed to resolve OpenAI CJS module");
+    Logger.warn("Failed to resolve OpenAI CJS module");
   }
 
   return openAIClasses;
@@ -72,7 +79,7 @@ export class NetraOpenAIInstrumentor {
     options: InstrumentorOptions = {},
   ): Promise<NetraOpenAIInstrumentor> {
     if (this.isInstrumented()) {
-      console.warn("OpenAI is already instrumented");
+      Logger.warn("OpenAI is already instrumented");
       return this;
     }
 
@@ -82,7 +89,7 @@ export class NetraOpenAIInstrumentor {
         ? provider.getTracer(INSTRUMENTATION_NAME, __version__)
         : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
-      console.error(`Failed to initialize tracer: ${error}`);
+      Logger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -99,7 +106,7 @@ export class NetraOpenAIInstrumentor {
 
   async uninstrument(): Promise<void> {
     if (!this.isInstrumented()) {
-      console.warn("OpenAI is not instrumented");
+      Logger.warn("OpenAI is not instrumented");
       return;
     }
 
@@ -120,7 +127,7 @@ export class NetraOpenAIInstrumentor {
     const proto = target.getPrototype(openAIClass);
     if (!proto?.create) {
       if (!target.optional) {
-        console.error(`Failed to find OpenAI method to patch: ${target.key}`);
+        Logger.error(`Failed to find OpenAI method to patch: ${target.key}`);
       }
       return;
     }
@@ -140,7 +147,7 @@ export class NetraOpenAIInstrumentor {
         );
       };
     } catch (error) {
-      console.error(`Failed to patch ${target.key}: ${error}`);
+      Logger.error(`Failed to patch ${target.key}: ${error}`);
     }
   }
 
@@ -152,7 +159,7 @@ export class NetraOpenAIInstrumentor {
         proto.create = original;
       }
     } catch (error) {
-      console.error(`Failed to unpatch ${target.key}: ${error}`);
+      Logger.error(`Failed to unpatch ${target.key}: ${error}`);
     }
   }
 }
@@ -168,8 +175,6 @@ export {
 } from "./wrappers";
 
 export {
-  setInputAttribute,
-  setOutputAttribute,
   setRequestAttributes,
   setResponseAttributes,
 } from "./utils";

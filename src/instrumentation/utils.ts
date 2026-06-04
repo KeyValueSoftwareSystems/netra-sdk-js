@@ -5,6 +5,7 @@
 
 import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
+import { Logger } from "../logger";
 import { SpanAttributes } from "./span-attributes";
 
 // Suppression
@@ -197,55 +198,17 @@ export function buildOutputMessages(
 ): TracedMessage[] {
   const messages: TracedMessage[] = [];
 
-  // 1. Scalar output_text (highest priority, single completion)
-  if (
-    typeof response.output_text === "string" &&
-    response.output_text.length > 0
-  ) {
-    messages.push({ role: "assistant", content: response.output_text });
-  }
-
-  // 2. Array content blocks (Anthropic-style:content[].type="text"|"tool_use")
-  if (Array.isArray(response.content)) {
-    for (const block of response.content as Array<any>) {
-      if (block.type === "text" && hasContent(block.text)) {
-        messages.push({ role: "assistant", content: String(block.text) });
-      } else if (block.type === "tool_use" && block.name) {
-        messages.push({
-          role: "tool",
-          content: JSON.stringify({ name: block.name, input: block.input }),
-        });
-      }
-    }
-  }
-
-  // 3. Responses API:output[].content[].text
-  if (Array.isArray(response.output)) {
-    for (const element of response.output as Array<Record<string, unknown>>) {
-      if (!Array.isArray(element.content)) continue;
-      for (const chunk of element.content as Array<Record<string, unknown>>) {
-        if (hasContent(chunk.text)) {
-          messages.push({ role: "assistant", content: String(chunk.text) });
-        }
-      }
-    }
-  }
-
-  // 4. Chat Completions API: choices[].message (with tool_calls)
+  // Priority 1: Chat Completions API (choices[]) — mutually exclusive with all others.
+  // A response carrying choices[] is definitively a Chat Completions response; stop here.
   if (Array.isArray(response.choices)) {
     for (const choice of response.choices as Array<Record<string, any>>) {
       const msg = choice.message ?? choice.delta;
       if (!msg) continue;
 
-      // Response message
       if (hasContent(msg.role) && hasContent(msg.content)) {
-        messages.push({
-          role: msg.role,
-          content: String(msg.content),
-        });
+        messages.push({ role: msg.role, content: String(msg.content) });
       }
 
-      // Tool calls attached to the message
       if (Array.isArray(msg.tool_calls)) {
         for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
           const fn = tc.function as Record<string, unknown> | undefined;
@@ -257,6 +220,65 @@ export function buildOutputMessages(
             }),
           });
         }
+      }
+    }
+    return messages;
+  }
+
+  // Priority 2: Responses API — output_text and/or output[].
+  // output_text is a scalar shorthand that mirrors the text portions of output[].
+  // When both are present, use output_text for text and output[] only for tool calls
+  // to avoid duplicating the same text content.
+  const hasOutputText =
+    typeof response.output_text === "string" && response.output_text.length > 0;
+  const hasOutputArray = Array.isArray(response.output);
+
+  if (hasOutputText || hasOutputArray) {
+    if (hasOutputText) {
+      messages.push({
+        role: "assistant",
+        content: response.output_text as string,
+      });
+    }
+
+    if (hasOutputArray) {
+      for (const element of response.output as Array<Record<string, unknown>>) {
+        if (!Array.isArray(element.content)) continue;
+        for (const chunk of element.content as Array<Record<string, unknown>>) {
+          // Only include text from output[] when output_text has not already covered it
+          if (!hasOutputText && hasContent(chunk.text)) {
+            messages.push({ role: "assistant", content: String(chunk.text) });
+          }
+          // Always capture tool_use blocks — output_text never contains these
+          if (
+            (chunk as any).type === "tool_use" &&
+            (chunk as any).name
+          ) {
+            messages.push({
+              role: "tool",
+              content: JSON.stringify({
+                name: (chunk as any).name,
+                input: (chunk as any).input,
+              }),
+            });
+          }
+        }
+      }
+    }
+    return messages;
+  }
+
+  // Priority 3: Anthropic-style content[] blocks — only reached when neither
+  // Chat Completions nor Responses API fields are present.
+  if (Array.isArray(response.content)) {
+    for (const block of response.content as Array<any>) {
+      if (block.type === "text" && hasContent(block.text)) {
+        messages.push({ role: "assistant", content: String(block.text) });
+      } else if (block.type === "tool_use" && block.name) {
+        messages.push({
+          role: "tool",
+          content: JSON.stringify({ name: block.name, input: block.input }),
+        });
       }
     }
   }
@@ -303,7 +325,6 @@ export function writeCompletionAttributes(
   if (messages.length === 0) return;
 
   let completionIdx = 0;
-  let toolCallIdx = 0;
 
   for (const msg of messages) {
     if (msg.role === "tool") {
@@ -326,7 +347,7 @@ export function writeCompletionAttributes(
         );
         completionIdx++;
       } catch (error) {
-        console.error("Error parsing tool content:", error);
+        Logger.error("Error parsing tool content:", error);
       }
     } else {
       span.setAttribute(

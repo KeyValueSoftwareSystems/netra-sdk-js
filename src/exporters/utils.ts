@@ -1,5 +1,6 @@
 import { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
+import { Logger } from "../logger";
 
 let trialBlockedAt: number | null = null;
 const blockedTraceIds = new Set<string>();
@@ -8,7 +9,7 @@ export function setTrialBlocked(blocked: boolean) {
   if (blocked) {
     if (!trialBlockedAt) {
       trialBlockedAt = Date.now();
-      console.warn(
+      Logger.warn(
         `Trial/quota exhausted: blocking span export for ${Config.TRIAL_BLOCK_DURATION_SECONDS}s`,
       );
     }
