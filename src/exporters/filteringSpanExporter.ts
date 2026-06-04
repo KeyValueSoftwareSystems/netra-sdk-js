@@ -1,6 +1,12 @@
-import { SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ExportResultCode } from "@opentelemetry/core";
-
+import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
+import type { SpanContext } from "@opentelemetry/api";
+import { BLOCKED_LOCAL_PARENT_MAP } from "../processors/localfiltering-span-processor";
+import {
+  compilePatterns,
+  matchesPatterns,
+  CompiledPatterns,
+} from "../utils/pattern-matching";
 import {
   addBlockedTraceId,
   getTraceId,
@@ -9,28 +15,23 @@ import {
 } from "./utils";
 
 export class FilteringSpanExporter implements SpanExporter {
-  private exact = new Set<string>();
-  private prefixes: string[] = [];
-  private suffixes: string[] = [];
+  /** Pre-compiled global patterns — compiled once in the constructor. */
+  private readonly compiled: CompiledPatterns;
 
-  // Persist blocked parents across export() calls
-  private rememberedBlockedParentMap = new Map<string, any>();
+  /**
+   * Spans that were blocked in a previous export() call but whose children
+   * may still arrive in a later call (e.g. out-of-order export batches).
+   */
+  private readonly rememberedBlockedParentMap = new Map<
+    string,
+    SpanContext | undefined
+  >();
 
   constructor(
     private readonly exporter: SpanExporter,
-    patterns: string[],
+    globalPatterns: string[],
   ) {
-    for (const p of patterns) {
-      if (!p) continue;
-
-      if (p.endsWith("*") && !p.startsWith("*")) {
-        this.prefixes.push(p.slice(0, -1));
-      } else if (p.startsWith("*") && !p.endsWith("*")) {
-        this.suffixes.push(p.slice(1));
-      } else {
-        this.exact.add(p);
-      }
-    }
+    this.compiled = compilePatterns(globalPatterns);
   }
 
   export(
@@ -47,43 +48,52 @@ export class FilteringSpanExporter implements SpanExporter {
     }
 
     const filtered: ReadableSpan[] = [];
-    const blockedParentMap = new Map<string, any>();
+    // Blocked spans discovered in this batch: spanId → parent SpanContext
+    const batchBlockedMap = new Map<string, SpanContext | undefined>();
 
     for (const span of spans) {
       const traceId = getTraceId(span);
       if (traceId && isTraceIdBlocked(traceId)) continue;
 
       const name = span.name;
-      const globallyBlocked = this.isBlocked(name);
+
+      // 1. Global pattern check (pre-compiled at construction time)
+      const globallyBlocked = matchesPatterns(name, this.compiled);
+
+      // 2. Local pattern check (compile inline — lists are typically ≤5 entries)
+      const localPatterns = this.getLocalPatterns(span);
       const locallyBlocked =
-        this.matchesLocalPatterns(span) || this.hasLocalBlockFlag(span);
+        (localPatterns.length > 0 &&
+          matchesPatterns(name, compilePatterns(localPatterns))) ||
+        this.hasLocalBlockFlag(span);
 
       if (!globallyBlocked && !locallyBlocked) {
         filtered.push(span);
         continue;
       }
 
-      // Span is blocked — remember its parent
+      // Span is blocked — record its parent for reparenting survivors
       const spanId = span.spanContext().spanId;
-      const parent = span.parentSpanContext;
-
-      if (parent) {
-        // current batch
-        blockedParentMap.set(spanId, parent);
-
-        //  persist across export() calls
-        this.rememberedBlockedParentMap.set(spanId, parent);
-      }
+      const parentCtx = span.parentSpanContext as SpanContext | undefined;
+      batchBlockedMap.set(spanId, parentCtx);
+      // Persist across export() calls (cross-batch reparenting)
+      this.rememberedBlockedParentMap.set(spanId, parentCtx);
     }
 
-    //  Merge remembered + current batch blocked parents
-    const merged = new Map<string, any>();
+    // 3. Build the merged reparenting map:
+    //    - rememberedBlockedParentMap: spans blocked in previous batches
+    //    - batchBlockedMap: spans blocked in this batch
+    //    - BLOCKED_LOCAL_PARENT_MAP: spans pre-registered by LocalFilteringSpanProcessor
+    //      (handles SimpleSpanProcessor timing — child exported before its blocked parent)
+    const merged = new Map<string, SpanContext | undefined>();
 
     for (const [k, v] of this.rememberedBlockedParentMap) {
       merged.set(k, v);
     }
-
-    for (const [k, v] of blockedParentMap) {
+    for (const [k, v] of BLOCKED_LOCAL_PARENT_MAP) {
+      merged.set(k, v);
+    }
+    for (const [k, v] of batchBlockedMap) {
       merged.set(k, v);
     }
 
@@ -104,50 +114,47 @@ export class FilteringSpanExporter implements SpanExporter {
   }
 
   forceFlush(): Promise<void> {
-    return this.exporter.forceFlush?.() || Promise.resolve();
+    return this.exporter.forceFlush?.() ?? Promise.resolve();
   }
 
-  // ---------- helpers ----------
-
-  private isBlocked(name: string): boolean {
-    if (this.exact.has(name)) return true;
-    if (this.prefixes.some((p) => name.startsWith(p))) return true;
-    if (this.suffixes.some((s) => name.endsWith(s))) return true;
-    return false;
-  }
-
-  private matchesLocalPatterns(span: ReadableSpan): boolean {
-    const patterns = span.attributes?.["netra.local_blocked_spans"];
-    if (!Array.isArray(patterns)) return false;
-
-    return patterns.some((p) => {
-      if (typeof p !== "string") return false;
-
-      if (p.endsWith("*")) return span.name.startsWith(p.slice(0, -1));
-      if (p.startsWith("*")) return span.name.endsWith(p.slice(1));
-      return span.name === p;
-    });
+  private getLocalPatterns(span: ReadableSpan): string[] {
+    const value = span.attributes?.["netra.local_blocked_spans"];
+    if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+      return (value as string[]).filter((v) => v !== "");
+    }
+    return [];
   }
 
   private hasLocalBlockFlag(span: ReadableSpan): boolean {
     return span.attributes?.["netra.local_blocked"] === true;
   }
 
+  /**
+   * Walk up the blocked-parent chain for each surviving span and rewrite its
+   * parentSpanContext to the nearest non-blocked ancestor.
+   *
+   * A cycle guard (visited set) prevents infinite loops in malformed traces.
+   */
   private reparentBlockedChildren(
     spans: ReadableSpan[],
-    blockedMap: Map<string, any>,
-  ) {
+    blockedMap: Map<string, SpanContext | undefined>,
+  ): void {
     for (const span of spans) {
-      let parent = span.parentSpanContext;
+      let parent = span.parentSpanContext as SpanContext | undefined;
+      if (!parent) continue;
+
       const visited = new Set<string>();
+      let changed = false;
 
       while (parent && blockedMap.has(parent.spanId)) {
-        if (visited.has(parent.spanId)) break;
+        if (visited.has(parent.spanId)) break; // cycle guard
         visited.add(parent.spanId);
         parent = blockedMap.get(parent.spanId);
+        changed = true;
       }
 
-      if (parent !== span.parentSpanContext) {
+      if (changed) {
+        // Mutate the internal field directly (OTel JS SDK stores it as _parentSpanContext)
         (span as any)._parentSpanContext = parent;
       }
     }

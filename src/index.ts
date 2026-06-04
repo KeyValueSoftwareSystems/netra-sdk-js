@@ -27,6 +27,7 @@ export {
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
 export type { ActionModel, UsageModel, SpanOptions } from "./types";
+export type { SpanAttributes } from "./span-wrapper";
 // Expose provider instrumentors for advanced usage/testing
 export { mistralAIInstrumentor } from "./instrumentation/mistralai";
 
