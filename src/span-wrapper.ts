@@ -49,10 +49,10 @@ export class SpanWrapper {
     // Start from the currently active OTel context
     let ctx = context.active();
 
-    // If the caller provided blocked_spans (or the canonical netra.local_blocked_spans key),
+    // If the caller provided blockedSpans (or the canonical netra.local_blocked_spans key),
     // inject them into OTel baggage so descendant spans inherit the filtering patterns.
     const rawBlockedSpans =
-      this.attributes["blocked_spans"] ??
+      this.attributes["blockedSpans"] ??
       this.attributes["netra.local_blocked_spans"];
 
     if (Array.isArray(rawBlockedSpans) && rawBlockedSpans.length > 0) {
@@ -69,7 +69,7 @@ export class SpanWrapper {
       }
 
       // Remove from attributes — these are control directives, not span metadata
-      delete this.attributes["blocked_spans"];
+      delete this.attributes["blockedSpans"];
       delete this.attributes["netra.local_blocked_spans"];
     }
 
@@ -85,8 +85,8 @@ export class SpanWrapper {
       ctx,
     );
 
-    // Store the context with this span (and any baggage) so withActive/withActiveAsync
-    // propagate both parent-span and blocking baggage to child spans.
+    // Store the context with this span (and any baggage) so withActive()
+    // propagates both parent-span and blocking baggage to child spans.
     if (this.span) {
       this.activeContext = trace.setSpan(ctx, this.span);
       SessionManager.registerSpan(this.name, this.span);
@@ -146,20 +146,10 @@ export class SpanWrapper {
   /**
    * Run a function with this span set as the active span in the OTel context.
    * Child spans created inside `fn` will have this span as their parent and will
-   * also inherit any blocking baggage set via `blocked_spans`.
+   * also inherit any blocking baggage set via `blockedSpans`. Works for both
+   * sync and async functions — context.with() passes through the return value as-is.
    */
   withActive<T>(fn: () => T): T {
-    if (!this.span) return fn();
-
-    const ctx =
-      this.activeContext ?? trace.setSpan(context.active(), this.span);
-    return context.with(ctx, fn);
-  }
-
-  /**
-   * Async version of withActive(). Keeps the context active across async work.
-   */
-  async withActiveAsync<T>(fn: () => Promise<T>): Promise<T> {
     if (!this.span) return fn();
 
     const ctx =
