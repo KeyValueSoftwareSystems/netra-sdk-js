@@ -10,12 +10,18 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { createRequire } from "module";
-import { Config, NetraInstruments } from "../config";
+import {
+  Config,
+  DEFAULT_INSTRUMENTS,
+  DEFAULT_INSTRUMENTS_FOR_ROOT,
+  NetraInstruments,
+} from "../config";
 import { Logger } from "../logger";
 import {
   InstrumentationSpanProcessor,
   LlmTraceIdentifierSpanProcessor,
   RootSpanProcessor,
+  RootInstrumentFilterProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
   SpanIOProcessor,
@@ -169,11 +175,107 @@ function disableTraceloopLangchainCallbackHandler(): void {
   }
 }
 
+/**
+ * Resolve the effective root instrument allow-list.
+ *
+ * `rootInstruments` is resolved independently of the non-root `instruments`
+ * set. `blockInstruments` is subtracted from the resolved root set.
+ *
+ * When `NetraInstruments.ALL` is in `rootInstruments`, returns `null` (no
+ * root filtering — all instrumentations may create root spans) unless
+ * `blockInstruments` restricts the set.
+ *
+ * Returns a set of instrumentation-name strings, or `null` when no filtering
+ * should be applied.
+ */
+function resolveRootInstrumentNames(
+  rootInstruments?: Set<NetraInstruments>,
+  blockInstruments?: Set<NetraInstruments>,
+): Set<string> | null {
+  const allSentinel = NetraInstruments.ALL;
+  const rootHasAll = rootInstruments != null && rootInstruments.has(allSentinel);
+  const blockHasAll = blockInstruments != null && blockInstruments.has(allSentinel);
+
+  if (blockHasAll) {
+    if (rootHasAll) {
+      console.error(
+        "Netra: rootInstruments=ALL is contradicted by blockInstruments=ALL; " +
+          "all root instrumentation is disabled.",
+      );
+    } else {
+      console.warn(
+        "Netra: blockInstruments contains ALL; all instrumentation will be disabled.",
+      );
+    }
+  }
+
+  // All instrument values (excluding the ALL sentinel)
+  const allInstrumentValues = new Set<string>(
+    Object.values(NetraInstruments).filter((v) => v !== allSentinel),
+  );
+
+  // Compute blocked values
+  let blockedValues: Set<string>;
+  if (blockHasAll) {
+    blockedValues = new Set(allInstrumentValues);
+  } else if (blockInstruments && blockInstruments.size > 0) {
+    blockedValues = new Set(
+      [...blockInstruments]
+        .filter((m) => m !== allSentinel)
+        .map((m) => m.valueOf()),
+    );
+  } else {
+    blockedValues = new Set();
+  }
+
+  // Resolve root set
+  if (rootHasAll) {
+    if (blockedValues.size > 0) {
+      const resolved = new Set<string>();
+      for (const v of allInstrumentValues) {
+        if (!blockedValues.has(v)) {
+          resolved.add(v);
+        }
+      }
+      return resolved;
+    }
+    return null; // No filtering — all roots allowed
+  }
+
+  // Use explicit rootInstruments or fall back to DEFAULT_INSTRUMENTS_FOR_ROOT
+  const effectiveRoot =
+    rootInstruments && rootInstruments.size > 0
+      ? rootInstruments
+      : DEFAULT_INSTRUMENTS_FOR_ROOT;
+
+  const resolved = new Set<string>();
+  for (const m of effectiveRoot) {
+    if (m === allSentinel) continue;
+    const val = m.valueOf();
+    if (!blockedValues.has(val)) {
+      resolved.add(val);
+    }
+  }
+
+  return resolved;
+}
+
 export function initInstrumentations(
   config: Config,
   instruments?: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
+  rootInstruments?: Set<NetraInstruments>,
 ): TracerProviderWithProcessors | null {
+  // Resolve effective instruments: use DEFAULT_INSTRUMENTS when not provided
+  const enableAll = instruments != null && instruments.has(NetraInstruments.ALL);
+
+  // Resolve root instrument names (independent of `instruments`).
+  // blockInstruments is subtracted from the resolved root set.
+  const resolvedRootNames: Set<string> | null = resolveRootInstrumentNames(
+    rootInstruments,
+    blockInstruments,
+  );
+
   // Map Netra instruments to Traceloop instrument modules
   const instrumentModules: InitializeOptions["instrumentModules"] = {};
 
@@ -188,18 +290,32 @@ export function initInstrumentations(
     openaiAgents: false,
   };
 
-  if (!instruments || instruments.size === 0) {
-    // Enable all by default
+  if (enableAll) {
+    // ALL sentinel: enable every instrumentation (legacy behaviour)
     customInstrumentModules.openai = true;
     customInstrumentModules.groq = true;
     customInstrumentModules.mistral = true;
     customInstrumentModules.langgraph = true;
     customInstrumentModules.googleGenAI = true;
     customInstrumentModules.anthropic = true;
-    customInstrumentModules.openaiAgents = true;
-  } else if (instruments.size) {
-    // When specific instruments are provided, explicitly disable all Traceloop modules
-    // to prevent default "enable all" behavior
+    instrumentModules.google_vertexai = true;
+    instrumentModules.langchain = true;
+    instrumentModules.llamaIndex = true;
+    instrumentModules.pinecone = true;
+    instrumentModules.qdrant = true;
+    instrumentModules.chromadb = true;
+    instrumentModules.together = true;
+  } else if (!instruments || instruments.size === 0) {
+    // No instruments specified: enable curated defaults (custom LLM instrumentors)
+    customInstrumentModules.openai = true;
+    customInstrumentModules.groq = true;
+    customInstrumentModules.mistral = true;
+    customInstrumentModules.langgraph = true;
+    customInstrumentModules.googleGenAI = true;
+    customInstrumentModules.anthropic = true;
+  } else {
+    // Specific instruments provided: explicitly disable all Traceloop modules
+    // to prevent default "enable all" behavior, then selectively enable
     instrumentModules.google_vertexai = false;
     instrumentModules.langchain = false;
     instrumentModules.llamaIndex = false;
@@ -331,7 +447,7 @@ export function initInstrumentations(
   const effectiveProvider = addCustomSpanProcessors(
     tracerProvider,
     config,
-    localFilteringSpanProcessor,
+    resolvedRootNames,
   );
 
   // Initialize custom instrumentations asynchronously
@@ -351,6 +467,21 @@ export function initInstrumentations(
 }
 
 /**
+ * Returns true if the given instrument should be blocked.
+ * Handles the ALL sentinel (blocks everything).
+ */
+function isBlocked(
+  instrument: NetraInstruments,
+  blockInstruments?: Set<NetraInstruments>,
+): boolean {
+  if (!blockInstruments || blockInstruments.size === 0) return false;
+  return (
+    blockInstruments.has(NetraInstruments.ALL) ||
+    blockInstruments.has(instrument)
+  );
+}
+
+/**
  * Initialize custom instrumentations asynchronously
  * This uses dynamic import() to ensure we patch the same ES module instances
  * that the application uses.
@@ -364,7 +495,7 @@ async function initCustomInstrumentationsAsync(
   // Initialize custom MistralAI instrumentation
   if (
     customInstrumentModules.mistral &&
-    !blockInstruments?.has(NetraInstruments.MISTRAL)
+    !isBlocked(NetraInstruments.MISTRAL, blockInstruments)
   ) {
     try {
       await mistralAIInstrumentor.instrumentAsync({ tracerProvider });
@@ -377,7 +508,7 @@ async function initCustomInstrumentationsAsync(
   // Initialize custom OpenAI instrumentation
   if (
     customInstrumentModules.openai &&
-    !blockInstruments?.has(NetraInstruments.OPENAI)
+    !isBlocked(NetraInstruments.OPENAI, blockInstruments)
   ) {
     try {
       await openAIInstrumentor.instrument({ tracerProvider });
@@ -390,7 +521,7 @@ async function initCustomInstrumentationsAsync(
   // Initialize custom Groq instrumentation
   if (
     customInstrumentModules.groq &&
-    !blockInstruments?.has(NetraInstruments.GROQ)
+    !isBlocked(NetraInstruments.GROQ, blockInstruments)
   ) {
     try {
       await groqInstrumentor.instrumentAsync({ tracerProvider });
@@ -403,7 +534,7 @@ async function initCustomInstrumentationsAsync(
   // Initialize custom Google GenAI instrumentation
   if (
     customInstrumentModules.googleGenAI &&
-    !blockInstruments?.has(NetraInstruments.GOOGLE_GENERATIVE_AI)
+    !isBlocked(NetraInstruments.GOOGLE_GENERATIVE_AI, blockInstruments)
   ) {
     try {
       await googleGenerativeAIInstrumentor.instrumentAsync({ tracerProvider });
@@ -416,7 +547,7 @@ async function initCustomInstrumentationsAsync(
   // Initialize custom Langgraph instrumentation
   if (
     customInstrumentModules.langgraph &&
-    !blockInstruments?.has(NetraInstruments.LANGGRAPH)
+    !isBlocked(NetraInstruments.LANGGRAPH, blockInstruments)
   ) {
     try {
       await langgraphInstrumentor.instrument({ tracerProvider });
@@ -428,7 +559,7 @@ async function initCustomInstrumentationsAsync(
 
   if (
     customInstrumentModules.anthropic &&
-    !blockInstruments?.has(NetraInstruments.ANTHROPIC)
+    !isBlocked(NetraInstruments.ANTHROPIC, blockInstruments)
   ) {
     try {
       await anthropicInstrumentor.instrumentAsync({ tracerProvider });
@@ -457,15 +588,10 @@ function initOpenTelemetryInstrumentations(
   instruments?: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
 ): void {
-  // HTTP instrumentation — also auto-enabled with EXPRESS because HttpInstrumentation
-  // is what extracts traceparent from incoming request headers. Without it, Express
-  // apps create a new root trace on every request instead of inheriting the caller's trace.
-  const httpEnabled =
-    !blockInstruments?.has(NetraInstruments.HTTP) &&
-    (!instruments ||
-      instruments.has(NetraInstruments.HTTP) ||
-      instruments.has(NetraInstruments.EXPRESS));
-
+  // HTTP/HTTPS instrumentation
+  if (
+    !isBlocked(NetraInstruments.HTTP, blockInstruments) &&
+    (!instruments || instruments.has(NetraInstruments.HTTP))
   // Shared URL exclusion — mirrors Python's OTEL_PYTHON_EXCLUDED_URLS global.
   // Always skips internal Netra egress; OTEL_NODE_EXCLUDED_URLS adds user patterns.
   let netraHost = "";
@@ -502,7 +628,7 @@ function initOpenTelemetryInstrumentations(
     return excludeRegexes.some((re) => re.test(url));
   };
 
-  if (httpEnabled) {
+  ) {
     try {
       const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
@@ -552,7 +678,7 @@ function initOpenTelemetryInstrumentations(
 
   // Prisma instrumentation
   if (
-    !blockInstruments?.has(NetraInstruments.PRISMA) &&
+    !isBlocked(NetraInstruments.PRISMA, blockInstruments) &&
     (!instruments || instruments.has(NetraInstruments.PRISMA))
   ) {
     try {
@@ -564,7 +690,7 @@ function initOpenTelemetryInstrumentations(
   }
 
   if (
-    !blockInstruments?.has(NetraInstruments.TYPEORM) &&
+    !isBlocked(NetraInstruments.TYPEORM, blockInstruments) &&
     (!instruments || instruments.has(NetraInstruments.TYPEORM))
   ) {
     try {
@@ -584,7 +710,7 @@ function initOpenTelemetryInstrumentations(
 
   // Express instrumentation
   if (
-    !blockInstruments?.has(NetraInstruments.EXPRESS) &&
+    !isBlocked(NetraInstruments.EXPRESS, blockInstruments) &&
     (!instruments || instruments.has(NetraInstruments.EXPRESS))
   ) {
     try {
@@ -609,7 +735,7 @@ function initOpenTelemetryInstrumentations(
 function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   config: Config,
-  localFilteringProcessor: LocalFilteringSpanProcessor,
+  rootInstrumentNames: Set<string> | null,
 ): TracerProviderWithProcessors | null {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
@@ -685,7 +811,17 @@ function addCustomSpanProcessors(
     // cleans up its root span map.
 
     // 0. Local Filtering Span Processor - filters spans based on local context
-    provider.addSpanProcessor(localFilteringProcessor);
+    const localFilteringSpanProcessor = new LocalFilteringSpanProcessor();
+    provider.addSpanProcessor(localFilteringSpanProcessor);
+
+    // 0.5. Root Instrument Filter Processor - blocks root spans from non-allowed instrumentations
+    // When rootInstrumentNames is null, all instrumentations may produce root spans (no filtering).
+    if (rootInstrumentNames !== null) {
+      const rootFilterProcessor = new RootInstrumentFilterProcessor(
+        rootInstrumentNames,
+      );
+      provider.addSpanProcessor(rootFilterProcessor);
+    }
 
     // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name.
     //    MUST run before SpanIOProcessor so the IO processor's setAttribute wrapper

@@ -17,7 +17,12 @@ import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
 import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
 
-export { Config, NetraInstruments } from "./config";
+export {
+  Config,
+  DEFAULT_INSTRUMENTS,
+  DEFAULT_INSTRUMENTS_FOR_ROOT,
+  NetraInstruments,
+} from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
   InstrumentationSpanProcessor,
@@ -148,11 +153,13 @@ export class Netra {
     const cfg = new Config(config);
     this._config = cfg;
 
-    // Wire the logger before anything else so all modules respect debugMode.
-    Logger.setDebugMode(cfg.debugMode);
-
-    // Extract Instruments and Block Instruments
-    const { instruments, blockInstruments } = config;
+    // Initialize instrumentations and get effective provider
+    const effectiveProvider = initInstrumentations(
+      cfg,
+      config.instruments,
+      config.blockInstruments,
+      config.rootInstruments,
+    );
 
     // Create the tracer
     const tracer = new Tracer(cfg, instruments, blockInstruments);
