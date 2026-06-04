@@ -463,6 +463,28 @@ function initOpenTelemetryInstrumentations(
     }
   }
 
+  // undici / native fetch instrumentation. instrumentation-http does NOT cover
+  // Node's global fetch (Node 18+) — it is backed by undici and bypasses the
+  // http module. This is the primary egress path for OpenAI/Anthropic/AI-SDK.
+  const fetchEnabled =
+    !blockInstruments?.has(NetraInstruments.FETCH) &&
+    (!instruments || instruments.has(NetraInstruments.FETCH));
+
+  if (fetchEnabled) {
+    try {
+      const { UndiciInstrumentation } = require("@opentelemetry/instrumentation-undici");
+      const { registerInstrumentations } = require("@opentelemetry/instrumentation");
+      registerInstrumentations({ instrumentations: [new UndiciInstrumentation()] });
+      if (config.debugMode) {
+        console.debug("Undici/fetch instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug("Undici/fetch instrumentation not available:", e);
+      }
+    }
+  }
+
   // Prisma instrumentation
   if (
     !blockInstruments?.has(NetraInstruments.PRISMA) &&
