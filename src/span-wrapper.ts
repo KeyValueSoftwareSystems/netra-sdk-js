@@ -13,10 +13,7 @@ import {
 import { Config } from "./config";
 import { LOCAL_BLOCKED_SPANS_BAGGAGE_KEY } from "./processors/localfiltering-span-processor";
 import { SessionManager } from "./session-manager";
-import { ActionModel, SpanType, UsageModel } from "./types";
-
-/** Attributes accepted by SpanWrapper — `blocked_spans` carries a string[] */
-export type SpanAttributes = Record<string, string | string[]>;
+import { ActionModel, SpanAttributes, SpanType, UsageModel } from "./types";
 
 export class SpanWrapper {
   private name: string;

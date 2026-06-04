@@ -15,7 +15,7 @@ import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
-import { SpanType, SpanCallback, SpanOptions } from "./types";
+import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
 
 export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
@@ -27,7 +27,6 @@ export {
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
 export type { ActionModel, UsageModel, SpanOptions } from "./types";
-export type { SpanAttributes } from "./span-wrapper";
 // Expose provider instrumentors for advanced usage/testing
 export { mistralAIInstrumentor } from "./instrumentation/mistralai";
 
@@ -470,7 +469,7 @@ export class Netra {
     optionsOrFn: SpanOptions | SpanCallback<T>,
     fn?: SpanCallback<T>,
   ): T {
-    let attributes: Record<string, string> = {};
+    let attributes: SpanAttributes = {};
     let moduleName = this._SDK_NAME;
     let spanType: SpanType = SpanType.SPAN;
     let callback: SpanCallback<T>;
