@@ -46,7 +46,8 @@ function anthropicWrapper(
         const startTime = Date.now();
 
         // Call the original function and get the APIPromise
-        const response = wrapped.call(instance, ...args);
+        const spanContext = trace.setSpan(currentContext, span);
+        const response = context.with(spanContext, () => wrapped.call(instance, ...args));
 
         if (isPromise(response)) {
           return (async () => {
@@ -94,7 +95,8 @@ function anthropicWrapper(
           try {
             setRequestAttributes(span, kwargs, requestType);
             const startTime = Date.now();
-            const response = wrapped.call(instance, ...args);
+            const spanContext = trace.setSpan(context.active(), span);
+            const response = context.with(spanContext, () => wrapped.call(instance, ...args));
             if (isPromise(response)) {
               // Create a new promise that handles instrumentation
               const instrumentedPromise = (async () => {
