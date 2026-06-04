@@ -12,14 +12,11 @@ import { AsyncLocalStorage } from "async_hooks";
 import { Config } from "./config";
 import { Logger } from "./logger";
 import { RootSpanProcessor } from "./processors/root-span-processor";
+import { ConversationType } from "./types";
 
+export { ConversationType };
 
 const MODULE_NAME = "netra.session-manager";
-
-export enum ConversationType {
-  INPUT = "input",
-  OUTPUT = "output",
-}
 
 /**
  * Per-async-scope state: entity name stacks and a name→span registry.

@@ -215,6 +215,7 @@ export class NetraMistralAIInstrumentor {
     }
 
     originalMethods.clear();
+    MistralClass = null;
     isInstrumented = false;
   }
 

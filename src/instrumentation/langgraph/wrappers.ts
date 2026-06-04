@@ -147,15 +147,13 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     const nodeName = metadataNodeName || runNameValue || chainIdName || "Chain";
     const nodeType = chainIdName || "Unknown";
 
-    {
-      const metadataKeys =
-        metadata && typeof metadata === "object"
-          ? Object.keys(metadata as Record<string, unknown>).join(",")
-          : "n/a";
-      Logger.debug(
-        `NetraLanggraph handleChainStart: runId=${runId} parentRunId=${parentRunId} nodeName=${nodeName} nodeType=${nodeType} runName=${runNameValue || "n/a"} metadataKeys=${metadataKeys}`,
-      );
-    }
+    const metadataKeys =
+      metadata && typeof metadata === "object"
+        ? Object.keys(metadata as Record<string, unknown>).join(",")
+        : "n/a";
+    Logger.debug(
+      `NetraLanggraph handleChainStart: runId=${runId} parentRunId=${parentRunId} nodeName=${nodeName} nodeType=${nodeType} runName=${runNameValue || "n/a"} metadataKeys=${metadataKeys}`,
+    );
 
     if (
       !nodeName ||

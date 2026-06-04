@@ -82,8 +82,17 @@ function addOutputAttributes(span: Span, result: any): void {
   }
 }
 
-function isClassConstructor(fn: any): fn is AnyClass {
-  return typeof fn === "function" && /^\s*class[\s{]/.test(fn.toString());
+function isClassConstructor(value: unknown): value is AnyClass {
+  if (typeof value !== "function") {
+    return false;
+  }
+
+  const prototype = value.prototype;
+  return (
+    prototype != null &&
+    typeof prototype === "object" &&
+    prototype.constructor === value
+  );
 }
 
 function createFunctionWrapper<T extends AnyFunction>(
@@ -245,10 +254,6 @@ function decoratorFactory(
     _key?: string | symbol,
     descriptor?: PropertyDescriptor,
   ): void {
-    if (isClassConstructor(target)) {
-      createClassWrapper(target, entityType, opts?.name, spanType);
-      return;
-    }
     if (descriptor) {
       // Mutate descriptor in place — returning void is valid for method decorators
       descriptor.value = createFunctionWrapper(
@@ -257,6 +262,10 @@ function decoratorFactory(
         opts?.name,
         spanType,
       );
+      return;
+    } else if (isClassConstructor(target)) {
+      createClassWrapper(target, entityType, opts?.name, spanType);
+      return;
     }
   } as UnifiedDecorator;
 }

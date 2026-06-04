@@ -88,6 +88,7 @@ export class NetraAnthropicInstrumentor {
     this._uninstrumentBatchMessages();
 
     originalMethods.clear();
+    AnthropicClass = null;
     isInstrumented = false;
   }
 

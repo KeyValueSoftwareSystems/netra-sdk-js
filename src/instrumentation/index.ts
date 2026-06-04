@@ -608,11 +608,11 @@ function addCustomSpanProcessors(
  * Uninstrument all active instrumentations
  * Should be called during shutdown
  */
-export function uninstrumentAll(): void {
+export async function uninstrumentAll(): Promise<void> {
   // Uninstrument custom OpenAI instrumentation
   try {
     if (openAIInstrumentor.isInstrumented()) {
-      openAIInstrumentor.uninstrument();
+      await openAIInstrumentor.uninstrument();
       Logger.debug("Custom OpenAI instrumentation disabled");
     }
   } catch (e) {
@@ -662,7 +662,7 @@ export function uninstrumentAll(): void {
   // Uninstrument custom Langgraph instrumentation
   try {
     if (langgraphInstrumentor.isInstrumented()) {
-      langgraphInstrumentor.uninstrument();
+      await langgraphInstrumentor.uninstrument();
       Logger.debug("Custom Langgraph instrumentation disabled");
     }
   } catch (e) {

@@ -15,8 +15,7 @@ import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
-import { isEnumValue } from "./utils";
-import { SpanType, SpanCallback } from "./types";
+import { SpanType, SpanCallback, SpanOptions } from "./types";
 
 export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
@@ -27,7 +26,7 @@ export {
 } from "./processors";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
-export type { ActionModel, UsageModel } from "./types";
+export type { ActionModel, UsageModel, SpanOptions } from "./types";
 // Expose provider instrumentors for advanced usage/testing
 export { mistralAIInstrumentor } from "./instrumentation/mistralai";
 
@@ -272,7 +271,7 @@ export class Netra {
 
     // Unpatch any monkey-patched instrumentations first
     try {
-      uninstrumentAll();
+      await uninstrumentAll();
     } catch (e) {
       Logger.error("Error during uninstrumentAll:", e);
     }
@@ -447,52 +446,16 @@ export class Netra {
     SessionManager.addConversation(conversationType, role, content);
   }
 
-  /**
-   * Start a new span
-   */
   static startSpan(name: string): SpanWrapper;
-  static startSpan(
-    name: string,
-    attributes: Record<string, string>,
-  ): SpanWrapper;
-  static startSpan(
-    name: string,
-    attributes: Record<string, string>,
-    asType: SpanType,
-  ): SpanWrapper;
-  static startSpan(
-    name: string,
-    attributes: Record<string, string>,
-    moduleName: string,
-    asType: SpanType,
-  ): SpanWrapper;
-  static startSpan(
-    name: string,
-    attributes?: Record<string, string>,
-    moduleNameOrAsType?: string | SpanType,
-    asType?: SpanType,
-  ): SpanWrapper {
-    let finalAttributes: Record<string, string> = {};
-    let moduleName = this._SDK_NAME;
-    let spanType: SpanType = SpanType.SPAN;
-
-    if (moduleNameOrAsType === undefined) {
-      // (name) or (name, attributes)
-      finalAttributes = attributes ?? {};
-    } else if (isEnumValue(SpanType, moduleNameOrAsType)) {
-      // (name, attributes, asType)
-      finalAttributes = attributes ?? {};
-      spanType = moduleNameOrAsType;
-    } else {
-      // (name, attributes, moduleName, asType)
-      finalAttributes = attributes ?? {};
-      moduleName = moduleNameOrAsType;
-      spanType = asType ?? SpanType.SPAN;
-    }
+  static startSpan(name: string, options: SpanOptions): SpanWrapper;
+  static startSpan(name: string, options?: SpanOptions): SpanWrapper {
+    const attributes = options?.attributes ?? {};
+    const moduleName = options?.moduleName ?? this._SDK_NAME;
+    const spanType = options?.asType ?? SpanType.SPAN;
 
     return new SpanWrapper(
       name,
-      finalAttributes,
+      attributes,
       moduleName,
       spanType,
       this._tracer,
@@ -500,29 +463,10 @@ export class Netra {
   }
 
   static startActiveSpan<T>(name: string, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(name: string, options: SpanOptions, fn: SpanCallback<T>): T;
   static startActiveSpan<T>(
     name: string,
-    attributes: Record<string, string>,
-    fn: SpanCallback<T>,
-  ): T;
-  static startActiveSpan<T>(
-    name: string,
-    attributes: Record<string, string>,
-    asType: SpanType,
-    fn: SpanCallback<T>,
-  ): T;
-  static startActiveSpan<T>(
-    name: string,
-    attributes: Record<string, string>,
-    moduleName: string,
-    asType: SpanType,
-    fn: SpanCallback<T>,
-  ): T;
-  static startActiveSpan<T>(
-    name: string,
-    attributesOrFn: Record<string, string> | SpanCallback<T>,
-    moduleNameOrAsTypeOrFn?: string | SpanCallback<T>,
-    asTypeOrFn?: SpanType | SpanCallback<T>,
+    optionsOrFn: SpanOptions | SpanCallback<T>,
     fn?: SpanCallback<T>,
   ): T {
     let attributes: Record<string, string> = {};
@@ -530,23 +474,12 @@ export class Netra {
     let spanType: SpanType = SpanType.SPAN;
     let callback: SpanCallback<T>;
 
-    if (typeof attributesOrFn === "function") {
-      // (name, fn)
-      callback = attributesOrFn;
-    } else if (typeof moduleNameOrAsTypeOrFn === "function") {
-      // (name, attributes, fn)
-      attributes = attributesOrFn;
-      callback = moduleNameOrAsTypeOrFn;
-    } else if (typeof asTypeOrFn === "function") {
-      // (name, attributes, asType, fn)
-      attributes = attributesOrFn;
-      spanType = moduleNameOrAsTypeOrFn as SpanType;
-      callback = asTypeOrFn;
+    if (typeof optionsOrFn === "function") {
+      callback = optionsOrFn;
     } else {
-      // (name, attributes, moduleName, asType, fn)
-      attributes = attributesOrFn;
-      moduleName = moduleNameOrAsTypeOrFn as string;
-      spanType = asTypeOrFn as SpanType;
+      attributes = optionsOrFn.attributes ?? {};
+      moduleName = optionsOrFn.moduleName ?? this._SDK_NAME;
+      spanType = optionsOrFn.asType ?? SpanType.SPAN;
       callback = fn!;
     }
 

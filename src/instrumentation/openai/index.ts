@@ -118,6 +118,7 @@ export class NetraOpenAIInstrumentor {
     });
 
     this.originalMethods.clear();
+    openAIClasses.length = 0;
     NetraOpenAIInstrumentor._isInstrumented = false;
   }
 

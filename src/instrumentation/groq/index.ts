@@ -156,6 +156,7 @@ export class NetraGroqInstrumentor {
     }
 
     originalMethods.clear();
+    GroqClass = null;
     isInstrumented = false;
   }
 

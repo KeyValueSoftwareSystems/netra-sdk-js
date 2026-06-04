@@ -141,6 +141,7 @@ export class NetraLanggraphInstrumentor {
     }
 
     originalMethods.clear();
+    LanggraphClass = null;
     isInstrumented = false;
   }
 

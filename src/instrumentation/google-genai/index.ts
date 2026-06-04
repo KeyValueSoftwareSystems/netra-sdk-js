@@ -156,6 +156,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
 
     this._uninstrumentGenerativeModel();
 
+    GenerativeModel = null;
     isInstrumented = false;
   }
 

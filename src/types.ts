@@ -33,8 +33,7 @@ export interface ActionModel {
   metadata?: Record<string, string>;
 }
 
-export interface SpanWrapperOptions {
-  name: string;
+export interface SpanOptions {
   attributes?: Record<string, string>;
   moduleName?: string;
   asType?: SpanType;
