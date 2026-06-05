@@ -437,7 +437,7 @@ function initOpenTelemetryInstrumentations(
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
       registerInstrumentations({ instrumentations: [new HttpInstrumentation()] });
       if (config.debugMode) {
-        console.debug("HTTP instrumentation enabled");
+        Logger.debug("HTTP instrumentation enabled");
       }
     } catch (e) {
       Logger.debug("HTTP instrumentation not available:", e);
@@ -486,7 +486,7 @@ function initOpenTelemetryInstrumentations(
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
       registerInstrumentations({ instrumentations: [new ExpressInstrumentation()] });
       if (config.debugMode) {
-        console.debug("Express instrumentation enabled");
+        Logger.debug("Express instrumentation enabled");
       }
     } catch (e) {
       Logger.debug("Express instrumentation not available:", e);

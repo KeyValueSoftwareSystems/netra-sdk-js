@@ -34,7 +34,7 @@ export class Logger {
   }
 
   static error(...args: any[]): void {
-    if (this.isDebug) console.error(PREFIX, ...args);
+    console.error(PREFIX, ...args);
   }
 
   static log(...args: any[]): void {
