@@ -4,6 +4,7 @@
  */
 
 import { Config } from "../../config";
+import { Logger } from "../../logger";
 import { UsageHttpClient } from "./client";
 import {
   ListSpansParams,
@@ -38,11 +39,11 @@ export class Usage {
     endTime: string
   ): Promise<SessionUsageData | null> {
     if (!sessionId) {
-      console.error("netra.usage: session_id is required to fetch session usage");
+      Logger.error("netra.usage: session_id is required to fetch session usage");
       return null;
     }
     if (!startTime || !endTime) {
-      console.error(
+      Logger.error(
         "netra.usage: start_time and end_time are required to fetch session usage"
       );
       return null;
@@ -75,11 +76,11 @@ export class Usage {
     endTime: string
   ): Promise<TenantUsageData | null> {
     if (!tenantId) {
-      console.error("netra.usage: tenant_id is required to fetch tenant usage");
+      Logger.error("netra.usage: tenant_id is required to fetch tenant usage");
       return null;
     }
     if (!startTime || !endTime) {
-      console.error(
+      Logger.error(
         "netra.usage: start_time and end_time are required to fetch tenant usage"
       );
       return null;
@@ -108,7 +109,7 @@ export class Usage {
    */
   async listTraces(params: ListTracesParams): Promise<TracesPage | null> {
     if (!params.startTime || !params.endTime) {
-      console.error("netra.usage: start_time and end_time are required to list traces");
+      Logger.error("netra.usage: start_time and end_time are required to list traces");
       return null;
     }
 
@@ -161,7 +162,7 @@ export class Usage {
    */
   async listSpansByTraceId(params: ListSpansParams): Promise<SpansPage | null> {
     if (!params.traceId) {
-      console.error("netra.usage: trace_id is required to list spans");
+      Logger.error("netra.usage: trace_id is required to list spans");
       return null;
     }
 
@@ -210,7 +211,7 @@ export class Usage {
     params: ListTracesParams
   ): AsyncGenerator<TraceSummary, void, unknown> {
     if (!params.startTime || !params.endTime) {
-      console.error("netra.usage: start_time and end_time are required to iterate traces");
+      Logger.error("netra.usage: start_time and end_time are required to iterate traces");
       return;
     }
 
@@ -247,7 +248,7 @@ export class Usage {
     params: ListSpansParams
   ): AsyncGenerator<TraceSpan, void, unknown> {
     if (!params.traceId) {
-      console.error("netra.usage: trace_id is required to iterate spans");
+      Logger.error("netra.usage: trace_id is required to iterate spans");
       return;
     }
 

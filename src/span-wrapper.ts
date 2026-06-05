@@ -60,7 +60,6 @@ export class SpanWrapper {
 
     if (this.span) {
       SessionManager.registerSpan(this.name, this.span);
-      SessionManager.setCurrentSpan(this.span);
     }
 
     return this;
@@ -110,21 +109,7 @@ export class SpanWrapper {
     return this;
   }
 
-  /**
-   * Run a function with this span set as the active span in the OTel context.
-   * Useful for nesting spans.
-   */
   withActive<T>(fn: () => T): T {
-    if (!this.span) return fn();
-
-    const ctx = trace.setSpan(context.active(), this.span);
-    return context.with(ctx, fn);
-  }
-
-  /**
-   * Async version of withActive(). Keeps the context active across async work.
-   */
-  async withActiveAsync<T>(fn: () => Promise<T>): Promise<T> {
     if (!this.span) return fn();
 
     const ctx = trace.setSpan(context.active(), this.span);

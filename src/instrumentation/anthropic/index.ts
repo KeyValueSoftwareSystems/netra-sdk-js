@@ -1,4 +1,5 @@
 import { SpanKind, trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import { setRequestAttributes } from "./utils";
 import { __version__ } from "./version";
 import { batchesWrapper, betaWrapper, chatWrapper, MessageStreamWrapper } from "./wrappers";
@@ -19,6 +20,7 @@ async function resolveAnthropicAsync(): Promise<any> {
   if (AnthropicClass) return AnthropicClass;
 
   try {
+    // @ts-ignore - @anthropic-ai/sdk is an optional peer dependency
     const anthropicModule = await import("@anthropic-ai/sdk");
     AnthropicClass = anthropicModule.Anthropic || anthropicModule.default || anthropicModule;
     return AnthropicClass;
@@ -43,7 +45,7 @@ export class NetraAnthropicInstrumentor {
 
       async instrumentAsync(options: InstrumentorOptions = {}): Promise<NetraAnthropicInstrumentor> {
         if (isInstrumented) {
-          console.warn("Anthropic is already instrumented");
+          Logger.warn("Anthropic is already instrumented");
           return this;
         }
 
@@ -63,7 +65,7 @@ export class NetraAnthropicInstrumentor {
             this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
             }
         } catch (error) {
-            console.error(`Failed to initialize tracer: ${error}`);
+            Logger.error(`Failed to initialize tracer: ${error}`);
             return this;
         }
 
@@ -77,7 +79,7 @@ export class NetraAnthropicInstrumentor {
 
     uninstrument(): void{
         if (!isInstrumented) {
-        console.warn("Anthropic is not instrumented");
+        Logger.warn("Anthropic is not instrumented");
         return;
         }
 
@@ -86,6 +88,7 @@ export class NetraAnthropicInstrumentor {
     this._uninstrumentBatchMessages();
 
     originalMethods.clear();
+    AnthropicClass = null;
     isInstrumented = false;
   }
 
@@ -95,18 +98,18 @@ export class NetraAnthropicInstrumentor {
 
 private _instrumentMessages(): void {
   if (!this.tracer) {
-    console.warn("Anthropic instrumentation: No tracer available");
+    Logger.warn("Anthropic instrumentation: No tracer available");
     return;
   }
   try {
     const AnthropicSDK = resolveAnthropic();
     if (!AnthropicSDK) {
-      console.warn("Anthropic instrumentation: Anthropic SDK not available");
+      Logger.warn("Anthropic instrumentation: Anthropic SDK not available");
       return;
     }
     const MessagesClass = AnthropicSDK.Messages;
     if (!MessagesClass) {
-      console.error(
+      Logger.error(
         "Anthropic instrumentation: Could not find Anthropic Messages class to instrument",
       );
       return;
@@ -176,24 +179,24 @@ private _instrumentMessages(): void {
       } as typeof MessagesClass.prototype.create;
     }
   } catch (error) {
-    console.error(`Failed to instrument messages: ${error}`);
+    Logger.error(`Failed to instrument messages: ${error}`);
   }
 }
 
 private _instrumentBetaMessages(): void {
   if (!this.tracer) {
-    console.warn("Anthropic instrumentation: No tracer available");
+    Logger.warn("Anthropic instrumentation: No tracer available");
     return;
   }
   try {
     const AnthropicSDK = resolveAnthropic();
     if (!AnthropicSDK) {
-      console.warn("Anthropic instrumentation: Anthropic SDK not available");
+      Logger.warn("Anthropic instrumentation: Anthropic SDK not available");
       return;
     }
     const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
     if (!BetaMessagesClass) {
-      console.error(
+      Logger.error(
         "Anthropic instrumentation: Could not find Anthropic Beta Messages class to instrument",
       );
       return;
@@ -222,24 +225,24 @@ private _instrumentBetaMessages(): void {
       } as typeof BetaMessagesClass.prototype.create;
     }
   } catch (error) {
-    console.error(`Failed to instrument beta: ${error}`);
+    Logger.error(`Failed to instrument beta: ${error}`);
   }
 }
 
 private _instrumentBatchMessages():void {
   if (!this.tracer) {
-    console.warn("Anthropic instrumentation: No tracer available");
+    Logger.warn("Anthropic instrumentation: No tracer available");
     return;
   }
   try {
     const AnthropicSDK = resolveAnthropic();
     if (!AnthropicSDK) {
-      console.warn("Anthropic instrumentation: Anthropic SDK not available");
+      Logger.warn("Anthropic instrumentation: Anthropic SDK not available");
       return;
     }
     const BatchMessageClass = AnthropicSDK.Messages?.Batches;
     if (!BatchMessageClass) {
-      console.error(
+      Logger.error(
         "Anthropic instrumentation: Could not find Anthropic Batches class to instrument",
       );
       return;
@@ -268,7 +271,7 @@ private _instrumentBatchMessages():void {
       } as typeof BatchMessageClass.prototype.create;
     }
   } catch (error) {
-    console.error(`Failed to instrument batches: ${error}`);
+    Logger.error(`Failed to instrument batches: ${error}`);
   }
 }
   private _uninstrumentMessages(): void {
@@ -283,7 +286,7 @@ private _instrumentBatchMessages():void {
           originalCreate as typeof MessagesClass.prototype.create;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument messages: ${error}`);
+      Logger.error(`Failed to uninstrument messages: ${error}`);
     }
   }
   private _uninstrumentBetaMessages(): void {
@@ -298,7 +301,7 @@ private _instrumentBatchMessages():void {
           originalCreate as typeof BetaMessagesClass.prototype.create;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument beta: ${error}`);
+      Logger.error(`Failed to uninstrument beta: ${error}`);
     }
   }
   private _uninstrumentBatchMessages(): void {
@@ -313,7 +316,7 @@ private _instrumentBatchMessages():void {
           originalCreate as typeof BatchMessagesClass.prototype.create;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument batches: ${error}`);
+      Logger.error(`Failed to uninstrument batches: ${error}`);
     }
   }
 }
