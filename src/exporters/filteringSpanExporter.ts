@@ -1,7 +1,6 @@
 import { ExportResultCode } from "@opentelemetry/core";
 import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { SpanContext } from "@opentelemetry/api";
-import { BLOCKED_LOCAL_PARENT_MAP } from "../processors/localfiltering-span-processor";
 import {
   compilePatterns,
   matchesPatterns,
@@ -14,7 +13,45 @@ import {
   isTrialBlocked,
 } from "./utils";
 
+/**
+ * Wrapper that overrides parentSpanContext without mutating the original span.
+ * Delegates all other ReadableSpan properties to the original.
+ *
+ * NOTE: This class manually delegates every property of the ReadableSpan
+ * interface. If the upstream interface adds new properties, they must be
+ * forwarded here as well to avoid silent data loss during export.
+ */
+class ReparentedSpan implements ReadableSpan {
+  constructor(
+    private readonly delegate: ReadableSpan,
+    private readonly newParent: SpanContext | undefined,
+  ) {}
+
+  get parentSpanContext(): SpanContext | undefined {
+    return this.newParent;
+  }
+
+  get name() { return this.delegate.name; }
+  get kind() { return this.delegate.kind; }
+  spanContext() { return this.delegate.spanContext(); }
+  get startTime() { return this.delegate.startTime; }
+  get endTime() { return this.delegate.endTime; }
+  get status() { return this.delegate.status; }
+  get attributes() { return this.delegate.attributes; }
+  get links() { return this.delegate.links; }
+  get events() { return this.delegate.events; }
+  get duration() { return this.delegate.duration; }
+  get ended() { return this.delegate.ended; }
+  get resource() { return this.delegate.resource; }
+  get instrumentationScope() { return this.delegate.instrumentationScope; }
+  get droppedAttributesCount() { return this.delegate.droppedAttributesCount; }
+  get droppedEventsCount() { return this.delegate.droppedEventsCount; }
+  get droppedLinksCount() { return this.delegate.droppedLinksCount; }
+}
+
 export class FilteringSpanExporter implements SpanExporter {
+  private static readonly MAX_REMEMBERED_ENTRIES = 10_000;
+
   /** Pre-compiled global patterns — compiled once in the constructor. */
   private readonly compiled: CompiledPatterns;
 
@@ -27,9 +64,14 @@ export class FilteringSpanExporter implements SpanExporter {
     SpanContext | undefined
   >();
 
+  /** Cache for compiled local pattern sets to avoid per-span recompilation. */
+  private readonly localPatternCache = new Map<string, CompiledPatterns>();
+  private static readonly MAX_LOCAL_PATTERN_CACHE = 100;
+
   constructor(
     private readonly exporter: SpanExporter,
     globalPatterns: string[],
+    private readonly localBlockedMap?: ReadonlyMap<string, SpanContext | undefined>,
   ) {
     this.compiled = compilePatterns(globalPatterns);
   }
@@ -48,7 +90,6 @@ export class FilteringSpanExporter implements SpanExporter {
     }
 
     const filtered: ReadableSpan[] = [];
-    // Blocked spans discovered in this batch: spanId → parent SpanContext
     const batchBlockedMap = new Map<string, SpanContext | undefined>();
 
     for (const span of spans) {
@@ -57,14 +98,12 @@ export class FilteringSpanExporter implements SpanExporter {
 
       const name = span.name;
 
-      // 1. Global pattern check (pre-compiled at construction time)
       const globallyBlocked = matchesPatterns(name, this.compiled);
 
-      // 2. Local pattern check (compile inline — lists are typically ≤5 entries)
       const localPatterns = this.getLocalPatterns(span);
       const locallyBlocked =
         (localPatterns.length > 0 &&
-          matchesPatterns(name, compilePatterns(localPatterns))) ||
+          matchesPatterns(name, this.getCompiledLocalPatterns(localPatterns))) ||
         this.hasLocalBlockFlag(span);
 
       if (!globallyBlocked && !locallyBlocked) {
@@ -72,26 +111,21 @@ export class FilteringSpanExporter implements SpanExporter {
         continue;
       }
 
-      // Span is blocked — record its parent for reparenting survivors
       const spanId = span.spanContext().spanId;
-      const parentCtx = span.parentSpanContext as SpanContext | undefined;
+      const parentCtx = span.parentSpanContext;
       batchBlockedMap.set(spanId, parentCtx);
-      // Persist across export() calls (cross-batch reparenting)
       this.rememberedBlockedParentMap.set(spanId, parentCtx);
     }
 
-    // 3. Build the merged reparenting map:
-    //    - rememberedBlockedParentMap: spans blocked in previous batches
-    //    - batchBlockedMap: spans blocked in this batch
-    //    - BLOCKED_LOCAL_PARENT_MAP: spans pre-registered by LocalFilteringSpanProcessor
-    //      (handles SimpleSpanProcessor timing — child exported before its blocked parent)
     const merged = new Map<string, SpanContext | undefined>();
 
     for (const [k, v] of this.rememberedBlockedParentMap) {
       merged.set(k, v);
     }
-    for (const [k, v] of BLOCKED_LOCAL_PARENT_MAP) {
-      merged.set(k, v);
+    if (this.localBlockedMap) {
+      for (const [k, v] of this.localBlockedMap) {
+        merged.set(k, v);
+      }
     }
     for (const [k, v] of batchBlockedMap) {
       merged.set(k, v);
@@ -100,6 +134,8 @@ export class FilteringSpanExporter implements SpanExporter {
     if (merged.size > 0) {
       this.reparentBlockedChildren(filtered, merged);
     }
+
+    this.evictRememberedIfNeeded();
 
     if (filtered.length === 0) {
       resultCallback({ code: ExportResultCode.SUCCESS });
@@ -117,6 +153,31 @@ export class FilteringSpanExporter implements SpanExporter {
     return this.exporter.forceFlush?.() ?? Promise.resolve();
   }
 
+  private getCompiledLocalPatterns(patterns: string[]): CompiledPatterns {
+    const key = JSON.stringify(patterns);
+    let compiled = this.localPatternCache.get(key);
+    if (!compiled) {
+      compiled = compilePatterns(patterns);
+      this.localPatternCache.set(key, compiled);
+      if (this.localPatternCache.size > FilteringSpanExporter.MAX_LOCAL_PATTERN_CACHE) {
+        const first = this.localPatternCache.keys().next().value;
+        if (first) this.localPatternCache.delete(first);
+      }
+    }
+    return compiled;
+  }
+
+  private evictRememberedIfNeeded(): void {
+    if (this.rememberedBlockedParentMap.size <= FilteringSpanExporter.MAX_REMEMBERED_ENTRIES) {
+      return;
+    }
+    const excess = this.rememberedBlockedParentMap.size - FilteringSpanExporter.MAX_REMEMBERED_ENTRIES;
+    const keys = Array.from(this.rememberedBlockedParentMap.keys()).slice(0, excess);
+    for (const key of keys) {
+      this.rememberedBlockedParentMap.delete(key);
+    }
+  }
+
   private getLocalPatterns(span: ReadableSpan): string[] {
     const value = span.attributes?.["netra.local_blocked_spans"];
     if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
@@ -130,8 +191,8 @@ export class FilteringSpanExporter implements SpanExporter {
   }
 
   /**
-   * Walk up the blocked-parent chain for each surviving span and rewrite its
-   * parentSpanContext to the nearest non-blocked ancestor.
+   * Walk up the blocked-parent chain for each surviving span and wrap it
+   * with a ReparentedSpan pointing to the nearest non-blocked ancestor.
    *
    * A cycle guard (visited set) prevents infinite loops in malformed traces.
    */
@@ -139,22 +200,23 @@ export class FilteringSpanExporter implements SpanExporter {
     spans: ReadableSpan[],
     blockedMap: Map<string, SpanContext | undefined>,
   ): void {
-    for (const span of spans) {
-      let parent = span.parentSpanContext as SpanContext | undefined;
+    for (let i = 0; i < spans.length; i++) {
+      const span = spans[i];
+      let parent = span.parentSpanContext;
       if (!parent) continue;
 
       const visited = new Set<string>();
       let changed = false;
 
       while (parent && blockedMap.has(parent.spanId)) {
-        if (visited.has(parent.spanId)) break; // cycle guard
+        if (visited.has(parent.spanId)) break;
         visited.add(parent.spanId);
         parent = blockedMap.get(parent.spanId);
         changed = true;
       }
 
       if (changed) {
-        (span as any).parentSpanContext = parent;
+        spans[i] = new ReparentedSpan(span, parent);
       }
     }
   }

@@ -459,6 +459,7 @@ export class Netra {
       moduleName,
       spanType,
       this._tracer,
+      options?.blockedSpans,
     ).start();
   }
 
@@ -483,12 +484,17 @@ export class Netra {
       callback = fn!;
     }
 
+    const blockedSpans = typeof optionsOrFn === "function"
+      ? undefined
+      : optionsOrFn.blockedSpans;
+
     const spanWrapper = new SpanWrapper(
       name,
       attributes,
       moduleName,
       spanType,
       this._tracer,
+      blockedSpans,
     ).start();
 
     return spanWrapper.withActive(() => {

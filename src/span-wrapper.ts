@@ -26,6 +26,7 @@ export class SpanWrapper {
   private span?: Span;
   private activeContext?: ReturnType<typeof context.active>;
   private tracer?: any;
+  private blockedSpanPatterns?: string[];
 
   constructor(
     name: string,
@@ -33,12 +34,14 @@ export class SpanWrapper {
     moduleName: string = "netra_sdk",
     asType: SpanType = SpanType.SPAN,
     tracer?: any,
+    blockedSpanPatterns?: string[],
   ) {
     this.name = name;
     this.attributes = { ...attributes };
     this.moduleName = moduleName;
     this.attributes["netra.span.type"] = asType;
     this.tracer = tracer;
+    this.blockedSpanPatterns = blockedSpanPatterns;
   }
 
   start(): this {
@@ -46,17 +49,10 @@ export class SpanWrapper {
 
     const tracer = this.tracer || trace.getTracer(this.moduleName);
 
-    // Start from the currently active OTel context
     let ctx = context.active();
 
-    // If the caller provided blockedSpans (or the canonical netra.local_blocked_spans key),
-    // inject them into OTel baggage so descendant spans inherit the filtering patterns.
-    const rawBlockedSpans =
-      this.attributes["blockedSpans"] ??
-      this.attributes["netra.local_blocked_spans"];
-
-    if (Array.isArray(rawBlockedSpans) && rawBlockedSpans.length > 0) {
-      const patterns = (rawBlockedSpans as string[]).filter(Boolean);
+    if (this.blockedSpanPatterns && this.blockedSpanPatterns.length > 0) {
+      const patterns = this.blockedSpanPatterns.filter(Boolean);
       if (patterns.length > 0) {
         const payload = JSON.stringify(patterns);
         const existingBaggage =
@@ -67,10 +63,6 @@ export class SpanWrapper {
         );
         ctx = propagation.setBaggage(ctx, updatedBaggage);
       }
-
-      // Remove from attributes — these are control directives, not span metadata
-      delete this.attributes["blockedSpans"];
-      delete this.attributes["netra.local_blocked_spans"];
     }
 
     this.span = tracer.startSpan(
@@ -135,7 +127,7 @@ export class SpanWrapper {
     return this;
   }
 
-  setAttribute(key: string, value: string): this {
+  setAttribute(key: string, value: string | string[]): this {
     this.attributes[key] = value;
     if (this.span) {
       this.span.setAttribute(key, value);
@@ -219,5 +211,4 @@ export class SpanWrapper {
   getCurrentSpan(): Span | undefined {
     return this.span;
   }
-
 }

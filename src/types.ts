@@ -39,6 +39,8 @@ export interface SpanOptions {
   attributes?: SpanAttributes;
   moduleName?: string;
   asType?: SpanType;
+  /** Patterns for blocking descendant spans (e.g. ["http.*", "*.resolve"]) */
+  blockedSpans?: string[];
 }
 
 export interface DecoratorOptions {

@@ -1,17 +1,20 @@
 /**
  * Shared span-name pattern matching utilities for span blocking.
  *
- * Three pattern forms, determined by the position of a single `*`:
- *   - Exact:  "openai.chat"   → name === "openai.chat"
- *   - Prefix: "openai.*"      → name.startsWith("openai.")
- *   - Suffix: "*.chat"        → name.endsWith(".chat")
- *
+ * Pattern forms, determined by the position of `*`:
+ *   - Exact:    "openai.chat"   → name === "openai.chat"
+ *   - Prefix:   "openai.*"      → name.startsWith("openai.")
+ *   - Suffix:   "*.chat"        → name.endsWith(".chat")
+ *   - Contains: "*openai*"      → name.includes("openai")
+ *   - Wildcard: "*"             → matches everything
  */
 
 export interface CompiledPatterns {
-  exact: Set<string>;   // Kept as Set for O(1) lookup time
-  prefixes: string[];   // Stored without the trailing `*`
-  suffixes: string[];   // Stored without the leading `*`
+  matchAll: boolean;
+  exact: Set<string>;
+  prefixes: string[];
+  suffixes: string[];
+  contains: string[];
 }
 
 /**
@@ -22,29 +25,37 @@ export function compilePatterns(patterns: string[]): CompiledPatterns {
   const exact = new Set<string>();
   const prefixes: string[] = [];
   const suffixes: string[] = [];
+  const contains: string[] = [];
+  let matchAll = false;
 
   for (const p of patterns) {
     if (!p) continue;
-    if (p.endsWith("*") && !p.startsWith("*")) {
+
+    if (p === "*") {
+      matchAll = true;
+    } else if (p.startsWith("*") && p.endsWith("*")) {
+      const inner = p.slice(1, -1);
+      if (inner) contains.push(inner);
+    } else if (p.endsWith("*")) {
       prefixes.push(p.slice(0, -1));
-    } else if (p.startsWith("*") && !p.endsWith("*")) {
+    } else if (p.startsWith("*")) {
       suffixes.push(p.slice(1));
     } else {
       exact.add(p);
     }
   }
 
-  return { exact, prefixes, suffixes };
+  return { matchAll, exact, prefixes, suffixes, contains };
 }
 
 /**
  * Test whether `name` matches any pattern in a compiled set.
- * Returns `false` immediately if all pattern lists are empty.
  */
 export function matchesPatterns(
   name: string,
   compiled: CompiledPatterns,
 ): boolean {
+  if (compiled.matchAll) return true;
   if (compiled.exact.has(name)) return true;
 
   for (const pref of compiled.prefixes) {
@@ -53,6 +64,10 @@ export function matchesPatterns(
 
   for (const suf of compiled.suffixes) {
     if (name.endsWith(suf)) return true;
+  }
+
+  for (const sub of compiled.contains) {
+    if (name.includes(sub)) return true;
   }
 
   return false;

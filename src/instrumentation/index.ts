@@ -286,11 +286,19 @@ export function initInstrumentations(
   }
 
   // 2) Always attempt filtering (even for Console fallback)
+  //    The LocalFilteringSpanProcessor is instantiated below and its
+  //    blockedParentMap is injected into FilteringSpanExporter so the
+  //    two can share reparenting state without module-level globals.
+  const globalBlockedPatterns = config.blockedSpans ?? [];
+  const localFilteringSpanProcessor = new LocalFilteringSpanProcessor(globalBlockedPatterns);
   const originalExporter = exporter;
 
   try {
-    const patterns = config.blockedSpans ?? [];
-    exporter = new FilteringSpanExporter(exporter, patterns);
+    exporter = new FilteringSpanExporter(
+      exporter,
+      globalBlockedPatterns,
+      localFilteringSpanProcessor.blockedParentMap,
+    );
   } catch {
     exporter = originalExporter;
   }
@@ -310,7 +318,11 @@ export function initInstrumentations(
 
   // Add custom span processors to the TracerProvider
   // The Traceloop SDK creates a BasicTracerProvider internally
-  const effectiveProvider = addCustomSpanProcessors(tracerProvider, config);
+  const effectiveProvider = addCustomSpanProcessors(
+    tracerProvider,
+    config,
+    localFilteringSpanProcessor,
+  );
 
   // Initialize custom instrumentations asynchronously
   // We use async initialization to ensure we get the same ES module instances
@@ -503,6 +515,7 @@ function initOpenTelemetryInstrumentations(
 function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   config: Config,
+  localFilteringProcessor: LocalFilteringSpanProcessor,
 ): TracerProviderWithProcessors | null {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
@@ -568,8 +581,7 @@ function addCustomSpanProcessors(
     }
 
     // 0. Local Filtering Span Processor - filters spans based on local context
-    const localFilteringSpanProcessor = new LocalFilteringSpanProcessor();
-    provider.addSpanProcessor(localFilteringSpanProcessor);
+    provider.addSpanProcessor(localFilteringProcessor);
 
     // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name
     const instrumentationProcessor = new InstrumentationSpanProcessor();
