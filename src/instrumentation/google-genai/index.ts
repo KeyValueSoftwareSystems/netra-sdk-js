@@ -2,6 +2,7 @@
  * Custom Google GenAI instrumentor for Netra SDK
  */
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import { __version__ } from "./version";
 import { chatStreamWrapper, chatWrapper, embeddingsWrapper } from "./wrappers";
 // Cache the resolved GenerativeModel class
@@ -81,7 +82,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
     options: InstrumentorOptions = {},
   ): Promise<NetraGoogleGenerativeAIInstrumentor> {
     if (isInstrumented) {
-      console.warn("Google GenAI is already instrumented");
+      Logger.warn("Google GenAI is already instrumented");
       return this;
     }
 
@@ -98,7 +99,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
         ? this.tracerProvider.getTracer(INSTRUMENTATION_NAME, __version__)
         : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
-      console.error(`Failed to initialize tracer: ${error}`);
+      Logger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -115,7 +116,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
     options: InstrumentorOptions = {},
   ): NetraGoogleGenerativeAIInstrumentor {
     if (isInstrumented) {
-      console.warn("Google GenAI is already instrumented");
+      Logger.warn("Google GenAI is already instrumented");
       return this;
     }
 
@@ -123,7 +124,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
     if (!resolveGoogleGenerativeAI()) {
       // Fall back to async initialization
       this.instrumentAsync(options).catch((e) => {
-        console.error("Failed to instrument Google GenAI:", e);
+        Logger.error("Failed to instrument Google GenAI:", e);
       });
       return this;
     }
@@ -134,7 +135,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
         ? this.tracerProvider.getTracer(INSTRUMENTATION_NAME, __version__)
         : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
-      console.error(`Failed to initialize tracer: ${error}`);
+      Logger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -149,12 +150,13 @@ export class NetraGoogleGenerativeAIInstrumentor {
    */
   uninstrument(): void {
     if (!isInstrumented) {
-      console.warn("Google GenAI is not instrumented");
+      Logger.warn("Google GenAI is not instrumented");
       return;
     }
 
     this._uninstrumentGenerativeModel();
 
+    GenerativeModel = null;
     isInstrumented = false;
   }
 
@@ -170,7 +172,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
 
     try {
       if (!GenerativeModel) {
-        console.error(
+        Logger.error(
           "Failed to find Google GenAI GenerativeModel to instrument",
         );
         return;
@@ -196,7 +198,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
         embeddingsWrapper(tracer),
       );
     } catch (error) {
-      console.debug(
+      Logger.debug(
         `Google GenAI instrumentation: failed to instrument: ${error}`,
       );
     }
@@ -217,7 +219,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
         shimmer.unwrap(GenerativeModel.prototype, "embedContent");
       }
     } catch (error) {
-      console.debug(`Failed to uninstrument Google GenAI: ${error}`);
+      Logger.debug(`Failed to uninstrument Google GenAI: ${error}`);
     }
   }
 }

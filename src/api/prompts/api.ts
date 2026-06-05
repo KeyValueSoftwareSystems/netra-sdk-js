@@ -1,4 +1,5 @@
 import { Config } from "../../config";
+import { Logger } from "../../logger";
 import { PromptsHttpClient } from "./client";
 import { GetPromptParams, PromptResponse } from "./models";
 
@@ -19,7 +20,7 @@ export class Prompts {
    */
   async getPrompt(params: GetPromptParams): Promise<PromptResponse | null> {
     if (!params || typeof params.name !== "string" || !params.name) {
-      console.error("netra.prompts: name is required to fetch a prompt");
+      Logger.error("netra.prompts: name is required to fetch a prompt");
       return null;
     }
 

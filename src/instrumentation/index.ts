@@ -11,9 +11,11 @@ import {
 import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
 import { createRequire } from "module";
 import { Config, NetraInstruments } from "../config";
+import { Logger } from "../logger";
 import {
   InstrumentationSpanProcessor,
   LlmTraceIdentifierSpanProcessor,
+  RootSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
 } from "../processors";
@@ -76,11 +78,9 @@ function patchTraceloopLangchainCallbackHandler(): void {
           ? this?.spans?.get(parentRunId)?.span
           : undefined;
         const active = trace.getSpan(context.active());
-        if (process.env.NETRA_DEBUG_LOGS) {
-          console.log(
-            `[Netra Debug] Traceloop ${methodName}: runId=${args[2]} parentRunId=${parentRunId} parentSpan=${parentSpan ? "yes" : "no"} activeSpanId=${active?.spanContext().spanId}`,
-          );
-        }
+  Logger.debug(
+          `Traceloop ${methodName}: runId=${args[2]} parentRunId=${parentRunId} parentSpan=${parentSpan ? "yes" : "no"} activeSpanId=${active?.spanContext().spanId}`,
+        );
         // Always bind the current active context (or explicit parent) for this callback.
         const ctx = parentSpan
           ? trace.setSpan(context.active(), parentSpan)
@@ -95,26 +95,16 @@ function patchTraceloopLangchainCallbackHandler(): void {
     wrapWithParentContext("handleToolStart");
 
     Handler.__netra_patched = true;
-    if (process.env.NETRA_DEBUG_LOGS) {
-      console.log(
-        `[Netra Debug] Patched TraceloopCallbackHandler for parent context (${sourceLabel}).`,
-      );
-    }
+    Logger.debug(`Patched TraceloopCallbackHandler for parent context (${sourceLabel}).`);
   };
 
   try {
     const mod = require("@traceloop/instrumentation-langchain");
-    if (process.env.NETRA_DEBUG_LOGS) {
-      console.log(
-        `[Netra Debug] Loaded @traceloop/instrumentation-langchain via require from ${require.resolve("@traceloop/instrumentation-langchain")}`,
-      );
-    }
+    Logger.debug(`Loaded @traceloop/instrumentation-langchain via require from ${require.resolve("@traceloop/instrumentation-langchain")}`);
     applyPatch(mod, "require");
     return;
   } catch (e) {
-    if (process.env.NETRA_DEBUG_LOGS) {
-      console.log("[Netra Debug] require() for traceloop langchain failed, falling back to import().");
-    }
+    Logger.debug("require() for traceloop langchain failed, falling back to import().");
   }
 
   import("@traceloop/instrumentation-langchain")
@@ -168,11 +158,7 @@ function disableTraceloopLangchainCallbackHandler(): void {
       );
     };
     (CallbackManager as any).__netra_disable_traceloop = true;
-    if (process.env.NETRA_DEBUG_LOGS) {
-      console.log(
-        "[Netra Debug] Disabled Traceloop LangChain callback injection.",
-      );
-    }
+    Logger.debug("Disabled Traceloop LangChain callback injection.");
   } catch {
     // no-op
   }
@@ -263,20 +249,12 @@ export function initInstrumentations(
   config.setTraceloopEnv();
 
   // Debug: Log configuration being used
-  if (config.debugMode) {
-    console.debug("Netra SDK Configuration:");
-    console.debug(`  App Name: ${config.appName}`);
-    console.debug(
-      `  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`,
-    );
-    console.debug(
-      `  API Key: ${
-        config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"
-      }`,
-    );
-    console.debug(`  Trace Content: ${config.traceContent}`);
-    console.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
-  }
+  Logger.debug("Netra SDK Configuration:");
+  Logger.debug(`  App Name: ${config.appName}`);
+  Logger.debug(`  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`);
+  Logger.debug(`  API Key: ${config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"}`);
+  Logger.debug(`  Trace Content: ${config.traceContent}`);
+  Logger.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
 
   // Initialize Traceloop SDK
   const traceloopOptions: InitializeOptions = {
@@ -368,16 +346,9 @@ async function initCustomInstrumentationsAsync(
   ) {
     try {
       await mistralAIInstrumentor.instrumentAsync({ tracerProvider });
-      if (config.debugMode) {
-        console.debug("Custom MistralAI instrumentation enabled");
-      }
+      Logger.debug("Custom MistralAI instrumentation enabled");
     } catch (e) {
-      if (config.debugMode) {
-        console.debug(
-          "Failed to initialize custom MistralAI instrumentation:",
-          e,
-        );
-      }
+      Logger.debug("Failed to initialize custom MistralAI instrumentation:", e);
     }
   }
 
@@ -387,14 +358,10 @@ async function initCustomInstrumentationsAsync(
     !blockInstruments?.has(NetraInstruments.OPENAI)
   ) {
     try {
-      await openAIInstrumentor.instrumentAsync({ tracerProvider });
-      if (config.debugMode) {
-        console.debug("Custom OpenAI instrumentation enabled");
-      }
+      await openAIInstrumentor.instrument({ tracerProvider });
+      Logger.debug("Custom OpenAI instrumentation enabled");
     } catch (e) {
-      if (config.debugMode) {
-        console.debug("Failed to initialize custom OpenAI instrumentation:", e);
-      }
+      Logger.debug("Failed to initialize custom OpenAI instrumentation:", e);
     }
   }
 
@@ -405,13 +372,9 @@ async function initCustomInstrumentationsAsync(
   ) {
     try {
       await groqInstrumentor.instrumentAsync({ tracerProvider });
-      if (config.debugMode) {
-        console.debug("Custom Groq instrumentation enabled");
-      }
+      Logger.debug("Custom Groq instrumentation enabled");
     } catch (e) {
-      if (config.debugMode) {
-        console.debug("Failed to initialize custom Groq instrumentation:", e);
-      }
+      Logger.debug("Failed to initialize custom Groq instrumentation:", e);
     }
   }
 
@@ -422,16 +385,9 @@ async function initCustomInstrumentationsAsync(
   ) {
     try {
       await googleGenerativeAIInstrumentor.instrumentAsync({ tracerProvider });
-      if (config.debugMode) {
-        console.debug("Custom Google GenAI instrumentation enabled");
-      }
+      Logger.debug("Custom Google GenAI instrumentation enabled");
     } catch (e) {
-      if (config.debugMode) {
-        console.debug(
-          "Failed to initialize custom Google GenAI instrumentation:",
-          e,
-        );
-      }
+      Logger.debug("Failed to initialize custom Google GenAI instrumentation:", e);
     }
   }
 
@@ -442,16 +398,9 @@ async function initCustomInstrumentationsAsync(
   ) {
     try {
       await langgraphInstrumentor.instrument({ tracerProvider });
-      if (config.debugMode) {
-        console.debug("Custom Langgraph instrumentation enabled");
-      }
+      Logger.debug("Custom Langgraph instrumentation enabled");
     } catch (e) {
-      if (config.debugMode) {
-        console.debug(
-          "Failed to initialize custom Langgraph instrumentation:",
-          e,
-        );
-      }
+      Logger.debug("Failed to initialize custom Langgraph instrumentation:", e);
     }
   }
 
@@ -461,16 +410,9 @@ async function initCustomInstrumentationsAsync(
   ) {
     try {
       await anthropicInstrumentor.instrumentAsync({ tracerProvider });
-      if (config.debugMode) {
-        console.debug("Custom Anthropic instrumentation enabled");
-      }
+      Logger.debug("Custom Anthropic instrumentation enabled");
     } catch (e) {
-      if (config.debugMode) {
-        console.debug(
-          "Failed to initialize custom Anthropic instrumentation:",
-          e,
-        );
-      }
+      Logger.debug("Failed to initialize custom Anthropic instrumentation:", e);
     }
   }
 }
@@ -495,12 +437,10 @@ function initOpenTelemetryInstrumentations(
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
       registerInstrumentations({ instrumentations: [new HttpInstrumentation()] });
       if (config.debugMode) {
-        console.debug("HTTP instrumentation enabled");
+        Logger.debug("HTTP instrumentation enabled");
       }
     } catch (e) {
-      if (config.debugMode) {
-        console.debug("HTTP instrumentation not available:", e);
-      }
+      Logger.debug("HTTP instrumentation not available:", e);
     }
   }
 
@@ -513,9 +453,7 @@ function initOpenTelemetryInstrumentations(
       const { PrismaInstrumentation } = require("@prisma/instrumentation");
       // Note: This would need to be registered with the SDK
     } catch (e) {
-      if (config.debugMode) {
-        console.debug("Prisma instrumentation not available:", e);
-      }
+      Logger.debug("Prisma instrumentation not available:", e);
     }
   }
 
@@ -527,24 +465,14 @@ function initOpenTelemetryInstrumentations(
       typeORMInstrumentor
         .instrument()
         .then(() => {
-          if (config.debugMode) {
-            console.debug("TypeORM instrumentation successfully initialized");
-          }
+          Logger.debug("TypeORM instrumentation successfully initialized");
         })
         .catch((e) => {
-          console.error("TypeORM instrumentation error:", e);
-          if (config.debugMode) {
-            console.debug("TypeORM instrumentation error details:", e);
-          }
+          Logger.error("TypeORM instrumentation error:", e);
         });
-      if (config.debugMode) {
-        console.debug("TypeORM instrumentation initialization started");
-      }
+      Logger.debug("TypeORM instrumentation initialization started");
     } catch (e) {
-      console.error("TypeORM instrumentation failed to start:", e);
-      if (config.debugMode) {
-        console.debug("TypeORM instrumentation not available:", e);
-      }
+      Logger.error("TypeORM instrumentation failed to start:", e);
     }
   }
 
@@ -558,12 +486,10 @@ function initOpenTelemetryInstrumentations(
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
       registerInstrumentations({ instrumentations: [new ExpressInstrumentation()] });
       if (config.debugMode) {
-        console.debug("Express instrumentation enabled");
+        Logger.debug("Express instrumentation enabled");
       }
     } catch (e) {
-      if (config.debugMode) {
-        console.debug("Express instrumentation not available:", e);
-      }
+      Logger.debug("Express instrumentation not available:", e);
     }
   }
 }
@@ -634,12 +560,10 @@ function addCustomSpanProcessors(
     }
 
     if (!provider) {
-      if (config.debugMode) {
-        console.debug(
-          "Could not access TracerProvider for adding span processors. " +
-            "Session context will still be propagated via baggage.",
-        );
-      }
+      Logger.debug(
+        "Could not access TracerProvider for adding span processors. " +
+          "Session context will still be propagated via baggage.",
+      );
       return null;
     }
 
@@ -659,21 +583,23 @@ function addCustomSpanProcessors(
     const llmTraceProcessor = new LlmTraceIdentifierSpanProcessor();
     provider.addSpanProcessor(llmTraceProcessor);
 
-    // 4. Scrubbing Span Processor - scrubs sensitive data (if enabled)
+    // 4. Root Span Processor - tracks the root span per trace by traceId.
+    //    Registered AFTER LlmTraceIdentifierSpanProcessor so that on_end cleanup
+    //    happens after the LLM processor has finished annotating the root span.
+    const rootSpanProcessor = new RootSpanProcessor();
+    provider.addSpanProcessor(rootSpanProcessor);
+
+    // 5. Scrubbing Span Processor - scrubs sensitive data (if enabled)
     if (config.enableScrubbing) {
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);
     }
 
-    if (config.debugMode) {
-      console.debug("Custom span processors registered successfully");
-    }
+    Logger.debug("Custom span processors registered successfully");
 
     return provider;
   } catch (e) {
-    if (config.debugMode) {
-      console.debug("Failed to add custom span processors:", e);
-    }
+    Logger.debug("Failed to add custom span processors:", e);
     return null;
   }
 }
@@ -682,74 +608,74 @@ function addCustomSpanProcessors(
  * Uninstrument all active instrumentations
  * Should be called during shutdown
  */
-export function uninstrumentAll(): void {
+export async function uninstrumentAll(): Promise<void> {
   // Uninstrument custom OpenAI instrumentation
   try {
     if (openAIInstrumentor.isInstrumented()) {
-      openAIInstrumentor.uninstrument();
-      console.debug("Custom OpenAI instrumentation disabled");
+      await openAIInstrumentor.uninstrument();
+      Logger.debug("Custom OpenAI instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument OpenAI:", e);
+    Logger.debug("Failed to uninstrument OpenAI:", e);
   }
 
   // Uninstrument custom MistralAI instrumentation
   try {
     if (mistralAIInstrumentor.isInstrumented()) {
       mistralAIInstrumentor.uninstrument();
-      console.debug("Custom MistralAI instrumentation disabled");
+      Logger.debug("Custom MistralAI instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument MistralAI:", e);
+    Logger.debug("Failed to uninstrument MistralAI:", e);
   }
 
   // Uninstrument custom Groq instrumentation
   try {
     if (groqInstrumentor.isInstrumented()) {
       groqInstrumentor.uninstrument();
-      console.debug("Custom Groq instrumentation disabled");
+      Logger.debug("Custom Groq instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument Groq:", e);
+    Logger.debug("Failed to uninstrument Groq:", e);
   }
 
   // Uninstrument custom Anthropic instrumentation
   try {
     if (anthropicInstrumentor.isInstrumented()) {
       anthropicInstrumentor.uninstrument();
-      console.debug("Custom Anthropic instrumentation disabled");
+      Logger.debug("Custom Anthropic instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument Anthropic:", e);
+    Logger.debug("Failed to uninstrument Anthropic:", e);
   }
 
   // Uninstrument custom Google GenAI instrumentation
   try {
     if (googleGenerativeAIInstrumentor.isInstrumented()) {
       googleGenerativeAIInstrumentor.uninstrument();
-      console.debug("Custom Google GenAI instrumentation disabled");
+      Logger.debug("Custom Google GenAI instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument Google GenAI:", e);
+    Logger.debug("Failed to uninstrument Google GenAI:", e);
   }
 
   // Uninstrument custom Langgraph instrumentation
   try {
     if (langgraphInstrumentor.isInstrumented()) {
-      langgraphInstrumentor.uninstrument();
-      console.debug("Custom Langgraph instrumentation disabled");
+      await langgraphInstrumentor.uninstrument();
+      Logger.debug("Custom Langgraph instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument Langgraph:", e);
+    Logger.debug("Failed to uninstrument Langgraph:", e);
   }
 
   // Uninstrument custom TypeORM instrumentation
   try {
     if (typeORMInstrumentor.isInstrumented()) {
       typeORMInstrumentor.uninstrument();
-      console.debug("Custom TypeORM instrumentation disabled");
+      Logger.debug("Custom TypeORM instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument TypeORM:", e);
+    Logger.debug("Failed to uninstrument TypeORM:", e);
   }
 }

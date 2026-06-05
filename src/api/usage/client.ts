@@ -3,6 +3,7 @@
  */
 
 import { Config } from "../../config";
+import { Logger } from "../../logger";
 import { NetraHttpClient } from "../http-client";
 
 export class UsageHttpClient extends NetraHttpClient {
@@ -16,7 +17,7 @@ export class UsageHttpClient extends NetraHttpClient {
     endTime?: string
   ): Promise<any> {
     if (!this.isInitialized()) {
-      console.error(
+      Logger.error(
         `netra.usage: Usage client is not initialized; cannot fetch session usage '${sessionId}'`
       );
       return {};
@@ -36,7 +37,7 @@ export class UsageHttpClient extends NetraHttpClient {
     endTime?: string
   ): Promise<any> {
     if (!this.isInitialized()) {
-      console.error(
+      Logger.error(
         `netra.usage: Usage client is not initialized; cannot fetch tenant usage '${tenantId}'`
       );
       return {};
@@ -64,7 +65,7 @@ export class UsageHttpClient extends NetraHttpClient {
     sortOrder?: string;
   }): Promise<any> {
     if (!this.isInitialized()) {
-      console.error("netra.usage: Usage client is not initialized; cannot list traces");
+      Logger.error("netra.usage: Usage client is not initialized; cannot list traces");
       return {};
     }
 
@@ -125,7 +126,7 @@ export class UsageHttpClient extends NetraHttpClient {
     spanName?: string;
   }): Promise<any> {
     if (!this.isInitialized()) {
-      console.error(
+      Logger.error(
         `netra.usage: Usage client is not initialized; cannot list spans for trace '${params.traceId}'`
       );
       return {};

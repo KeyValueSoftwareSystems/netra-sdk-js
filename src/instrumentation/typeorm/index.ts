@@ -5,6 +5,7 @@ import {
 } from "./wrappers";
 import { __version__ } from "./version";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.typeorm";
 const originalMethods: Map<string, Function> = new Map();
@@ -23,14 +24,14 @@ export class NetraTypeORMInstrumentor {
 
   async instrument(options: InstrumentorOptions = {}): Promise<NetraTypeORMInstrumentor> {
     if (isInstrumented) {
-      console.warn("TypeORM is already instrumented");
+      Logger.warn("TypeORM is already instrumented");
       return this;
     }
     try {
       this.tracerProvider = options.tracerProvider;
       this.tracer = this.tracerProvider ? this.tracerProvider.getTracer(INSTRUMENTATION_NAME, __version__) : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
-      console.error(`Failed to initialize tracer: ${error}`);
+      Logger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
     await this._instrumentDataSource();
@@ -42,7 +43,7 @@ export class NetraTypeORMInstrumentor {
 
   uninstrument(): void {
     if (!isInstrumented) {
-      console.warn("TypeORM is not instrumented");
+      Logger.warn("TypeORM is not instrumented");
       return;
     }
     this._uninstrumentDataSource().catch(() => {
@@ -68,7 +69,7 @@ export class NetraTypeORMInstrumentor {
       const DataSource = typeorm.DataSource || (typeorm as any).default?.DataSource;
       if (!DataSource) {
         if (this.tracerProvider) {
-          console.debug("TypeORM DataSource not found, skipping instrumentation");
+          Logger.debug("TypeORM DataSource not found, skipping instrumentation");
         }
         return;
       }
@@ -87,7 +88,7 @@ export class NetraTypeORMInstrumentor {
         };
       }
     } catch (error) {
-      console.error(`Failed to instrument DataSource: ${error}`);
+      Logger.error(`Failed to instrument DataSource: ${error}`);
     }
   }
 
@@ -99,7 +100,7 @@ export class NetraTypeORMInstrumentor {
       const EntityManager = typeorm.EntityManager || (typeorm as any).default?.EntityManager;
       if (!EntityManager) {
         if (this.tracerProvider) {
-          console.debug("TypeORM EntityManager not found, skipping instrumentation");
+          Logger.debug("TypeORM EntityManager not found, skipping instrumentation");
         }
         return;
       }
@@ -119,7 +120,7 @@ export class NetraTypeORMInstrumentor {
         };
       }
     } catch (error) {
-      console.error(`Failed to instrument EntityManager: ${error}`);
+      Logger.error(`Failed to instrument EntityManager: ${error}`);
     }
   }
 
@@ -132,7 +133,7 @@ export class NetraTypeORMInstrumentor {
 
       if (!Repository) {
         if (this.tracerProvider) {
-          console.debug("TypeORM Repository not found, skipping instrumentation");
+          Logger.debug("TypeORM Repository not found, skipping instrumentation");
         }
         return;
       }
@@ -153,7 +154,7 @@ export class NetraTypeORMInstrumentor {
         };
       }
     } catch (error) {
-      console.error(`Failed to instrument Repository: ${error}`);
+      Logger.error(`Failed to instrument Repository: ${error}`);
     }
   }
 
@@ -167,7 +168,7 @@ export class NetraTypeORMInstrumentor {
         DataSource.prototype.query = originalQuery as any;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument DataSource: ${error}`);
+      Logger.error(`Failed to uninstrument DataSource: ${error}`);
     }
   }
 
@@ -180,7 +181,7 @@ export class NetraTypeORMInstrumentor {
         EntityManager.prototype.query = originalQuery as any;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument EntityManager: ${error}`);
+      Logger.error(`Failed to uninstrument EntityManager: ${error}`);
     }
   }
 
@@ -193,7 +194,7 @@ export class NetraTypeORMInstrumentor {
         Repository.prototype.query = originalQuery as any;
       }
     } catch (error) {
-      console.error(`Failed to uninstrument Repository: ${error}`);
+      Logger.error(`Failed to uninstrument Repository: ${error}`);
     }
   }
 }

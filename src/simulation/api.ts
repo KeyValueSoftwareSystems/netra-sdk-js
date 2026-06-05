@@ -4,6 +4,7 @@
 
 import pLimit from "p-limit";
 import { Config } from "../config";
+import { Logger } from "../logger";
 import { SpanWrapper } from "../span-wrapper";
 import { SimulationHttpClient } from "./client";
 import {
@@ -67,7 +68,7 @@ export class Simulation {
 
         const { runId, simulationItems } = runResult;
         if (!simulationItems || simulationItems.length === 0) {
-            console.error(`${LOG_PREFIX}: No items returned from create_run`);
+            Logger.error(`${LOG_PREFIX}: No items returned from create_run`);
             return null;
         }
 
@@ -104,7 +105,7 @@ export class Simulation {
             proc.once("unhandledRejection", handleRejection);
         }
 
-        console.info(
+        Logger.info(
             `${LOG_PREFIX}: Starting simulation with ${simulationItems.length} items`,
         );
 
@@ -117,13 +118,13 @@ export class Simulation {
             );
 
             const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
-            console.info(
+            Logger.info(
                 `${LOG_PREFIX}: Simulation completed in ${elapsedTime} seconds`,
             );
 
             return result;
         } catch (error) {
-            console.error(`${LOG_PREFIX}: Run simulation failed`);
+            Logger.error(`${LOG_PREFIX}: Run simulation failed`);
             await this._client.postRunStatus(runId, "failed");
             throw error;
         } finally {
@@ -169,7 +170,7 @@ export class Simulation {
                 }
 
                 processedCount++;
-                console.info(
+                Logger.info(
                     `${LOG_PREFIX}: ${processedCount}/${runItems.length} processed (run_item_id=${runItem.runItemId})`,
                 );
 
@@ -179,7 +180,7 @@ export class Simulation {
 
         await Promise.all(promises);
 
-        console.info(
+        Logger.info(
             `${LOG_PREFIX}: Completed=${results.completed.length}, Failed=${results.failed.length}`,
         );
 
@@ -240,7 +241,7 @@ export class Simulation {
                 }
 
                 if (response.decision === "stop") {
-                    console.info(
+                    Logger.info(
                         `${LOG_PREFIX}: Completed run_item_id=${runItemId} reason=${response.reason}`,
                     );
                     return {
@@ -255,7 +256,7 @@ export class Simulation {
                 turnId = response.nextTurnId!;
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
-                console.error(
+                Logger.error(
                     `${LOG_PREFIX}: Task failed run_item_id=${runItemId}, turn_id=${turnId}: ${errorMsg}`,
                 );
                 await this._client.reportFailure(runId, runItemId, errorMsg);
