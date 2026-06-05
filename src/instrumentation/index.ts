@@ -198,12 +198,12 @@ function resolveRootInstrumentNames(
 
   if (blockHasAll) {
     if (rootHasAll) {
-      console.error(
+      Logger.error(
         "Netra: rootInstruments=ALL is contradicted by blockInstruments=ALL; " +
           "all root instrumentation is disabled.",
       );
     } else {
-      console.warn(
+      Logger.warn(
         "Netra: blockInstruments contains ALL; all instrumentation will be disabled.",
       );
     }
