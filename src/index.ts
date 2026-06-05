@@ -8,7 +8,7 @@ import { context, Span, SpanKind, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage } from "./api";
 import { Config, NetraConfig } from "./config";
-import { instrumentationsReady, uninstrumentAll } from "./instrumentation";
+import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Logger } from "./logger";
 import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
 import { ConversationType, SessionManager } from "./session-manager";
@@ -162,7 +162,7 @@ export class Netra {
     );
 
     // Create the tracer
-    const tracer = new Tracer(cfg, instruments, blockInstruments);
+    const tracer = new Tracer(cfg, config.instruments, config.blockInstruments);
     this._tracer = tracer.tracer;
 
     try {
