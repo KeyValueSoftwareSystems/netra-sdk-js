@@ -453,11 +453,52 @@ function initOpenTelemetryInstrumentations(
       instruments.has(NetraInstruments.HTTP) ||
       instruments.has(NetraInstruments.EXPRESS));
 
+  // Shared URL exclusion — mirrors Python's OTEL_PYTHON_EXCLUDED_URLS global.
+  // Always skips internal Netra egress; OTEL_NODE_EXCLUDED_URLS adds user patterns.
+  let netraHost = "";
+  try {
+    if (config.otlpEndpoint) {
+      netraHost = new URL(config.otlpEndpoint).host;
+    }
+  } catch {
+      console.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
+  }
+
+  // Comma-separated regex patterns (unanchored search). Precompiled once;
+  // invalid patterns are skipped so a bad entry never breaks instrumentation.
+  const excludeRegexes = (process.env.OTEL_NODE_EXCLUDED_URLS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern);
+      } catch {
+        if (config.debugMode) {
+          console.debug(
+            `Invalid OTEL_NODE_EXCLUDED_URLS pattern skipped: ${pattern}`,
+          );
+        }
+        return null;
+      }
+    })
+    .filter((re): re is RegExp => re !== null);
+
+  const isExcludedUrl = (url: string): boolean => {
+    if (netraHost && url.includes(netraHost)) return true;
+    return excludeRegexes.some((re) => re.test(url));
+  };
+
   if (httpEnabled) {
     try {
       const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
-      _httpInstrumentation = new HttpInstrumentation();
+      _httpInstrumentation = new HttpInstrumentation({
+        ignoreOutgoingRequestHook: (request: { host?: string; hostname?: string; path?: string }) => {
+          const url = `${request.host ?? request.hostname ?? ""}${request.path ?? ""}`;
+          return isExcludedUrl(url);
+        },
+      });
       registerInstrumentations({ instrumentations: [_httpInstrumentation] });
       if (config.debugMode) {
         Logger.debug("HTTP instrumentation enabled");
@@ -479,47 +520,10 @@ function initOpenTelemetryInstrumentations(
       const { UndiciInstrumentation } = require("@opentelemetry/instrumentation-undici");
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
 
-      // Parity with Python excluded_urls (ExcludeList). Skip internal Netra
-      // egress (prompt fetch, eval, test-run, OTLP export) so the SDK does not
-      // trace itself. NetraHttpClient uses global fetch, which undici captures.
-      let netraHost = "";
-      try {
-        if (config.otlpEndpoint) {
-          netraHost = new URL(config.otlpEndpoint).host;
-        }
-      } catch {
-        // malformed endpoint — skip host-based exclusion
-      }
-
-      // Optional env override, comma-separated regexes (unanchored search,
-      // matching Python's parse_excluded_urls / ExcludeList.url_disabled).
-      // Mirrors OTEL_PYTHON_*_EXCLUDED_URLS. Precompiled once; invalid patterns
-      // are skipped so a bad regex never breaks instrumentation.
-      const excludeRegexes = (process.env.NETRA_FETCH_EXCLUDED_URLS || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((pattern) => {
-          try {
-            return new RegExp(pattern);
-          } catch {
-            if (config.debugMode) {
-              console.debug(
-                `Invalid NETRA_FETCH_EXCLUDED_URLS pattern skipped: ${pattern}`,
-              );
-            }
-            return null;
-          }
-        })
-        .filter((re): re is RegExp => re !== null);
-
       _undiciInstrumentation = new UndiciInstrumentation({
         ignoreRequestHook: (request: { origin?: string; path?: string }) => {
           const url = `${request.origin ?? ""}${request.path ?? ""}`;
-          if (netraHost && url.includes(netraHost)) {
-            return true;
-          }
-          return excludeRegexes.some((re) => re.test(url));
+          return isExcludedUrl(url);
         },
       });
       registerInstrumentations({ instrumentations: [_undiciInstrumentation] });
