@@ -318,7 +318,11 @@ export function initInstrumentations(
     customInstrumentModules.googleGenAI = true;
   }
   if (resolved.has(NetraInstruments.VERTEX_AI)) {
-    instrumentModules.google_vertexai = true;
+    try {
+      instrumentModules.google_vertexai = require("@google-cloud/vertexai");
+    } catch {
+      // @google-cloud/vertexai not installed — skip to avoid Traceloop crash
+    }
   }
   if (resolved.has(NetraInstruments.LANGCHAIN)) {
     instrumentModules.langchain = true;
