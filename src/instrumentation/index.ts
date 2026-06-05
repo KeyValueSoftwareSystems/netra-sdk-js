@@ -287,87 +287,80 @@ export function initInstrumentations(
     langgraph: false,
     googleGenAI: false,
     anthropic: false,
-    openaiAgents: false,
+    openAiAgents: false,
   };
 
-  if (enableAll) {
-    // ALL sentinel: enable every instrumentation (legacy behaviour)
-    customInstrumentModules.openai = true;
-    customInstrumentModules.groq = true;
-    customInstrumentModules.mistral = true;
-    customInstrumentModules.langgraph = true;
-    customInstrumentModules.googleGenAI = true;
-    customInstrumentModules.anthropic = true;
-    instrumentModules.google_vertexai = true;
-    instrumentModules.langchain = true;
-    instrumentModules.llamaIndex = true;
-    instrumentModules.pinecone = true;
-    instrumentModules.qdrant = true;
-    instrumentModules.chromadb = true;
-    instrumentModules.together = true;
-  } else if (!instruments || instruments.size === 0) {
-    // No instruments specified: enable curated defaults (custom LLM instrumentors)
-    customInstrumentModules.openai = true;
-    customInstrumentModules.groq = true;
-    customInstrumentModules.mistral = true;
-    customInstrumentModules.langgraph = true;
-    customInstrumentModules.googleGenAI = true;
-    customInstrumentModules.anthropic = true;
-  } else {
-    // Specific instruments provided: explicitly disable all Traceloop modules
-    // to prevent default "enable all" behavior, then selectively enable
-    instrumentModules.google_vertexai = false;
-    instrumentModules.langchain = false;
-    instrumentModules.llamaIndex = false;
-    instrumentModules.pinecone = false;
-    instrumentModules.qdrant = false;
-    instrumentModules.chromadb = false;
-    instrumentModules.together = false;
+  // Resolve effective instrument set (Python parity):
+  // ALL → enable everything; otherwise fall back to DEFAULT_INSTRUMENTS
+  const resolved: Set<NetraInstruments> = enableAll
+    ? new Set(Object.values(NetraInstruments).filter((v) => v !== NetraInstruments.ALL) as NetraInstruments[])
+    : (instruments && instruments.size > 0) ? instruments : DEFAULT_INSTRUMENTS;
 
-    // Enable specific instruments
-    if (instruments.has(NetraInstruments.OPENAI)) {
-      customInstrumentModules.openai = true;
-    }
-    if (instruments.has(NetraInstruments.MISTRAL)) {
-      customInstrumentModules.mistral = true;
-    }
-    if (instruments.has(NetraInstruments.GROQ)) {
-      customInstrumentModules.groq = true;
-    }
-    if (instruments.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) {
-      customInstrumentModules.googleGenAI = true;
-    }
-    if (instruments.has(NetraInstruments.VERTEX_AI)) {
-      // Vertex AI still uses Traceloop's vertexai module
-      instrumentModules.google_vertexai = true;
-    }
-    if (instruments.has(NetraInstruments.LANGCHAIN)) {
-      instrumentModules.langchain = true;
-    }
-    if (instruments.has(NetraInstruments.LANGGRAPH)) {
-      customInstrumentModules.langgraph = true;
-    }
-    if (instruments.has(NetraInstruments.LLAMA_INDEX)) {
-      instrumentModules.llamaIndex = true;
-    }
-    if (instruments.has(NetraInstruments.PINECONE)) {
-      instrumentModules.pinecone = true;
-    }
-    if (instruments.has(NetraInstruments.QDRANT)) {
-      instrumentModules.qdrant = true;
-    }
-    if (instruments.has(NetraInstruments.CHROMADB)) {
-      instrumentModules.chromadb = true;
-    }
-    if (instruments.has(NetraInstruments.TOGETHER)) {
-      instrumentModules.together = true;
-    }
-    if (instruments.has(NetraInstruments.ANTHROPIC)) {
-      customInstrumentModules.anthropic = true;
-    }
-    if (instruments.has(NetraInstruments.OPENAI_AGENTS)) {
-      customInstrumentModules.openaiAgents = true;
-    }
+  // Explicitly disable all Traceloop modules, then selectively enable
+  instrumentModules.google_vertexai = false;
+  instrumentModules.langchain = false;
+  instrumentModules.llamaIndex = false;
+  instrumentModules.pinecone = false;
+  instrumentModules.qdrant = false;
+  instrumentModules.chromadb = false;
+  instrumentModules.together = false;
+
+  if (resolved.has(NetraInstruments.OPENAI)) {
+    customInstrumentModules.openai = true;
+  }
+  if (resolved.has(NetraInstruments.MISTRAL)) {
+    customInstrumentModules.mistral = true;
+  }
+  if (resolved.has(NetraInstruments.GROQ)) {
+    customInstrumentModules.groq = true;
+  }
+  if (resolved.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) {
+    customInstrumentModules.googleGenAI = true;
+  }
+  if (resolved.has(NetraInstruments.VERTEX_AI)) {
+    instrumentModules.google_vertexai = true;
+  }
+  if (resolved.has(NetraInstruments.LANGCHAIN)) {
+    instrumentModules.langchain = true;
+  }
+  if (resolved.has(NetraInstruments.LANGGRAPH)) {
+    customInstrumentModules.langgraph = true;
+  }
+  if (resolved.has(NetraInstruments.LLAMA_INDEX)) {
+    instrumentModules.llamaIndex = true;
+  }
+  if (resolved.has(NetraInstruments.PINECONE)) {
+    instrumentModules.pinecone = true;
+  }
+  if (resolved.has(NetraInstruments.QDRANT)) {
+    instrumentModules.qdrant = true;
+  }
+  if (resolved.has(NetraInstruments.CHROMADB)) {
+    instrumentModules.chromadb = true;
+  }
+  if (resolved.has(NetraInstruments.TOGETHER)) {
+    instrumentModules.together = true;
+  }
+  if (resolved.has(NetraInstruments.ANTHROPIC)) {
+    customInstrumentModules.anthropic = true;
+  }
+
+  // Apply blockInstruments to Traceloop and Netra custom modules
+  if (blockInstruments && blockInstruments.size > 0) {
+    const blockAll = blockInstruments.has(NetraInstruments.ALL);
+    if (blockAll || blockInstruments.has(NetraInstruments.OPENAI)) customInstrumentModules.openai = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.GROQ)) customInstrumentModules.groq = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.MISTRAL)) customInstrumentModules.mistral = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.LANGGRAPH)) customInstrumentModules.langgraph = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) customInstrumentModules.googleGenAI = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.ANTHROPIC)) customInstrumentModules.anthropic = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.VERTEX_AI)) instrumentModules.google_vertexai = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.LANGCHAIN)) instrumentModules.langchain = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.LLAMA_INDEX)) instrumentModules.llamaIndex = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.PINECONE)) instrumentModules.pinecone = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.QDRANT)) instrumentModules.qdrant = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.CHROMADB)) instrumentModules.chromadb = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.TOGETHER)) instrumentModules.together = false;
   }
 
   // Set Traceloop environment variables before initializing
@@ -457,11 +450,10 @@ export function initInstrumentations(
     config,
     tracerProvider,
     customInstrumentModules,
-    blockInstruments,
   );
 
-  // Initialize additional OpenTelemetry instrumentations
-  initOpenTelemetryInstrumentations(config, instruments, blockInstruments);
+  // Initialize additional OpenTelemetry instrumentations (uses resolved set)
+  initOpenTelemetryInstrumentations(config, resolved, blockInstruments);
 
   return effectiveProvider;
 }
@@ -490,13 +482,8 @@ async function initCustomInstrumentationsAsync(
   config: Config,
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   customInstrumentModules: Record<string, boolean>,
-  blockInstruments?: Set<NetraInstruments>,
 ): Promise<void> {
-  // Initialize custom MistralAI instrumentation
-  if (
-    customInstrumentModules.mistral &&
-    !isBlocked(NetraInstruments.MISTRAL, blockInstruments)
-  ) {
+  if (customInstrumentModules.mistral) {
     try {
       await mistralAIInstrumentor.instrumentAsync({ tracerProvider });
       Logger.debug("Custom MistralAI instrumentation enabled");
@@ -505,11 +492,7 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
-  // Initialize custom OpenAI instrumentation
-  if (
-    customInstrumentModules.openai &&
-    !isBlocked(NetraInstruments.OPENAI, blockInstruments)
-  ) {
+  if (customInstrumentModules.openai) {
     try {
       await openAIInstrumentor.instrument({ tracerProvider });
       Logger.debug("Custom OpenAI instrumentation enabled");
@@ -518,11 +501,7 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
-  // Initialize custom Groq instrumentation
-  if (
-    customInstrumentModules.groq &&
-    !isBlocked(NetraInstruments.GROQ, blockInstruments)
-  ) {
+  if (customInstrumentModules.groq) {
     try {
       await groqInstrumentor.instrumentAsync({ tracerProvider });
       Logger.debug("Custom Groq instrumentation enabled");
@@ -531,11 +510,7 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
-  // Initialize custom Google GenAI instrumentation
-  if (
-    customInstrumentModules.googleGenAI &&
-    !isBlocked(NetraInstruments.GOOGLE_GENERATIVE_AI, blockInstruments)
-  ) {
+  if (customInstrumentModules.googleGenAI) {
     try {
       await googleGenerativeAIInstrumentor.instrumentAsync({ tracerProvider });
       Logger.debug("Custom Google GenAI instrumentation enabled");
@@ -544,11 +519,7 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
-  // Initialize custom Langgraph instrumentation
-  if (
-    customInstrumentModules.langgraph &&
-    !isBlocked(NetraInstruments.LANGGRAPH, blockInstruments)
-  ) {
+  if (customInstrumentModules.langgraph) {
     try {
       await langgraphInstrumentor.instrument({ tracerProvider });
       Logger.debug("Custom Langgraph instrumentation enabled");
@@ -557,10 +528,7 @@ async function initCustomInstrumentationsAsync(
     }
   }
 
-  if (
-    customInstrumentModules.anthropic &&
-    !isBlocked(NetraInstruments.ANTHROPIC, blockInstruments)
-  ) {
+  if (customInstrumentModules.anthropic) {
     try {
       await anthropicInstrumentor.instrumentAsync({ tracerProvider });
       Logger.debug("Custom Anthropic instrumentation enabled");
@@ -585,13 +553,14 @@ async function initCustomInstrumentationsAsync(
 
 function initOpenTelemetryInstrumentations(
   config: Config,
-  instruments?: Set<NetraInstruments>,
+  resolved: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
 ): void {
   // HTTP/HTTPS instrumentation
+  // Also auto-enabled when Express is requested (Express needs HTTP for traceparent propagation)
   if (
     !isBlocked(NetraInstruments.HTTP, blockInstruments) &&
-    (!instruments || instruments.has(NetraInstruments.HTTP))
+    (resolved.has(NetraInstruments.HTTP) || resolved.has(NetraInstruments.EXPRESS))
   // Shared URL exclusion — mirrors Python's OTEL_PYTHON_EXCLUDED_URLS global.
   // Always skips internal Netra egress; OTEL_NODE_EXCLUDED_URLS adds user patterns.
   let netraHost = "";
@@ -679,7 +648,7 @@ function initOpenTelemetryInstrumentations(
   // Prisma instrumentation
   if (
     !isBlocked(NetraInstruments.PRISMA, blockInstruments) &&
-    (!instruments || instruments.has(NetraInstruments.PRISMA))
+    resolved.has(NetraInstruments.PRISMA)
   ) {
     try {
       const { PrismaInstrumentation } = require("@prisma/instrumentation");
@@ -691,7 +660,7 @@ function initOpenTelemetryInstrumentations(
 
   if (
     !isBlocked(NetraInstruments.TYPEORM, blockInstruments) &&
-    (!instruments || instruments.has(NetraInstruments.TYPEORM))
+    resolved.has(NetraInstruments.TYPEORM)
   ) {
     try {
       typeORMInstrumentor
@@ -711,7 +680,7 @@ function initOpenTelemetryInstrumentations(
   // Express instrumentation
   if (
     !isBlocked(NetraInstruments.EXPRESS, blockInstruments) &&
-    (!instruments || instruments.has(NetraInstruments.EXPRESS))
+    resolved.has(NetraInstruments.EXPRESS)
   ) {
     try {
       const { ExpressInstrumentation } = require("@opentelemetry/instrumentation-express");
