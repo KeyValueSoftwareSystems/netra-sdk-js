@@ -63,6 +63,19 @@ let _httpInstrumentation: any = null;
 let _undiciInstrumentation: any = null;
 
 /**
+ * Check if a package is installed and resolvable.
+ * Equivalent to Python SDK's `is_package_installed()`.
+ */
+function isPackageInstalled(packageName: string): boolean {
+  try {
+    require.resolve(packageName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Promise that resolves when custom instrumentations are initialized.
  * Can be awaited after calling initInstrumentations() to ensure
  * all async instrumentations are complete.
@@ -317,12 +330,8 @@ export function initInstrumentations(
   if (resolved.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) {
     customInstrumentModules.googleGenAI = true;
   }
-  if (resolved.has(NetraInstruments.VERTEX_AI)) {
-    try {
-      instrumentModules.google_vertexai = require("@google-cloud/vertexai");
-    } catch {
-      // @google-cloud/vertexai not installed — skip to avoid Traceloop crash
-    }
+  if (resolved.has(NetraInstruments.VERTEX_AI) && isPackageInstalled("@google-cloud/vertexai")) {
+    instrumentModules.google_vertexai = require("@google-cloud/vertexai");
   }
   if (resolved.has(NetraInstruments.LANGCHAIN)) {
     instrumentModules.langchain = true;
@@ -330,20 +339,20 @@ export function initInstrumentations(
   if (resolved.has(NetraInstruments.LANGGRAPH)) {
     customInstrumentModules.langgraph = true;
   }
-  if (resolved.has(NetraInstruments.LLAMA_INDEX)) {
-    instrumentModules.llamaIndex = true;
+  if (resolved.has(NetraInstruments.LLAMA_INDEX) && isPackageInstalled("llamaindex")) {
+    instrumentModules.llamaIndex = require("llamaindex");
   }
-  if (resolved.has(NetraInstruments.PINECONE)) {
-    instrumentModules.pinecone = true;
+  if (resolved.has(NetraInstruments.PINECONE) && isPackageInstalled("@pinecone-database/pinecone")) {
+    instrumentModules.pinecone = require("@pinecone-database/pinecone");
   }
-  if (resolved.has(NetraInstruments.QDRANT)) {
-    instrumentModules.qdrant = true;
+  if (resolved.has(NetraInstruments.QDRANT) && isPackageInstalled("@qdrant/js-client-rest")) {
+    instrumentModules.qdrant = require("@qdrant/js-client-rest");
   }
-  if (resolved.has(NetraInstruments.CHROMADB)) {
-    instrumentModules.chromadb = true;
+  if (resolved.has(NetraInstruments.CHROMADB) && isPackageInstalled("chromadb")) {
+    instrumentModules.chromadb = require("chromadb");
   }
-  if (resolved.has(NetraInstruments.TOGETHER)) {
-    instrumentModules.together = true;
+  if (resolved.has(NetraInstruments.TOGETHER) && isPackageInstalled("together-ai")) {
+    instrumentModules.together = require("together-ai");
   }
   if (resolved.has(NetraInstruments.ANTHROPIC)) {
     customInstrumentModules.anthropic = true;
@@ -652,7 +661,8 @@ function initOpenTelemetryInstrumentations(
   // Prisma instrumentation
   if (
     !isBlocked(NetraInstruments.PRISMA, blockInstruments) &&
-    resolved.has(NetraInstruments.PRISMA)
+    resolved.has(NetraInstruments.PRISMA) &&
+    isPackageInstalled("@prisma/instrumentation")
   ) {
     try {
       const { PrismaInstrumentation } = require("@prisma/instrumentation");
@@ -664,21 +674,17 @@ function initOpenTelemetryInstrumentations(
 
   if (
     !isBlocked(NetraInstruments.TYPEORM, blockInstruments) &&
-    resolved.has(NetraInstruments.TYPEORM)
+    resolved.has(NetraInstruments.TYPEORM) &&
+    isPackageInstalled("typeorm")
   ) {
-    try {
-      typeORMInstrumentor
-        .instrument()
-        .then(() => {
-          Logger.debug("TypeORM instrumentation successfully initialized");
-        })
-        .catch((e) => {
-          Logger.error("TypeORM instrumentation error:", e);
-        });
-      Logger.debug("TypeORM instrumentation initialization started");
-    } catch (e) {
-      Logger.error("TypeORM instrumentation failed to start:", e);
-    }
+    typeORMInstrumentor
+      .instrument()
+      .then(() => {
+        Logger.debug("TypeORM instrumentation successfully initialized");
+      })
+      .catch((e) => {
+        Logger.debug("TypeORM instrumentation error:", e);
+      });
   }
 
   // Express instrumentation

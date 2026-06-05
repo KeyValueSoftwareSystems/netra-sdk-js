@@ -6,6 +6,9 @@ import {
 import { __version__ } from "./version";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.typeorm";
 const originalMethods: Map<string, Function> = new Map();
@@ -65,7 +68,7 @@ export class NetraTypeORMInstrumentor {
     if (!this.tracer) return;
 
     try {
-      const typeorm = await import("typeorm");
+      const typeorm = require("typeorm");
       const DataSource = typeorm.DataSource || (typeorm as any).default?.DataSource;
       if (!DataSource) {
         if (this.tracerProvider) {
@@ -88,7 +91,7 @@ export class NetraTypeORMInstrumentor {
         };
       }
     } catch (error) {
-      Logger.error(`Failed to instrument DataSource: ${error}`);
+      Logger.debug(`Failed to instrument DataSource: ${error}`);
     }
   }
 
@@ -96,7 +99,7 @@ export class NetraTypeORMInstrumentor {
     if (!this.tracer) return;
 
     try {
-      const typeorm = await import("typeorm");
+      const typeorm = require("typeorm");
       const EntityManager = typeorm.EntityManager || (typeorm as any).default?.EntityManager;
       if (!EntityManager) {
         if (this.tracerProvider) {
@@ -120,7 +123,7 @@ export class NetraTypeORMInstrumentor {
         };
       }
     } catch (error) {
-      Logger.error(`Failed to instrument EntityManager: ${error}`);
+      Logger.debug(`Failed to instrument EntityManager: ${error}`);
     }
   }
 
@@ -128,7 +131,7 @@ export class NetraTypeORMInstrumentor {
     if (!this.tracer) return;
 
     try {
-      const typeorm = await import("typeorm");
+      const typeorm = require("typeorm");
       const Repository = typeorm.Repository || (typeorm as any).default?.Repository;
 
       if (!Repository) {
@@ -154,13 +157,13 @@ export class NetraTypeORMInstrumentor {
         };
       }
     } catch (error) {
-      Logger.error(`Failed to instrument Repository: ${error}`);
+      Logger.debug(`Failed to instrument Repository: ${error}`);
     }
   }
 
   private async _uninstrumentDataSource(): Promise<void> {
     try {
-      const typeorm = await import("typeorm");
+      const typeorm = require("typeorm");
       const DataSource = typeorm.DataSource || (typeorm as any).default?.DataSource;
 
       const originalQuery = originalMethods.get("DataSource.prototype.query");
@@ -168,33 +171,33 @@ export class NetraTypeORMInstrumentor {
         DataSource.prototype.query = originalQuery as any;
       }
     } catch (error) {
-      Logger.error(`Failed to uninstrument DataSource: ${error}`);
+      Logger.debug(`Failed to uninstrument DataSource: ${error}`);
     }
   }
 
   private async _uninstrumentEntityManager(): Promise<void> {
     try {
-      const typeorm = await import("typeorm");
+      const typeorm = require("typeorm");
       const EntityManager = typeorm.EntityManager || (typeorm as any).default?.EntityManager;
       const originalQuery = originalMethods.get("EntityManager.prototype.query");
       if (originalQuery && EntityManager?.prototype) {
         EntityManager.prototype.query = originalQuery as any;
       }
     } catch (error) {
-      Logger.error(`Failed to uninstrument EntityManager: ${error}`);
+      Logger.debug(`Failed to uninstrument EntityManager: ${error}`);
     }
   }
 
   private async _uninstrumentRepository(): Promise<void> {
     try {
-      const typeorm = await import("typeorm");
+      const typeorm = require("typeorm");
       const Repository = typeorm.Repository || (typeorm as any).default?.Repository;
       const originalQuery = originalMethods.get("Repository.prototype.query");
       if (originalQuery && Repository?.prototype) {
         Repository.prototype.query = originalQuery as any;
       }
     } catch (error) {
-      Logger.error(`Failed to uninstrument Repository: ${error}`);
+      Logger.debug(`Failed to uninstrument Repository: ${error}`);
     }
   }
 }
