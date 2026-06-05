@@ -162,7 +162,7 @@ export class Netra {
     );
 
     // Create the tracer
-    const tracer = new Tracer(cfg, config.instruments, config.blockInstruments);
+    const tracer = new Tracer(cfg, effectiveProvider);
     this._tracer = tracer.tracer;
 
     try {
