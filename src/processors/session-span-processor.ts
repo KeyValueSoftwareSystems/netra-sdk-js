@@ -11,29 +11,36 @@
 import { context, Context, propagation, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
+import { Logger } from "../logger";
 import { SessionManager } from "../session-manager";
 
 /**
- * Get the global context manager if it's available
- * Tries multiple methods to find the effective ContextManager
+ * Get the registered OTel context manager.
+ * Skips NOOP_CONTEXT_MANAGER (returned when nothing is registered) and falls back
+ * to inspecting the OTel global state to handle multiple @opentelemetry/api instances.
  */
 function getContextManager(): any {
   try {
-    // 1. Try standard internal property
+    // 1. Try the ContextAPI's delegate — but only if it's a real manager (has _asyncLocalStorage)
     if ((context as any)._getContextManager) {
-      return (context as any)._getContextManager();
-    }
-    
-    // 2. Try global symbols (Node.js standard location)
-    const globalSymbols = Object.getOwnPropertySymbols(global);
-    const otelSymbol = globalSymbols.find(s => s.toString().includes('opentelemetry.js.api'));
-    if (otelSymbol) {
-      const globalState = (global as any)[otelSymbol];
-      if (globalState && globalState.contextManager) {
-        return globalState.contextManager;
+      const manager = (context as any)._getContextManager();
+      if (manager?._asyncLocalStorage != null) {
+        return manager;
       }
     }
-    
+
+    // 2. Fallback: read from OTel's globalThis symbol — handles multiple @opentelemetry/api copies.
+    // OTel stores { context: ContextAPI, ... } keyed by Symbol('opentelemetry.js.api.<version>').
+    // The registered context manager lives at ContextAPI._delegate.
+    const globalSymbols = Object.getOwnPropertySymbols(globalThis);
+    const otelSymbol = globalSymbols.find(s => s.toString().includes('opentelemetry.js.api'));
+    if (otelSymbol) {
+      const delegate = (globalThis as any)[otelSymbol]?.context?._delegate;
+      if (delegate?._asyncLocalStorage != null) {
+        return delegate;
+      }
+    }
+
     return null;
   } catch (e) {
     return null;
@@ -41,60 +48,69 @@ function getContextManager(): any {
 }
 
 /**
- * Helper to execute enterWith on the context manager
- * Handles standard AsyncLocalStorage and OTel wrappers
+ * Binds newContext as the active context for the current async resource,
+ * equivalent to Python's otel_context.attach(ctx).
  */
 function safeEnterWith(newContext: Context): void {
   const contextManager = getContextManager();
-  
+
   if (!contextManager) {
-    console.warn("ContextManager not found. Baggage may not propagate correctly.");
     return;
   }
 
-  // 1. Direct enterWith (AsyncLocalStorage directly or compatible manager)
+  // AsyncLocalStorageContextManager v2.x has no direct enterWith — go through _asyncLocalStorage
+  if (typeof contextManager._asyncLocalStorage?.enterWith === 'function') {
+    contextManager._asyncLocalStorage.enterWith(newContext);
+    return;
+  }
+
+  // Future-proof: some managers may expose enterWith directly
   if (typeof contextManager.enterWith === 'function') {
     contextManager.enterWith(newContext);
     return;
   }
 
-  // 2. OTel AsyncHooksContextManager (wraps AsyncLocalStorage in private _asyncLocalStorage)
-  if (contextManager._asyncLocalStorage && typeof contextManager._asyncLocalStorage.enterWith === 'function') {
-    contextManager._asyncLocalStorage.enterWith(newContext);
-    return;
-  }
-  
-  // 3. Fallback: Check for other common wrapping patterns or fail
-  console.warn("ContextManager available but enterWith not found. Baggage propagation might fail.");
+  Logger.warn("SessionSpanProcessor: enterWith not available on context manager; baggage will not propagate.");
 }
+
+/**
+ * Persistent store for session values (session_id, user_id, tenant_id, etc.).
+ *
+ * OTel's context.with() / asyncLocalStorage.run() creates isolated scopes — enterWith()
+ * inside a span's callback does not propagate to sibling spans started after it. This map
+ * lives outside any async scope so values set anywhere (pre-init, inside a span, etc.)
+ * are visible to all subsequent spans. OTel baggage from parentContext still takes
+ * precedence in onStart to honour cross-process propagated values.
+ */
+const sessionValues = new Map<string, string>();
 
 /**
  * Set a session baggage value using OpenTelemetry's baggage API
  * This automatically propagates across async boundaries via AsyncLocalStorage
  */
 export function setSessionBaggage(key: string, value: string): void {
+  // Always persist in the module-level store — survives run() scope boundaries
+  sessionValues.set(key, value);
+
+  // Best-effort: also push into OTel baggage for cross-process propagation
   try {
     const currentBaggage = propagation.getBaggage(context.active()) || propagation.createBaggage();
     const newBaggage = currentBaggage.setEntry(key, { value });
     const newContext = propagation.setBaggage(context.active(), newBaggage);
-
-    // Bind the new context to the current async resource
     safeEnterWith(newContext);
   } catch (e) {
-    console.error(`SessionSpanProcessor: Failed to set baggage key=${key}:`, e);
+    // non-fatal — sessionValues is the primary in-process store
   }
 }
 
 /**
- * Get a session baggage value using OpenTelemetry's baggage API
+ * Get a session baggage value — checks OTel baggage first, then the persistent store.
  */
 export function getSessionBaggage(key: string): string | undefined {
   try {
-    const baggage = propagation.getBaggage(context.active());
-    return baggage?.getEntry(key)?.value;
+    return propagation.getBaggage(context.active())?.getEntry(key)?.value ?? sessionValues.get(key);
   } catch (e) {
-    console.error(`SessionSpanProcessor: Failed to get baggage key=${key}:`, e);
-    return undefined;
+    return sessionValues.get(key);
   }
 }
 
@@ -102,13 +118,13 @@ export function getSessionBaggage(key: string): string | undefined {
  * Clear all session baggage from the current context
  */
 export function clearSessionBaggage(): void {
+  sessionValues.clear();
   try {
     const emptyBaggage = propagation.createBaggage();
     const newContext = propagation.setBaggage(context.active(), emptyBaggage);
-
     safeEnterWith(newContext);
   } catch (e) {
-    console.error("SessionSpanProcessor: Failed to clear baggage:", e);
+    Logger.warn("SessionSpanProcessor: Failed to clear baggage:", e);
   }
 }
 
@@ -118,9 +134,6 @@ export class SessionSpanProcessor implements SpanProcessor {
    */
   onStart(span: Span, parentContext: Context): void {
     try {
-      // Store the current span in SessionManager
-      SessionManager.setCurrentSpan(span);
-
       // Add library metadata
       span.setAttribute("library.name", Config.LIBRARY_NAME);
       span.setAttribute("library.version", Config.LIBRARY_VERSION);
@@ -130,10 +143,10 @@ export class SessionSpanProcessor implements SpanProcessor {
       const ctxToUse = parentContext || context.active();
       const baggage = propagation.getBaggage(ctxToUse);
 
-      // Add session context from OpenTelemetry baggage
-      const sessionId = baggage?.getEntry("session_id")?.value;
-      const userId = baggage?.getEntry("user_id")?.value;
-      const tenantId = baggage?.getEntry("tenant_id")?.value;
+      // Add session context — OTel baggage (cross-process) takes precedence, then persistent store
+      const sessionId = baggage?.getEntry("session_id")?.value ?? sessionValues.get("session_id");
+      const userId = baggage?.getEntry("user_id")?.value ?? sessionValues.get("user_id");
+      const tenantId = baggage?.getEntry("tenant_id")?.value ?? sessionValues.get("tenant_id");
 
       if (sessionId) {
         span.setAttribute(`${Config.LIBRARY_NAME}.session_id`, sessionId);
@@ -162,14 +175,14 @@ export class SessionSpanProcessor implements SpanProcessor {
         span.setAttribute(attrKey, attrValue);
       }
     } catch (e) {
-      console.error("SessionSpanProcessor: Error setting span attributes:", e);
+      Logger.error("SessionSpanProcessor: Error setting span attributes:", e);
     }
   }
 
   /**
    * Called when a span ends. No-op for this processor.
    */
-  onEnd(span: ReadableSpan): void {
+  onEnd(_span: ReadableSpan): void {
     // No-op
   }
 

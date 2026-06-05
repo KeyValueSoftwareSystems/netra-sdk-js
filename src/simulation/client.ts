@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from "axios";
 import { Config } from "../config";
+import { Logger } from "../logger";
 import { ConversationResponse, SimulationItem } from "./models";
 
 const LOG_PREFIX = "netra.simulation";
@@ -29,7 +30,7 @@ export class SimulationHttpClient {
     private _createClient(config: Config): AxiosInstance | null {
         const endpoint = (config.otlpEndpoint || "").trim();
         if (!endpoint) {
-            console.error(`${LOG_PREFIX}: NETRA_OTLP_ENDPOINT is required`);
+            Logger.error(`${LOG_PREFIX}: NETRA_OTLP_ENDPOINT is required`);
             return null;
         }
 
@@ -44,7 +45,7 @@ export class SimulationHttpClient {
                 timeout,
             });
         } catch (error) {
-            console.error(`${LOG_PREFIX}: Failed to create HTTP client:`, error);
+            Logger.error(`${LOG_PREFIX}: Failed to create HTTP client:`, error);
             return null;
         }
     }
@@ -82,7 +83,7 @@ export class SimulationHttpClient {
 
         const timeout = parseFloat(timeoutStr);
         if (isNaN(timeout)) {
-            console.warn(
+            Logger.warn(
                 `${LOG_PREFIX}: Invalid timeout '${timeoutStr}', using default ${DEFAULT_TIMEOUT}ms`,
             );
             return DEFAULT_TIMEOUT;
@@ -100,7 +101,7 @@ export class SimulationHttpClient {
         context?: Record<string, any>,
     ): Promise<CreateRunResult | null> {
         if (!this.client) {
-            console.error(`${LOG_PREFIX}: Client not initialized`);
+            Logger.error(`${LOG_PREFIX}: Client not initialized`);
             return null;
         }
 
@@ -119,7 +120,7 @@ export class SimulationHttpClient {
             const userMessages = responseData.userMessages || [];
 
             if (userMessages.length === 0) {
-                console.warn(`${LOG_PREFIX}: No user messages returned from create_run`);
+                Logger.warn(`${LOG_PREFIX}: No user messages returned from create_run`);
                 return null;
             }
 
@@ -138,7 +139,7 @@ export class SimulationHttpClient {
             };
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
-            console.error(`${LOG_PREFIX}: Failed to create simulation run:`, errorMsg);
+            Logger.error(`${LOG_PREFIX}: Failed to create simulation run:`, errorMsg);
             return null;
         }
     }
@@ -153,7 +154,7 @@ export class SimulationHttpClient {
         traceId: string,
     ): Promise<ConversationResponse | null> {
         if (!this.client) {
-            console.error(`${LOG_PREFIX}: Client not initialized`);
+            Logger.error(`${LOG_PREFIX}: Client not initialized`);
             return null;
         }
 
@@ -181,7 +182,7 @@ export class SimulationHttpClient {
 
             const userMessages = responseData.userMessages || [];
             if (userMessages.length === 0) {
-                console.warn(`${LOG_PREFIX}: No user messages in continue response`);
+                Logger.warn(`${LOG_PREFIX}: No user messages in continue response`);
                 return null;
             }
 
@@ -194,7 +195,7 @@ export class SimulationHttpClient {
             };
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
-            console.error(`${LOG_PREFIX}: Failed to trigger conversation:`, errorMsg);
+            Logger.error(`${LOG_PREFIX}: Failed to trigger conversation:`, errorMsg);
             return null;
         }
     }
@@ -204,7 +205,7 @@ export class SimulationHttpClient {
      */
     async reportFailure(runId: string, runItemId: string, error: string): Promise<void> {
         if (!this.client) {
-            console.error(`${LOG_PREFIX}: Client not initialized`);
+            Logger.error(`${LOG_PREFIX}: Client not initialized`);
             return;
         }
 
@@ -212,10 +213,10 @@ export class SimulationHttpClient {
             const url = `/evaluations/run/${runId}/item/${runItemId}/status`;
             const payload = { status: "failed", failureReason: error };
             await this.client.patch(url, payload);
-            console.info(`${LOG_PREFIX}: Reported failure - ${error}`);
+            Logger.info(`${LOG_PREFIX}: Reported failure - ${error}`);
         } catch (err) {
             const errorMsg = this._extractErrorMessage(err);
-            console.error(`${LOG_PREFIX}: Failed to report failure:`, errorMsg);
+            Logger.error(`${LOG_PREFIX}: Failed to report failure:`, errorMsg);
         }
     }
 
@@ -224,7 +225,7 @@ export class SimulationHttpClient {
      */
     async postRunStatus(runId: string, status: string): Promise<any> {
         if (!this.client) {
-            console.error(
+            Logger.error(
                 `${LOG_PREFIX}: Client not initialized; cannot post run status`,
             );
             return { success: false };
@@ -237,13 +238,13 @@ export class SimulationHttpClient {
             const data = response.data;
 
             if (data && typeof data === "object" && "data" in data) {
-                console.info(`${LOG_PREFIX}: Completed test run successfully`);
+                Logger.info(`${LOG_PREFIX}: Completed test run successfully`);
                 return data.data || {};
             }
             return data;
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
-            console.error(
+            Logger.error(
                 `${LOG_PREFIX}: Failed to post run status for run '${runId}':`,
                 errorMsg,
             );

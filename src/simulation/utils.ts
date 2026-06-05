@@ -1,3 +1,4 @@
+import { Logger } from "../logger";
 import { BaseTask } from "./task";
 
 const LOG_PREFIX = "netra.simulation";
@@ -24,11 +25,11 @@ export function validateSimulationInputs(
     task: BaseTask,
 ): boolean {
     if (!datasetId) {
-        console.error(`${LOG_PREFIX}: dataset_id is required`);
+        Logger.error(`${LOG_PREFIX}: dataset_id is required`);
         return false;
     }
     if (!(task instanceof BaseTask)) {
-        console.error(`${LOG_PREFIX}: task must be a BaseTask instance`);
+        Logger.error(`${LOG_PREFIX}: task must be a BaseTask instance`);
         return false;
     }
     return true;

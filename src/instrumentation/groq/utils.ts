@@ -1,4 +1,5 @@
 import { Span } from "@opentelemetry/api";
+import { Logger } from "../../logger";
 import {
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
@@ -10,7 +11,7 @@ export function setRequestAttributes(
   requestType: string
 ): void {
   if (!span.isRecording()) {
-    console.log("Span is not recording");
+    Logger.log("Span is not recording");
     return;
   }
   setBaseRequestAttributes(span, kwargs, requestType, "groq");
@@ -21,7 +22,7 @@ export function setResponseAttributes(
   response: Record<string, unknown>
 ): void {
   if (!span.isRecording()) {
-    console.log("Span is not recording");
+    Logger.log("Span is not recording");
     return;
   }
   setBaseResponseAttributes(span, response);

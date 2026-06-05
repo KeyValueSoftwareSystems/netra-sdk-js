@@ -3,6 +3,7 @@
  */
 
 import { Config } from "../config";
+import { Logger } from "../logger";
 
 export interface HttpClientConfig {
   baseUrl: string;
@@ -25,7 +26,7 @@ export class NetraHttpClient {
   constructor(config: Config, timeoutEnvVar: string, defaultTimeout: number) {
     const endpoint = config.otlpEndpoint?.trim() || "";
     if (!endpoint) {
-      console.error(
+      Logger.error(
         "netra: NETRA_OTLP_ENDPOINT is required for API calls"
       );
       this.baseUrl = "";
@@ -64,7 +65,7 @@ export class NetraHttpClient {
     }
     const parsed = parseFloat(envValue);
     if (isNaN(parsed)) {
-      console.warn(
+      Logger.warn(
         `netra: Invalid ${envVar} value '${envValue}', using default ${defaultValue}`
       );
       return defaultValue;
@@ -81,7 +82,7 @@ export class NetraHttpClient {
     params?: Record<string, string | number | undefined>
   ): Promise<HttpResponse<T>> {
     if (!this.initialized) {
-      console.error("netra: HTTP client is not initialized");
+      Logger.error("netra: HTTP client is not initialized");
       return { data: {} as T, status: 0, ok: false };
     }
 
@@ -116,7 +117,7 @@ export class NetraHttpClient {
         ok: response.ok,
       };
     } catch (error) {
-      console.error(`netra: GET ${path} failed:`, error);
+      Logger.error(`netra: GET ${path} failed:`, error);
       return { data: {} as T, status: 0, ok: false };
     }
   }
@@ -126,7 +127,7 @@ export class NetraHttpClient {
     body?: Record<string, any>
   ): Promise<HttpResponse<T>> {
     if (!this.initialized) {
-      console.error("netra: HTTP client is not initialized");
+      Logger.error("netra: HTTP client is not initialized");
       return { data: {} as T, status: 0, ok: false };
     }
 
@@ -155,7 +156,7 @@ export class NetraHttpClient {
         ok: response.ok,
       };
     } catch (error) {
-      console.error(`netra: POST ${path} failed:`, error);
+      Logger.error(`netra: POST ${path} failed:`, error);
       return { data: {} as T, status: 0, ok: false };
     }
   }

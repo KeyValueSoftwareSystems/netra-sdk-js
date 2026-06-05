@@ -8,6 +8,7 @@
 
 import { Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { Logger } from "../logger";
 
 // Sensitive patterns for data detection (based on pydantic logfire scrubbing)
 const SENSITIVE_PATTERNS: Record<string, RegExp> = {
@@ -190,7 +191,7 @@ export class ScrubbingSpanProcessor implements SpanProcessor {
         }
       }
     } catch (e) {
-      console.error("ScrubbingSpanProcessor: Error scrubbing attributes:", e);
+      Logger.error("ScrubbingSpanProcessor: Error scrubbing attributes:", e);
     }
   }
 

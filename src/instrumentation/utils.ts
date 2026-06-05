@@ -1,76 +1,33 @@
 /**
- * Shared utility functions for instrumentation
- * These functions can be reused across different provider instrumentations
+ * Shared utility functions for instrumentation.
+ * Handles setting OTel span attributes for LLM request/response tracing.
  */
 
 import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
+import { Logger } from "../logger";
 import { SpanAttributes } from "./span-attributes";
 
-// Suppression key for instrumentation
+// Suppression
 const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
 
-/**
- * Check if instrumentation should be suppressed
- */
 export function shouldSuppressInstrumentation(): boolean {
   const ctx = context.active();
   return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
 }
 
-/**
- * Type guard that determines whether a value is a Promise.
- *
- * This is useful for distinguishing between synchronous return values
- * and Promise-based (asynchronous) results at runtime.
- *
- * @param value - The value to test.
- * @returns `true` if the value is a Promise instance.
- */
+// Type Utilities
 export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
   return value instanceof Promise;
 }
 
-/**
- * Determines whether a value is a plain json object.
- *
- * This intended for validating JSON-style objects at runtime
- *
- * Excludes:
- * - `null`
- * - Arrays
- *
- * @param v - The value to test.
- * @returns `true` if the value is a non-null, non-array object.
- */
 export function isDict(v: unknown): v is Record<string, any> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/**
- * Converts a model or response value into a plain dictionary object.
- *
- * This utility is intended for normalizing SDK models, class instances,
- * or arbitrary values into a JSON-compatible key–value structure suitable
- * for logging, tracing, or serialization.
- *
- * Conversion strategy (in order):
- * 1. Non-objects return an empty object.
- * 2. Objects with a `toJSON()` method use its output.
- * 3. Plain objects are shallow-copied.
- * 4. Other objects are serialized via `JSON.stringify` / `JSON.parse`.
- *
- * If conversion fails, an empty object is returned.
- *
- * @param obj - The value to convert.
- * @returns A plain dictionary representation of the input.
- */
 export function modelAsDict(obj: unknown): Record<string, unknown> {
-  if (obj == null || typeof obj !== "object") {
-    return {};
-  }
+  if (obj == null || typeof obj !== "object") return {};
 
-  // Prefer explicit JSON serialization when available
   if (
     "toJSON" in obj &&
     typeof (obj as { toJSON?: unknown }).toJSON === "function"
@@ -81,12 +38,10 @@ export function modelAsDict(obj: unknown): Record<string, unknown> {
     >;
   }
 
-  // Fast path for plain objects
   if (Object.getPrototypeOf(obj) === Object.prototype) {
     return { ...(obj as Record<string, unknown>) };
   }
 
-  // Fallback: attempt structural serialization
   try {
     return JSON.parse(JSON.stringify(obj));
   } catch {
@@ -94,6 +49,17 @@ export function modelAsDict(obj: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * A normalized input or output message used for span attribute recording.
+ * Providers can build TracedMessage[] using their own extraction logic and
+ * pass it directly to writePromptAttributes / writeCompletionAttributes.
+ */
+export interface TracedMessage {
+  role: string;
+  content: string;
+}
+
+// Internal Helpers
 function isTraceContentEnabled(): boolean {
   const raw =
     process.env.TRACELOOP_TRACE_CONTENT ??
@@ -103,370 +69,408 @@ function isTraceContentEnabled(): boolean {
 }
 
 function safeStringify(value: unknown): string {
+  if (typeof value === "string") return value;
   try {
-    if (typeof value === "string") return value;
     return JSON.stringify(value);
   } catch {
     return String(value);
   }
 }
 
-function truncateAttribute(value: string, maxLen: number): string {
-  if (!value) return value;
-  if (value.length <= maxLen) return value;
+function truncate(value: string, maxLen: number): string {
+  if (!value || value.length <= maxLen) return value;
   return value.slice(0, maxLen) + "...(truncated)";
 }
 
-function extractFirstCompletionText(
-  response: Record<string, unknown>
-): string | undefined {
-  // Common: choices[0].message.content (chat) or choices[0].text (completion)
-  const choices = response.choices as
-    | Array<Record<string, unknown>>
-    | undefined;
-  if (Array.isArray(choices) && choices.length > 0) {
-    const first = choices[0];
-    const message = first.message as Record<string, unknown> | undefined;
-    if (message && message.content !== undefined) {
-      return String(message.content);
+/**
+ * Returns true if `value` represents meaningful content worth recording.
+ * Guards against setting empty-string attributes on spans.
+ */
+export function hasContent(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+// Attribute Mapping (model params → span attributes)
+const PARAM_ATTRIBUTE_MAP: Record<string, string> = {
+  model: SpanAttributes.LLM_REQUEST_MODEL,
+  temperature: SpanAttributes.LLM_REQUEST_TEMPERATURE,
+  max_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+  max_completion_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+  max_output_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+  max_tokens_to_sample: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+  frequency_penalty: SpanAttributes.LLM_FREQUENCY_PENALTY,
+  presence_penalty: SpanAttributes.LLM_PRESENCE_PENALTY,
+  reasoning_effort: SpanAttributes.LLM_REQUEST_REASONING_EFFORT,
+  stop: SpanAttributes.LLM_CHAT_STOP_SEQUENCES,
+  stream: SpanAttributes.LLM_IS_STREAMING,
+  top_p: SpanAttributes.LLM_REQUEST_TOP_P,
+};
+
+function setModelParams(span: Span, kwargs: Record<string, unknown>): void {
+  for (const [key, attr] of Object.entries(PARAM_ATTRIBUTE_MAP)) {
+    const value = kwargs[key];
+    if (value !== undefined) {
+      span.setAttribute(attr, value as any);
     }
-    if (first.text !== undefined) {
-      return String(first.text);
+  }
+}
+
+/**
+ * Extracts input messages for OpenAI-compatible request shapes:
+ *   - "chat": messages[] (standard Chat Completions API)
+ *   - "response": instructions + input (Responses API)
+ *   - everything else: prompt string or embedding input
+ *
+ * Google GenAI and other providers with different shapes should build their
+ * own TracedMessage[] and call writePromptAttributes directly.
+ */
+export function buildInputMessages(
+  kwargs: Record<string, unknown>,
+  requestType: string,
+): TracedMessage[] {
+  const messages: TracedMessage[] = [];
+
+  if (requestType === "chat") {
+    const rawMessages = kwargs.messages;
+    if (!Array.isArray(rawMessages)) return messages;
+    for (const msg of rawMessages) {
+      if (!isDict(msg)) continue;
+      if (hasContent(msg.role) && hasContent(msg.content)) {
+        messages.push({
+          role: msg.role,
+          content: safeStringify(msg.content),
+        });
+      }
+    }
+  } else if (requestType === "response") {
+    if (hasContent(kwargs.instructions)) {
+      messages.push({ role: "system", content: String(kwargs.instructions) });
+    }
+    const input = kwargs.input;
+    if (typeof input === "string" && input.length > 0) {
+      messages.push({ role: "user", content: input });
+    } else if (Array.isArray(input)) {
+      for (const msg of input) {
+        if (!isDict(msg)) continue;
+        if (hasContent(msg.role) && hasContent(msg.content)) {
+          messages.push({
+            role: msg.role,
+            content: safeStringify(msg.content),
+          });
+        }
+      }
+    }
+  } else if (kwargs.prompt !== undefined) {
+    // Legacy single-prompt (e.g.,completions)
+    const content = String(kwargs.prompt);
+    if (content.length > 0) {
+      messages.push({ role: "user", content });
+    }
+  } else {
+    // Embeddings / genericinput
+    const input = kwargs.input ?? kwargs.inputs;
+    if (hasContent(input)) {
+      const content = truncate(
+        safeStringify(input),
+        Config.CONVERSATION_MAX_LEN,
+      );
+      messages.push({ role: "user", content });
     }
   }
 
-  // Mistral/OpenAI response-like variants
-  if (response.output_text !== undefined) {
-    return String(response.output_text);
+  return messages;
+}
+
+/**
+ * Extracts output messages for OpenAI-compatible response shapes:
+ *   - choices[].message (Chat Completions API) — with optional tool_calls
+ *   - output[].content[].text (Responses API)
+ *   - content[] text/tool_use blocks (Anthropic-style)
+ *   - scalar output_text shorthand
+ *
+ * Skips messages with empty content to avoid polluting traces.
+ */
+export function buildOutputMessages(
+  response: Record<string, unknown>,
+): TracedMessage[] {
+  const messages: TracedMessage[] = [];
+
+  // Priority 1: Chat Completions API (choices[]) — mutually exclusive with all others.
+  // A response carrying choices[] is definitively a Chat Completions response; stop here.
+  if (Array.isArray(response.choices)) {
+    for (const choice of response.choices as Array<Record<string, any>>) {
+      const msg = choice.message ?? choice.delta;
+      if (!msg) continue;
+
+      if (hasContent(msg.role) && hasContent(msg.content)) {
+        messages.push({ role: msg.role, content: String(msg.content) });
+      }
+
+      if (Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls as Array<Record<string, unknown>>) {
+          const fn = tc.function as Record<string, unknown> | undefined;
+          messages.push({
+            role: "tool",
+            content: JSON.stringify({
+              name: fn?.name ?? "",
+              arguments: fn?.arguments ?? "",
+            }),
+          });
+        }
+      }
+    }
+    return messages;
   }
 
-  // Responses API style: output[].content[].text
-  const output = response.output as Array<Record<string, unknown>> | undefined;
-  if (Array.isArray(output) && output.length > 0) {
-    const firstOut = output[0];
-    const content = firstOut.content as
-      | Array<Record<string, unknown>>
-      | undefined;
-    if (Array.isArray(content) && content.length > 0) {
-      const firstContent = content[0];
-      if (firstContent.text !== undefined) {
-        return String(firstContent.text);
+  // Priority 2: Responses API — output_text and/or output[].
+  // output_text is a scalar shorthand that mirrors the text portions of output[].
+  // When both are present, use output_text for text and output[] only for tool calls
+  // to avoid duplicating the same text content.
+  const hasOutputText =
+    typeof response.output_text === "string" && response.output_text.length > 0;
+  const hasOutputArray = Array.isArray(response.output);
+
+  if (hasOutputText || hasOutputArray) {
+    if (hasOutputText) {
+      messages.push({
+        role: "assistant",
+        content: response.output_text as string,
+      });
+    }
+
+    if (hasOutputArray) {
+      for (const element of response.output as Array<Record<string, unknown>>) {
+        if (!Array.isArray(element.content)) continue;
+        for (const chunk of element.content as Array<Record<string, unknown>>) {
+          // Only include text from output[] when output_text has not already covered it
+          if (!hasOutputText && hasContent(chunk.text)) {
+            messages.push({ role: "assistant", content: String(chunk.text) });
+          }
+          // Always capture tool_use blocks — output_text never contains these
+          if (
+            (chunk as any).type === "tool_use" &&
+            (chunk as any).name
+          ) {
+            messages.push({
+              role: "tool",
+              content: JSON.stringify({
+                name: (chunk as any).name,
+                input: (chunk as any).input,
+              }),
+            });
+          }
+        }
+      }
+    }
+    return messages;
+  }
+
+  // Priority 3: Anthropic-style content[] blocks — only reached when neither
+  // Chat Completions nor Responses API fields are present.
+  if (Array.isArray(response.content)) {
+    for (const block of response.content as Array<any>) {
+      if (block.type === "text" && hasContent(block.text)) {
+        messages.push({ role: "assistant", content: String(block.text) });
+      } else if (block.type === "tool_use" && block.name) {
+        messages.push({
+          role: "tool",
+          content: JSON.stringify({ name: block.name, input: block.input }),
+        });
       }
     }
   }
 
-  return undefined;
+  return messages;
 }
 
 /**
- * Set request attributes on span
- * These are shared across different LLM providers
+ * Writes a TracedMessage[] in two formats:
+ *   1. gen_ai.prompt.{i}.role / gen_ai.prompt.{i}.content  (OTel GenAI conventions)
+ *   2. "input" JSON blob (Netra dashboard attribute)
  */
+export function writePromptAttributes(
+  span: Span,
+  messages: TracedMessage[],
+): void {
+  if (messages.length === 0) return;
+
+  for (let i = 0; i < messages.length; i++) {
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
+      messages[i].role,
+    );
+    span.setAttribute(
+      `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
+      messages[i].content,
+    );
+  }
+
+  span.setAttribute("input", JSON.stringify(messages));
+}
+
+/**
+ * Writes a TracedMessage[] in two formats:
+ *   1. gen_ai.completion.{i}.role / gen_ai.completion.{i}.content  (OTel GenAI conventions)
+ *   2. "output" JSON blob (Netra dashboard attribute)
+ *
+ * Tool-call blocks in the messages are also written to gen_ai.response.tool_calls.*.
+ */
+export function writeCompletionAttributes(
+  span: Span,
+  messages: TracedMessage[],
+): void {
+  if (messages.length === 0) return;
+
+  let completionIdx = 0;
+
+  for (const msg of messages) {
+    if (msg.role === "tool") {
+      // Tool entries are emitted as tool_call attributes, not completion entries
+      try {
+        const parsed = JSON.parse(msg.content) as Record<string, unknown>;
+        const toolData = {
+          name: parsed.name,
+          id: parsed.id,
+          input: parsed.input,
+          arguments: parsed.arguments,
+        };
+        span.setAttribute(
+          `gen_ai.response.completion.${completionIdx}.role`,
+          "tool",
+        );
+        span.setAttribute(
+          `gen_ai.response.completion.${completionIdx}.content`,
+          JSON.stringify(toolData),
+        );
+        completionIdx++;
+      } catch (error) {
+        Logger.error("Error parsing tool content:", error);
+      }
+    } else {
+      span.setAttribute(
+        `${SpanAttributes.LLM_COMPLETIONS}.${completionIdx}.role`,
+        msg.role,
+      );
+      span.setAttribute(
+        `${SpanAttributes.LLM_COMPLETIONS}.${completionIdx}.content`,
+        msg.content,
+      );
+      completionIdx++;
+    }
+  }
+
+  span.setAttribute("output", JSON.stringify(messages));
+}
+
+
+// Request Attributes
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
   requestType: string,
-  system: string
+  system: string,
 ): void {
-  if (!span.isRecording()) {
-    console.log("Span is not recording");
-    return;
-  }
+  if (!span.isRecording()) return;
 
+  // Core identifiers
   span.setAttribute(SpanAttributes.LLM_REQUEST_TYPE, requestType);
   span.setAttribute(SpanAttributes.LLM_SYSTEM, system);
 
   if (kwargs.model) {
-    span.setAttribute("gen_ai.request.model", String(kwargs.model));
-    span.setAttribute("llm.request.model", String(kwargs.model));
+    span.setAttribute(SpanAttributes.LLM_REQUEST_MODEL, String(kwargs.model));
   }
 
-  _setAttributeMappings(span, kwargs);
+  // Standard model parameters
+  setModelParams(span, kwargs);
 
-  if (Array.isArray(kwargs.messages)) {
-    span.setAttribute("llm.request.message_count", kwargs.messages.length);
-  }
-
+  // Reasoning config
   if (kwargs.reasoning !== undefined) {
     span.setAttribute(
-      SpanAttributes.LLM_REQUEST_REASONING_EFFORT,
-      JSON.stringify(kwargs.reasoning)
+      SpanAttributes.LLM_REQUEST_REASONING,
+      JSON.stringify(kwargs.reasoning),
     );
   }
 
-  // Input count (for embeddings - handle both input and inputs)
-  const inputs = kwargs.input ?? kwargs.inputs;
-  if (inputs !== undefined) {
-    if (Array.isArray(inputs)) {
-      span.setAttribute("llm.request.input_count", inputs.length);
-    } else {
-      span.setAttribute("llm.request.input_count", 1);
-    }
-  }
-
-  // Tools count and definitions
-  if (Array.isArray(kwargs.tools) && kwargs.tools.length > 0) {
-    span.setAttribute("gen_ai.request.tools_count", kwargs.tools.length);
-
-    // Add individual tool definitions
-    kwargs.tools.forEach((tool: any, index: number) => {
-      if (tool.name) {
-        span.setAttribute(`gen_ai.request.tools.${index}.name`, tool.name);
-      }
-      if (tool.description) {
-        span.setAttribute(`gen_ai.request.tools.${index}.description`, tool.description);
-      }
-      if (tool.input_schema) {
-        span.setAttribute(
-          `gen_ai.request.tools.${index}.input_schema`,
-          JSON.stringify(tool.input_schema)
-        );
-      }
-    });
-  }
-
-  // Tool choice (handle both snake_case and camelCase)
-  const toolChoice = kwargs.tool_choice ?? kwargs.toolChoice;
-  if (toolChoice !== undefined) {
-    span.setAttribute(
-      "gen_ai.request.tool_choice",
-      typeof toolChoice === "string" ? toolChoice : JSON.stringify(toolChoice)
-    );
-  }
-
-  // Content tracing (guarded by config/env)
+  // Content tracing — extract once, write in bothformats
   if (isTraceContentEnabled()) {
-    if (requestType === "chat") {
-      _setChatCompletionAPIAttributes(span, kwargs);
-    } else if (requestType === "response") {
-      _setResponseAPIAttributes(span, kwargs);
-    } else if (kwargs.prompt !== undefined) {
-      span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.role`, "user");
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.0.content`,
-        String(kwargs.prompt)
-      );
-    } else {
-      // Handles Embeddings / generic inputs
-      const content = kwargs.input ?? kwargs.inputs;
-      if (content !== undefined) {
-        const prompt = truncateAttribute(
-          safeStringify(content),
-          Config.CONVERSATION_MAX_LEN
-        );
-        span.setAttribute("gen_ai.prompt", prompt);
-        span.setAttribute("llm.request.input", prompt);
-      }
-    }
+    const messages = buildInputMessages(kwargs, requestType);
+    writePromptAttributes(span, messages);
 
-    // FIM suffix (if present)
+    // Legacy: FIMsuffix
     if (kwargs.suffix !== undefined) {
-      const suffix = truncateAttribute(
-        safeStringify(kwargs.suffix),
-        Config.CONVERSATION_MAX_LEN
-      );
-      span.setAttribute("llm.request.suffix", suffix);
-    }
-  }
-}
-
-function _setAttributeMappings(span: Span, kwargs: Record<string, unknown>) {
-  const attributeMappings = {
-    model: SpanAttributes.LLM_REQUEST_MODEL,
-    temperature: SpanAttributes.LLM_REQUEST_TEMPERATURE,
-    max_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
-    max_completion_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
-    max_output_tokens: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
-    max_tokens_to_sample: SpanAttributes.LLM_REQUEST_MAX_TOKENS,
-    frequency_penalty: SpanAttributes.LLM_FREQUENCY_PENALTY,
-    presence_penalty: SpanAttributes.LLM_PRESENCE_PENALTY,
-    reasoning_effort: SpanAttributes.LLM_REQUEST_REASONING_EFFORT,
-    stop: SpanAttributes.LLM_CHAT_STOP_SEQUENCES,
-    stream: SpanAttributes.LLM_IS_STREAMING,
-    top_p: SpanAttributes.LLM_REQUEST_TOP_P,
-  };
-
-  for (let [key, attribute] of Object.entries(attributeMappings)) {
-    const value: any = kwargs[key];
-    if (value !== undefined) {
-      span.setAttribute(attribute, value);
-    }
-  }
-}
-
-function _setChatCompletionAPIAttributes(
-  span: Span,
-  kwargs: Record<string, unknown>
-) {
-  const messages = kwargs.messages;
-  if (!Array.isArray(messages)) {
-    return;
-  }
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
-    if (!isDict(message)) {
-      continue;
-    }
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
-      message?.role ?? "user"
-    );
-
-    // Handle content - can be string or array
-    const content = message?.content;
-    if (typeof content === 'string') {
       span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
-        content
-      );
-    } else if (Array.isArray(content)) {
-      // Handle array content (tool results, multimodal content, etc.)
-      content.forEach((block: any, blockIndex: number) => {
-        if (block.type === 'tool_result') {
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${i}.tool_result.${blockIndex}.tool_use_id`,
-            block.tool_use_id
-          );
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${i}.tool_result.${blockIndex}.content`,
-            typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
-          );
-        } else if (block.type === 'text') {
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${i}.content.${blockIndex}`,
-            block.text || ''
-          );
-        }
-      });
-    } else {
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
-        String(content ?? "")
+        "llm.request.suffix",
+        truncate(safeStringify(kwargs.suffix), Config.CONVERSATION_MAX_LEN),
       );
     }
   }
 }
 
-function _setResponseAPIAttributes(
-  span: Span,
-  kwargs: Record<string, unknown>
-) {
-  let messageIndex = 0;
-  if (kwargs.instructions !== undefined) {
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.role`,
-      "system"
-    );
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.content`,
-      kwargs.instructions as any
-    );
-    messageIndex++;
-  }
-
-  const inputData = kwargs.input;
-  if (inputData !== undefined) {
-    if (typeof inputData === "string") {
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.role`,
-        "user"
-      );
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.content`,
-        inputData
-      );
-    } else if (Array.isArray(inputData)) {
-      for (let message of inputData) {
-        if (!isDict(message)) {
-          continue;
-        }
-        span.setAttribute(
-          `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.role`,
-          message?.role ?? "user"
-        );
-        span.setAttribute(
-          `${SpanAttributes.LLM_PROMPTS}.${messageIndex}.content`,
-          String(message?.content ?? "")
-        );
-      }
-    }
-  }
-}
-
-/**
- * Set response attributes on span
- * These are shared across different LLM providers
- */
+// Response Attributes
 export function setResponseAttributes(
   span: Span,
   response: Record<string, unknown>,
 ): void {
-  if (!span.isRecording()) {
-    console.log("Span is not recording");
-    return;
-  }
+  if (!span.isRecording()) return;
 
+  // ResponseID
   if (response.id) {
     span.setAttribute("llm.response.id", String(response.id));
   }
 
-  const model = response?.model || (response?.response_metadata as any)?.model;
+  // Model
+  const model = response.model || (response.response_metadata as any)?.model;
   if (model) {
     span.setAttribute(SpanAttributes.LLM_RESPONSE_MODEL, String(model));
   }
 
-  _setUsageAttributes(span, response);
+  // Tokenusage
+  setUsageAttributes(span, response);
 
-  const choices = response.choices as
-    | Array<Record<string, unknown>>
-    | undefined;
-  if (choices && choices.length > 0) {
-    const firstChoice = choices[0];
-    const finishReason = firstChoice.finish_reason ?? firstChoice.finishReason;
-    if (finishReason) {
-      span.setAttribute("gen_ai.response.finish_reason", String(finishReason));
-      span.setAttribute("llm.response.finish_reason", String(finishReason));
-    }
-  }
+  // Finish reason (from firstchoice)
+  setFinishReason(span, response);
 
+  // Embeddingmetadata
+  setEmbeddingResponseMeta(span, response);
+
+  // Content tracing — extract once, write in bothformats
   if (isTraceContentEnabled()) {
-    _setResponseMessageAttributes(span, response);
-  }
-
-  // For embeddings - handle data array
-  const data = response.data as Array<unknown> | undefined;
-  if (data) {
-    span.setAttribute("llm.response.embedding_count", data.length);
-    // Get embedding dimensions from first item if available
-    if (data.length > 0) {
-      const firstItem = data[0] as Record<string, unknown>;
-      const embedding = firstItem.embedding as number[] | undefined;
-      if (embedding && Array.isArray(embedding)) {
-        span.setAttribute(
-          "llm.response.embedding_dimensions",
-          embedding.length
-        );
-      }
-    }
+    const messages = buildOutputMessages(response);
+    writeCompletionAttributes(span, messages);
   }
 }
 
-function _setUsageAttributes(
+// Response Sub-helpers
+function setFinishReason(span: Span, response: Record<string, unknown>): void {
+  const choices = response.choices as
+    | Array<Record<string, unknown>>
+    | undefined;
+  if (!Array.isArray(choices) || choices.length === 0) return;
+
+  const reason = choices[0].finish_reason ?? choices[0].finishReason;
+  if (reason) {
+    span.setAttribute("gen_ai.response.finish_reason", String(reason));
+    span.setAttribute("llm.response.finish_reason", String(reason));
+  }
+}
+
+function setUsageAttributes(
   span: Span,
   response: Record<string, unknown>,
 ): void {
-  if (!response.usage && !response.usage_metadata) return;
-
-  const usage = (response.usage ?? response.usage_metadata) as Record<
-    string,
-    unknown
-  >;
+  const usage = (response.usage ?? response.usage_metadata) as
+    | Record<string, unknown>
+    | undefined;
+  if (!usage) return;
 
   const promptTokens = usage.prompt_tokens ?? usage.input_tokens;
   if (promptTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
-      Number(promptTokens)
+      Number(promptTokens),
     );
   }
 
@@ -474,7 +478,7 @@ function _setUsageAttributes(
   if (completionTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
-      Number(completionTokens)
+      Number(completionTokens),
     );
   }
 
@@ -482,136 +486,47 @@ function _setUsageAttributes(
   if (totalTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
-      Number(totalTokens)
+      Number(totalTokens),
     );
   }
 
   const cacheTokens = (
-    (usage.prompt_tokens_details ?? usage.input_tokens_details) as {
-      cached_tokens?: unknown;
-    }
+    (usage.prompt_tokens_details ?? usage.input_tokens_details) as
+      | { cached_tokens?: unknown }
+      | undefined
   )?.cached_tokens;
   if (cacheTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS,
-      Number(cacheTokens)
+      Number(cacheTokens),
     );
   }
 
   const reasoningTokens = (
-    (usage.completion_tokens_details ?? usage.output_tokens_details) as {
-      reasoning_tokens?: unknown;
-    }
+    (usage.completion_tokens_details ?? usage.output_tokens_details) as
+      | { reasoning_tokens?: unknown }
+      | undefined
   )?.reasoning_tokens;
   if (reasoningTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_REASONING_TOKENS,
-      Number(reasoningTokens)
+      Number(reasoningTokens),
     );
   }
 }
 
-function _setResponseMessageAttributes(
+function setEmbeddingResponseMeta(
   span: Span,
-  response: Record<string, unknown>
+  response: Record<string, unknown>,
 ): void {
-  let messageIndex = 0;
-  const messageContent = response.output_text ?? response.content;
-  if (messageContent) {
-    span.setAttribute(
-      `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
-      "assistant"
-    );
-    span.setAttribute(
-      `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-      String(messageContent)
-    );
-  }
+  const data = response.data as Array<unknown> | undefined;
+  if (!Array.isArray(data) || data.length === 0) return;
 
-  if (response.content && Array.isArray(response.content)) {
-      let toolCallIndex = 0;
-      response.content.forEach((contentBlock: any) => {
-        if (contentBlock.type === 'text' && contentBlock.text) {
-          span.setAttribute(
-            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
-            "assistant"
-          );
-          span.setAttribute(
-            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-            String(contentBlock.text)
-          );
-          messageIndex += 1;
-        } else if (contentBlock.type === 'tool_use') {
-          // Capture tool use information
-          span.setAttribute(
-            `gen_ai.response.tool_calls.${toolCallIndex}.name`,
-            contentBlock.name
-          );
-          span.setAttribute(
-            `gen_ai.response.tool_calls.${toolCallIndex}.id`,
-            contentBlock.id
-          );
-          span.setAttribute(
-            `gen_ai.response.tool_calls.${toolCallIndex}.input`,
-            JSON.stringify(contentBlock.input)
-          );
-          toolCallIndex += 1;
-        }
-      });
+  span.setAttribute("llm.response.embedding_count", data.length);
 
-      // Set total tool calls count if any
-      if (toolCallIndex > 0) {
-        span.setAttribute("gen_ai.response.tool_calls_count", toolCallIndex);
-      }
-    }
-
-  if (response.output !== undefined) {
-    for (let element of response.output as Array<Record<string, unknown>>) {
-      if (element.content === undefined) continue;
-      for (let chunk of element.content as Array<Record<string, unknown>>) {
-        if (chunk.text === undefined) continue;
-        span.setAttribute(
-          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
-          "assistant"
-        );
-        span.setAttribute(
-          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-          String(chunk.text)
-        );
-        messageIndex += 1;
-      }
-    }
-  }
-
-  // Handle choices
-  const choices = response.choices as Array<Record<string, any>> | undefined;
-  if (Array.isArray(choices)) {
-    for (const choice of choices) {
-      const message = choice.message;
-      if (message !== undefined) {
-        span.setAttribute(
-          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
-          message.role ?? "assistant"
-        );
-        span.setAttribute(
-          `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-          String(message.content ?? "")
-        );
-        messageIndex++;
-      } else {
-        const delta = choice.delta;
-        if (delta !== undefined) {
-          span.setAttribute(
-            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.role`,
-            delta.role ?? "assistant"
-          );
-          span.setAttribute(
-            `${SpanAttributes.LLM_COMPLETIONS}.${messageIndex}.content`,
-            String(delta.content ?? "")
-          );
-          messageIndex++;
-        }
-      }
-    }
+  const firstItem = data[0] as Record<string, unknown>;
+  const embedding = firstItem?.embedding as number[] | undefined;
+  if (Array.isArray(embedding)) {
+    span.setAttribute("llm.response.embedding_dimensions", embedding.length);
   }
 }

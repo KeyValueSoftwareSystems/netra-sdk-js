@@ -9,6 +9,7 @@ export const SpanAttributes = {
   LLM_REQUEST_MAX_TOKENS: "gen_ai.request.max_tokens",
   LLM_REQUEST_TEMPERATURE: "gen_ai.request.temperature",
   LLM_REQUEST_TOP_P: "gen_ai.request.top_p",
+  LLM_REQUEST_REASONING: "gen_ai.request.reasoning",
   LLM_REQUEST_REASONING_EFFORT: "gen_ai.request.reasoning_effort",
 
   LLM_RESPONSE_MODEL: "gen_ai.response.model",

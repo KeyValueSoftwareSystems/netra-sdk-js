@@ -6,26 +6,16 @@
 
 import { context, Span, SpanKind, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
-import { Dashboard } from "./api/dashboard";
-import { Evaluation } from "./api/evaluation";
-import { Usage } from "./api/usage";
+import { Prompts, Dashboard, Evaluation, Usage } from "./api";
 import { Config, NetraConfig } from "./config";
-import {
-  initInstrumentations,
-  instrumentationsReady,
-  uninstrumentAll,
-} from "./instrumentation";
-import { withBlockedSpansLocal } from "./processors/localfiltering-span-processor";
-import { setSessionBaggage } from "./processors/session-span-processor";
-import {
-  ConversationType,
-  runWithEntityContext,
-  SessionManager,
-} from "./session-manager";
+import { instrumentationsReady, uninstrumentAll } from "./instrumentation";
+import { Logger } from "./logger";
+import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
+import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
-import { SpanType } from "./types";
-import { Prompts } from "./api";
+import { Tracer } from "./tracer";
+import { SpanType, SpanCallback, SpanOptions } from "./types";
 
 export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
@@ -36,7 +26,7 @@ export {
 } from "./processors";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
-export type { ActionModel, UsageModel } from "./types";
+export type { ActionModel, UsageModel, SpanOptions } from "./types";
 // Expose provider instrumentors for advanced usage/testing
 export { mistralAIInstrumentor } from "./instrumentation/mistralai";
 
@@ -117,45 +107,21 @@ export type {
 } from "./simulation";
 export * from "./exporters";
 
-let _initialized = false;
-let _rootSpan: Span | undefined;
-let _config: Config | undefined;
-
 export class Netra {
+  private static _SDK_NAME = "netra_sdk";
+
   private static _initialized = false;
   private static _config: Config | undefined;
-
   private static _tracer: any;
+  private static _rootSpan: Span | undefined;
+  private static _metricsEnabled = false;
 
-  /**
-   * Usage API client for usage and traces
-   * Available after calling Netra.init()
-   */
   static usage: Usage;
-
-  /**
-   * Evaluation API client for datasets, runs, and test suites
-   * Available after calling Netra.init()
-   */
   static evaluation: Evaluation;
-
-  /**
-   * Dashboard API client for querying metrics and time-series data
-   * Available after calling Netra.init()
-   */
   static dashboard: Dashboard;
-
   static simulation: Simulation;
-
-  /**
-   * Prompts API client for prompt versioning
-   * Available after calling Netra.init()
-   */
   static prompts: Prompts;
 
-  /**
-   * Get the current Netra configuration
-   */
   static getConfig(): Config {
     if (!this._config) {
       throw new Error("Netra SDK not initialized. Call Netra.init() first.");
@@ -163,71 +129,63 @@ export class Netra {
     return this._config;
   }
 
-  /**
-   * Check if Netra has been initialized
-   */
   static isInitialized(): boolean {
     return this._initialized;
   }
 
-  /**
-   * Initialize the Netra SDK
-   *
-   * This method is async and must be awaited to ensure all instrumentations
-   * are ready before your application starts using instrumented modules.
-   *
-   * @example
-   * await Netra.init({ appName: 'my-app', instruments: new Set([NetraInstruments.OPENAI]) });
-   * // Now all instrumentations are ready
-   * const openai = new OpenAI();
-   */
   static async init(config: NetraConfig = {}): Promise<void> {
     if (this._initialized) {
-      console.warn(
-        "Netra.init() called more than once; ignoring subsequent calls.",
-      );
+      Logger.warn("Netra.init() called more than once; ignoring subsequent calls.");
       return;
     }
 
-    // Build Config
     const cfg = new Config(config);
     this._config = cfg;
 
-    // Initialize instrumentations and get effective provider
-    const effectiveProvider = initInstrumentations(
-      cfg,
-      config.instruments,
-      config.blockInstruments,
-    );
+    // Wire the logger before anything else so all modules respect debugMode.
+    Logger.setDebugMode(cfg.debugMode);
 
-    // If we found an effective provider (delegate), get a tracer from IT.
-    // This ensures the tracer has the processors we added.
-    if (
-      effectiveProvider &&
-      typeof (effectiveProvider as any).getTracer === "function"
-    ) {
-      this._tracer = (effectiveProvider as any).getTracer(
-        Config.LIBRARY_NAME,
-        Config.LIBRARY_VERSION,
-      );
-    } else {
-      // Fallback
-      this._tracer = trace.getTracer(
-        Config.LIBRARY_NAME,
-        Config.LIBRARY_VERSION,
-      );
+    // Extract Instruments and Block Instruments
+    const { instruments, blockInstruments } = config;
+
+    // Create the tracer
+    const tracer = new Tracer(cfg, instruments, blockInstruments);
+    this._tracer = tracer.tracer;
+
+    try {
+      this.usage = new Usage(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize usage client:", e);
     }
 
-    // Initialize API clients
-    this.usage = new Usage(cfg);
-    this.evaluation = new Evaluation(cfg);
-    this.dashboard = new Dashboard(cfg);
-    this.simulation = new Simulation(cfg);
-    this.prompts = new Prompts(cfg);
+    try {
+      this.evaluation = new Evaluation(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize evaluation client:", e);
+    }
+
+    try {
+      this.dashboard = new Dashboard(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize dashboard client:", e);
+    }
+
+    try {
+      this.simulation = new Simulation(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize simulation client:", e);
+    }
+
+    try {
+      this.prompts = new Prompts(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize prompts client:", e);
+    }
 
     this._initialized = true;
-    console.info("Netra successfully initialized.");
-    if (cfg.debugMode) {
+    Logger.info("Netra successfully initialized.");
+
+    {
       let pkgVersion = Config.LIBRARY_VERSION;
       let pkgPath = "unknown";
       try {
@@ -238,25 +196,25 @@ export class Netra {
       } catch {
         // keep defaults
       }
-      console.debug(
-        `[Netra Debug] SDK version=${pkgVersion} libraryVersion=${Config.LIBRARY_VERSION} build=langgraph-parenting-v3 packageJson=${pkgPath}`,
+      Logger.debug(
+        `SDK version=${pkgVersion} libraryVersion=${Config.LIBRARY_VERSION} build=langgraph-parenting-v3 packageJson=${pkgPath}`,
       );
     }
 
     // Graceful shutdown logic
     const handleSignal = async (signal: string) => {
-      console.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
+      Logger.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
       await this.shutdown();
       process.exit(0);
     };
 
     const handleUncaughtException = async (error: Error) => {
-      console.error("Uncaught exception:", error);
-      console.error("Shutting down Netra SDK due to crash...");
+      Logger.error("Uncaught exception:", error);
+      Logger.error("Shutting down Netra SDK due to crash...");
       try {
         await this.shutdown();
       } catch (err) {
-        console.error("Error during crash shutdown:", err);
+        Logger.error("Error during crash shutdown:", err);
       }
       process.exit(1);
     };
@@ -282,26 +240,21 @@ export class Netra {
       const rootName = `${Config.LIBRARY_NAME}.root.span`;
 
       // Create the root span
-      _rootSpan = tracer.startSpan(rootName, {
+      this._rootSpan = tracer.startSpan(rootName, {
         kind: SpanKind.INTERNAL,
       });
 
-      if (_rootSpan) {
+      if (this._rootSpan) {
         if (cfg.appName) {
-          _rootSpan.setAttribute("service.name", cfg.appName);
+          this._rootSpan.setAttribute("service.name", cfg.appName);
         }
-        _rootSpan.setAttribute("netra.environment", cfg.environment);
-        _rootSpan.setAttribute("netra.library.version", Config.LIBRARY_VERSION);
+        this._rootSpan.setAttribute("netra.environment", cfg.environment);
+        this._rootSpan.setAttribute(
+          "netra.library.version",
+          Config.LIBRARY_VERSION,
+        );
 
-        try {
-          SessionManager.setCurrentSpan(_rootSpan);
-          // Also store the root span in SessionManager for access by SpanWrapper/decorators
-          SessionManager.setRootSpan(_rootSpan);
-        } catch (e) {
-          // Ignore
-        }
-
-        console.info(
+        Logger.info(
           "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
         );
       }
@@ -311,30 +264,6 @@ export class Netra {
     await instrumentationsReady;
   }
 
-  /**
-   * @deprecated Use `Netra.init()` instead. The init method is now async by default.
-   *
-   * Initialize the Netra SDK and wait for all instrumentations to be ready.
-   * This method is kept for backwards compatibility.
-   */
-  static async initAsync(config: NetraConfig = {}): Promise<void> {
-    await this.init(config);
-  }
-
-  /**
-   * @deprecated Since `Netra.init()` is now async and waits for instrumentations,
-   * this method is no longer necessary. It's kept for backwards compatibility.
-   *
-   * Returns a promise that resolves when all async instrumentations are ready.
-   */
-  static async ready(): Promise<void> {
-    await instrumentationsReady;
-  }
-
-  /**
-   * Optional cleanup to end the root span and uninstrument all.
-   * Now async to ensure spans are flushed.
-   */
   static async shutdown(): Promise<void> {
     if (!this._initialized) {
       return;
@@ -342,138 +271,99 @@ export class Netra {
 
     // Unpatch any monkey-patched instrumentations first
     try {
-      uninstrumentAll();
+      await uninstrumentAll();
     } catch (e) {
-      // Ignore
-      if (this._config?.debugMode) {
-        console.error("Error during uninstrumentAll:", e);
-      }
+      Logger.error("Error during uninstrumentAll:", e);
     }
 
-    if (_rootSpan) {
+    if (this._rootSpan) {
       try {
-        _rootSpan.end();
+        this._rootSpan.end();
       } catch (e) {
       } finally {
-        _rootSpan = undefined;
+        this._rootSpan = undefined;
       }
     }
 
+    const FLUSH_TIMEOUT_MS = 5000;
+
     try {
-      const provider = trace.getTracerProvider();
-
-      // Define timeouts
-      const FLUSH_TIMEOUT_MS = 5000;
-
+      const traceProvider = trace.getTracerProvider();
       const flushPromise = (async () => {
         if (
-          "forceFlush" in provider &&
-          typeof provider.forceFlush === "function"
+          "forceFlush" in traceProvider &&
+          typeof traceProvider.forceFlush === "function"
         ) {
-          await provider.forceFlush();
+          await traceProvider.forceFlush();
         }
-        if ("shutdown" in provider && typeof provider.shutdown === "function") {
-          await provider.shutdown();
+        if (
+          "shutdown" in traceProvider &&
+          typeof traceProvider.shutdown === "function"
+        ) {
+          await traceProvider.shutdown();
         }
       })();
 
-      // Race against timeout
       await Promise.race([
         flushPromise,
         new Promise((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
       ]);
     } catch (e) {
-      if (this._config?.debugMode) {
-        console.error("Error during Netra shutdown flush:", e);
-      }
+      Logger.error("Error during Netra trace shutdown:", e);
     }
 
     this._initialized = false;
     this._tracer = undefined;
   }
 
+  static getTraceId(): string | undefined {
+    return SessionManager.getTraceId();
+  }
+
+  static setInput(value: any): void {
+    SessionManager.setInput(value);
+  }
+
+  static setOutput(value: any): void {
+    SessionManager.setOutput(value);
+  }
+
+  static setRootInput(value: any): void {
+    SessionManager.setRootInput(value);
+  }
+
+  static setRootOutput(value: any): void {
+    SessionManager.setRootOutput(value);
+  }
+
   /**
    * Run a function with the root span as the active parent context.
    * All spans created within this function will be children of the root span.
-   *
-   * @param fn The function to run within the root span context
-   * @returns The result of the function
+   * Note: required in JS because OTel JS has no persistent context.attach()
    */
   static runWithRootSpan<T>(fn: () => T): T {
-    const rootSpan = SessionManager.getRootSpan();
-    if (!rootSpan) {
-      console.warn(
+    if (!this._rootSpan) {
+      Logger.warn(
         "runWithRootSpan: No root span available. Running function without parent context.",
       );
       return fn();
     }
-
-    // Create a context with the root span and run the function within it
-    const ctxWithRoot = trace.setSpan(context.active(), rootSpan);
-    return context.with(ctxWithRoot, fn);
+    return context.with(trace.setSpan(context.active(), this._rootSpan), fn);
   }
 
-  /**
-   * Run an async function with the root span as the active parent context.
-   * All spans created within this function will be children of the root span.
-   *
-   * @param fn The async function to run within the root span context
-   * @returns A promise that resolves with the result of the function
-   */
-  static async runWithRootSpanAsync<T>(fn: () => Promise<T>): Promise<T> {
-    const rootSpan = SessionManager.getRootSpan();
-    if (!rootSpan) {
-      console.warn(
-        "runWithRootSpanAsync: No root span available. Running function without parent context.",
-      );
-      return fn();
-    }
-
-    // Create a context with the root span and run the function within it
-    const ctxWithRoot = trace.setSpan(context.active(), rootSpan);
-    return context.with(ctxWithRoot, fn);
-  }
-
-  /**
-   * Run a function within an isolated entity context.
-   * This ensures that entity stacks (workflow, task, agent, span) are isolated
-   * per request in concurrent environments.
-   *
-   * Note: Session context (session_id, user_id, tenant_id) is automatically
-   * isolated via OpenTelemetry's baggage API and AsyncLocalStorage.
-   * This method is primarily needed if you're using workflow/task/agent decorators
-   * or span wrappers in concurrent environments.
-   *
-   * @param fn The function to run with isolated entity context
-   * @returns The result of the function
-   *
-   */
-  static runWithContext<T>(fn: () => T): T {
-    return runWithEntityContext(fn);
-  }
-
-  /**
-   * Set session_id context attributes for all spans.
-   * Uses OpenTelemetry baggage API for automatic context propagation.
-   *
-   * Context automatically propagates across async boundaries in concurrent environments
-   * thanks to AsyncLocalStorage in @opentelemetry/sdk-node.
-   */
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
-      console.error(
-        `setSessionId: sessionId must be a string, got ${typeof sessionId}`,
-      );
+      Logger.error(`setSessionId: sessionId must be a string, got ${typeof sessionId}`);
       return;
     }
     if (sessionId) {
-      // Store in OpenTelemetry baggage - automatically propagates across async boundaries
       setSessionBaggage("session_id", sessionId);
-      SessionManager.setSessionContext("session_id", sessionId);
-    } else {
-      console.warn(
-        "setSessionId: Session ID must be provided for setting session_id.",
+      SessionManager.setAttributeOnActiveSpan(
+        `${Config.LIBRARY_NAME}.session_id`,
+        sessionId,
       );
+    } else {
+      Logger.warn("setSessionId: Session ID must be provided for setting session_id.");
     }
   }
 
@@ -483,15 +373,17 @@ export class Netra {
    */
   static setUserId(userId: string): void {
     if (typeof userId !== "string") {
-      console.error(`setUserId: userId must be a string, got ${typeof userId}`);
+      Logger.error(`setUserId: userId must be a string, got ${typeof userId}`);
       return;
     }
     if (userId) {
-      // Store in OpenTelemetry baggage - automatically propagates across async boundaries
       setSessionBaggage("user_id", userId);
-      SessionManager.setSessionContext("user_id", userId);
+      SessionManager.setAttributeOnActiveSpan(
+        `${Config.LIBRARY_NAME}.user_id`,
+        userId,
+      );
     } else {
-      console.warn("setUserId: User ID must be provided for setting user_id.");
+      Logger.warn("setUserId: User ID must be provided for setting user_id.");
     }
   }
 
@@ -501,19 +393,17 @@ export class Netra {
    */
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
-      console.error(
-        `setTenantId: tenantId must be a string, got ${typeof tenantId}`,
-      );
+      Logger.error(`setTenantId: tenantId must be a string, got ${typeof tenantId}`);
       return;
     }
     if (tenantId) {
-      // Store in OpenTelemetry baggage - automatically propagates across async boundaries
       setSessionBaggage("tenant_id", tenantId);
-      SessionManager.setSessionContext("tenant_id", tenantId);
-    } else {
-      console.warn(
-        "setTenantId: Tenant ID must be provided for setting tenant_id.",
+      SessionManager.setAttributeOnActiveSpan(
+        `${Config.LIBRARY_NAME}.tenant_id`,
+        tenantId,
       );
+    } else {
+      Logger.warn("setTenantId: Tenant ID must be provided for setting tenant_id.");
     }
   }
 
@@ -527,9 +417,7 @@ export class Netra {
         value,
       );
     } else {
-      console.warn(
-        "Both key and value must be provided for custom attributes.",
-      );
+      Logger.warn("Both key and value must be provided for custom attributes.");
     }
   }
 
@@ -543,9 +431,7 @@ export class Netra {
     if (eventName && attributes) {
       SessionManager.setCustomEvent(eventName, attributes);
     } else {
-      console.warn(
-        "Both eventName and attributes must be provided for custom events.",
-      );
+      Logger.warn("Both eventName and attributes must be provided for custom events.");
     }
   }
 
@@ -560,27 +446,76 @@ export class Netra {
     SessionManager.addConversation(conversationType, role, content);
   }
 
-  /**
-   * Start a new span
-   */
-  static startSpan(
-    name: string,
-    attributes: Record<string, string> = {},
-    moduleName: string = "netra_sdk",
-    asType: SpanType = SpanType.SPAN,
-  ): SpanWrapper {
-    // Pass the effective tracer derived from the provider we control
+  static startSpan(name: string): SpanWrapper;
+  static startSpan(name: string, options: SpanOptions): SpanWrapper;
+  static startSpan(name: string, options?: SpanOptions): SpanWrapper {
+    const attributes = options?.attributes ?? {};
+    const moduleName = options?.moduleName ?? this._SDK_NAME;
+    const spanType = options?.asType ?? SpanType.SPAN;
+
     return new SpanWrapper(
       name,
       attributes,
       moduleName,
-      asType,
+      spanType,
       this._tracer,
     ).start();
+  }
+
+  static startActiveSpan<T>(name: string, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(name: string, options: SpanOptions, fn: SpanCallback<T>): T;
+  static startActiveSpan<T>(
+    name: string,
+    optionsOrFn: SpanOptions | SpanCallback<T>,
+    fn?: SpanCallback<T>,
+  ): T {
+    let attributes: Record<string, string> = {};
+    let moduleName = this._SDK_NAME;
+    let spanType: SpanType = SpanType.SPAN;
+    let callback: SpanCallback<T>;
+
+    if (typeof optionsOrFn === "function") {
+      callback = optionsOrFn;
+    } else {
+      attributes = optionsOrFn.attributes ?? {};
+      moduleName = optionsOrFn.moduleName ?? this._SDK_NAME;
+      spanType = optionsOrFn.asType ?? SpanType.SPAN;
+      callback = fn!;
+    }
+
+    const spanWrapper = new SpanWrapper(
+      name,
+      attributes,
+      moduleName,
+      spanType,
+      this._tracer,
+    ).start();
+
+    return spanWrapper.withActive(() => {
+      let result: T;
+      try {
+        result = callback(spanWrapper);
+      } catch (e) {
+        spanWrapper.setError(e instanceof Error ? e.message : String(e));
+        spanWrapper.end();
+        throw e;
+      }
+
+      if (result instanceof Promise) {
+        return (result as Promise<unknown>)
+          .catch((e) => {
+            spanWrapper.setError(e instanceof Error ? e.message : String(e));
+            throw e;
+          })
+          .finally(() => spanWrapper.end()) as T;
+      }
+
+      spanWrapper.end();
+      return result;
+    });
   }
 
   static withBlockedSpansLocal = withBlockedSpansLocal;
 }
 
-// Default export
 export default Netra;
