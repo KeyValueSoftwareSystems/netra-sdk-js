@@ -52,6 +52,9 @@ export {
 
 const require = createRequire(import.meta.url);
 
+let _httpInstrumentation: any = null;
+let _undiciInstrumentation: any = null;
+
 /**
  * Promise that resolves when custom instrumentations are initialized.
  * Can be awaited after calling initInstrumentations() to ensure
@@ -454,7 +457,8 @@ function initOpenTelemetryInstrumentations(
     try {
       const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
-      registerInstrumentations({ instrumentations: [new HttpInstrumentation()] });
+      _httpInstrumentation = new HttpInstrumentation();
+      registerInstrumentations({ instrumentations: [_httpInstrumentation] });
       if (config.debugMode) {
         Logger.debug("HTTP instrumentation enabled");
       }
@@ -509,19 +513,16 @@ function initOpenTelemetryInstrumentations(
         })
         .filter((re): re is RegExp => re !== null);
 
-      registerInstrumentations({
-        instrumentations: [
-          new UndiciInstrumentation({
-            ignoreRequestHook: (request: { origin?: string; path?: string }) => {
-              const url = `${request.origin ?? ""}${request.path ?? ""}`;
-              if (netraHost && url.includes(netraHost)) {
-                return true;
-              }
-              return excludeRegexes.some((re) => re.test(url));
-            },
-          }),
-        ],
+      _undiciInstrumentation = new UndiciInstrumentation({
+        ignoreRequestHook: (request: { origin?: string; path?: string }) => {
+          const url = `${request.origin ?? ""}${request.path ?? ""}`;
+          if (netraHost && url.includes(netraHost)) {
+            return true;
+          }
+          return excludeRegexes.some((re) => re.test(url));
+        },
       });
+      registerInstrumentations({ instrumentations: [_undiciInstrumentation] });
       if (config.debugMode) {
         console.debug("Undici/fetch instrumentation enabled");
       }
@@ -775,5 +776,27 @@ export async function uninstrumentAll(): Promise<void> {
     }
   } catch (e) {
     Logger.debug("Failed to uninstrument OpenAI Agents SDK:", e);
+  }
+
+  // Uninstrument HTTP instrumentation
+  try {
+    if (_httpInstrumentation) {
+      _httpInstrumentation.disable();
+      _httpInstrumentation = null;
+      console.debug("HTTP instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument HTTP:", e);
+  }
+
+  // Uninstrument undici/fetch instrumentation
+  try {
+    if (_undiciInstrumentation) {
+      _undiciInstrumentation.disable();
+      _undiciInstrumentation = null;
+      console.debug("Undici/fetch instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument undici:", e);
   }
 }
