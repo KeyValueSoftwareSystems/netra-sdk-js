@@ -15,6 +15,7 @@ export interface CompiledPatterns {
   prefixes: string[];
   suffixes: string[];
   contains: string[];
+  isEmpty: boolean;
 }
 
 /**
@@ -45,13 +46,16 @@ export function compilePatterns(patterns: string[]): CompiledPatterns {
     }
   }
 
-  return { matchAll, exact, prefixes, suffixes, contains };
+  const isEmpty = !matchAll && exact.size === 0 && prefixes.length === 0 &&
+    suffixes.length === 0 && contains.length === 0;
+
+  return { matchAll, exact, prefixes, suffixes, contains, isEmpty };
 }
 
 /**
  * Test whether `name` matches any pattern in a compiled set.
  */
-export function matchesPatterns(
+export function matchesAnyPattern(
   name: string,
   compiled: CompiledPatterns,
 ): boolean {

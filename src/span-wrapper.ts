@@ -54,9 +54,14 @@ export class SpanWrapper {
     if (this.blockedSpanPatterns && this.blockedSpanPatterns.length > 0) {
       const patterns = this.blockedSpanPatterns.filter(Boolean);
       if (patterns.length > 0) {
-        const payload = JSON.stringify(patterns);
         const existingBaggage =
           propagation.getBaggage(ctx) ?? propagation.createBaggage();
+        const existingRaw = existingBaggage.getEntry(
+          LOCAL_BLOCKED_SPANS_BAGGAGE_KEY,
+        )?.value;
+        const existingPatterns = this.decodeBaggagePatterns(existingRaw);
+        const merged = [...new Set([...existingPatterns, ...patterns])];
+        const payload = JSON.stringify(merged);
         const updatedBaggage = existingBaggage.setEntry(
           LOCAL_BLOCKED_SPANS_BAGGAGE_KEY,
           { value: payload },
@@ -127,7 +132,7 @@ export class SpanWrapper {
     return this;
   }
 
-  setAttribute(key: string, value: string | string[]): this {
+  setAttribute(key: string, value: string | string[] | boolean): this {
     this.attributes[key] = value;
     if (this.span) {
       this.span.setAttribute(key, value);
@@ -210,5 +215,18 @@ export class SpanWrapper {
 
   getCurrentSpan(): Span | undefined {
     return this.span;
+  }
+
+  private decodeBaggagePatterns(raw: string | undefined): string[] {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((v: unknown) => typeof v === "string" && v);
+      }
+    } catch {
+      // ignore malformed baggage
+    }
+    return [];
   }
 }

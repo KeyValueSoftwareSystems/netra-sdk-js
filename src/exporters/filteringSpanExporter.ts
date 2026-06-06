@@ -3,7 +3,7 @@ import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { SpanContext } from "@opentelemetry/api";
 import {
   compilePatterns,
-  matchesPatterns,
+  matchesAnyPattern,
   CompiledPatterns,
 } from "../utils/pattern-matching";
 import {
@@ -92,18 +92,24 @@ export class FilteringSpanExporter implements SpanExporter {
     const filtered: ReadableSpan[] = [];
     const batchBlockedMap = new Map<string, SpanContext | undefined>();
 
+    // Snapshot the shared processor map to avoid iteration/mutation races
+    // when BatchSpanProcessor invokes export() concurrently with onStart().
+    const localBlockedSnapshot = this.localBlockedMap
+      ? new Map(this.localBlockedMap)
+      : undefined;
+
     for (const span of spans) {
       const traceId = getTraceId(span);
       if (traceId && isTraceIdBlocked(traceId)) continue;
 
       const name = span.name;
 
-      const globallyBlocked = matchesPatterns(name, this.compiled);
+      const globallyBlocked = matchesAnyPattern(name, this.compiled);
 
       const localPatterns = this.getLocalPatterns(span);
       const locallyBlocked =
         (localPatterns.length > 0 &&
-          matchesPatterns(name, this.getCompiledLocalPatterns(localPatterns))) ||
+          matchesAnyPattern(name, this.getCompiledLocalPatterns(localPatterns))) ||
         this.hasLocalBlockFlag(span);
 
       if (!globallyBlocked && !locallyBlocked) {
@@ -122,8 +128,8 @@ export class FilteringSpanExporter implements SpanExporter {
     for (const [k, v] of this.rememberedBlockedParentMap) {
       merged.set(k, v);
     }
-    if (this.localBlockedMap) {
-      for (const [k, v] of this.localBlockedMap) {
+    if (localBlockedSnapshot) {
+      for (const [k, v] of localBlockedSnapshot) {
         merged.set(k, v);
       }
     }
@@ -146,6 +152,8 @@ export class FilteringSpanExporter implements SpanExporter {
   }
 
   shutdown(): Promise<void> {
+    this.rememberedBlockedParentMap.clear();
+    this.localPatternCache.clear();
     return this.exporter.shutdown();
   }
 
@@ -154,7 +162,7 @@ export class FilteringSpanExporter implements SpanExporter {
   }
 
   private getCompiledLocalPatterns(patterns: string[]): CompiledPatterns {
-    const key = JSON.stringify(patterns);
+    const key = patterns.join("\0");
     let compiled = this.localPatternCache.get(key);
     if (!compiled) {
       compiled = compilePatterns(patterns);
@@ -171,8 +179,12 @@ export class FilteringSpanExporter implements SpanExporter {
     if (this.rememberedBlockedParentMap.size <= FilteringSpanExporter.MAX_REMEMBERED_ENTRIES) {
       return;
     }
-    const excess = this.rememberedBlockedParentMap.size - FilteringSpanExporter.MAX_REMEMBERED_ENTRIES;
-    const keys = Array.from(this.rememberedBlockedParentMap.keys()).slice(0, excess);
+    // Batch-evict 25% to amortize cost and avoid per-export eviction overhead
+    const toRemove = Math.max(
+      this.rememberedBlockedParentMap.size - FilteringSpanExporter.MAX_REMEMBERED_ENTRIES,
+      Math.ceil(FilteringSpanExporter.MAX_REMEMBERED_ENTRIES * 0.25),
+    );
+    const keys = Array.from(this.rememberedBlockedParentMap.keys()).slice(0, toRemove);
     for (const key of keys) {
       this.rememberedBlockedParentMap.delete(key);
     }

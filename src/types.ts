@@ -33,7 +33,7 @@ export interface ActionModel {
   metadata?: Record<string, string>;
 }
 
-export type SpanAttributes = Record<string, string | string[]>;
+export type SpanAttributes = Record<string, string | string[] | boolean>;
 
 export interface SpanOptions {
   attributes?: SpanAttributes;

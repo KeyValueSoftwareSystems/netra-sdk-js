@@ -11,7 +11,7 @@ import type {
   SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { Logger } from "../logger";
-import { compilePatterns, matchesPatterns, CompiledPatterns } from "../utils/pattern-matching";
+import { compilePatterns, matchesAnyPattern, CompiledPatterns } from "../utils/pattern-matching";
 
 export const LOCAL_BLOCKED_SPANS_BAGGAGE_KEY = "netra.local_blocked_spans";
 export const LOCAL_BLOCKED_SPANS_ATTR_KEY = "netra.local_blocked_spans";
@@ -28,17 +28,30 @@ function decodePatterns(raw: string): string[] | null {
   return null;
 }
 
-export async function withBlockedSpansLocal<T>(
+export function withBlockedSpansLocal<T>(
+  patterns: readonly string[],
+  fn: () => Promise<T>,
+): Promise<T>;
+export function withBlockedSpansLocal<T>(
+  patterns: readonly string[],
+  fn: () => T,
+): T;
+export function withBlockedSpansLocal<T>(
   patterns: readonly string[],
   fn: () => Promise<T> | T,
-): Promise<T> {
-  const payload = JSON.stringify(patterns.filter(Boolean));
+): Promise<T> | T {
+  const incoming = patterns.filter(Boolean);
   const activeCtx = otelContext.active();
 
   const baggage: Baggage =
     propagation.getBaggage(activeCtx) ??
     propagation.getBaggage(ROOT_CONTEXT) ??
     propagation.createBaggage();
+
+  const existingRaw = baggage.getEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY)?.value;
+  const existingPatterns = existingRaw ? (decodePatterns(existingRaw) ?? []) : [];
+  const merged = [...new Set([...existingPatterns, ...incoming])];
+  const payload = JSON.stringify(merged);
 
   const nextBaggage = baggage.setEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY, {
     value: payload,
@@ -84,12 +97,15 @@ export class LocalFilteringSpanProcessor implements SpanProcessor {
 
   onStart(span: Span, parentContext: Context): void {
     try {
+      // The OTel API `Span` interface does not expose `.name`, but the SDK's
+      // concrete Span class (sdk-trace-base >=1.x) stores it as a public field.
+      // This cast relies on that implementation detail.
       const name = (span as any).name as string | undefined;
       if (!name) return;
 
       let blocked = false;
 
-      if (matchesPatterns(name, this.globalCompiled)) {
+      if (matchesAnyPattern(name, this.globalCompiled)) {
         blocked = true;
       }
 
@@ -102,7 +118,7 @@ export class LocalFilteringSpanProcessor implements SpanProcessor {
           span.setAttribute(LOCAL_BLOCKED_SPANS_ATTR_KEY, patterns);
 
           const compiled = this.getCompiledLocalPatterns(raw, patterns);
-          if (matchesPatterns(name, compiled)) {
+          if (matchesAnyPattern(name, compiled)) {
             span.setAttribute("netra.local_blocked", true);
             blocked = true;
           }
@@ -154,8 +170,12 @@ export class LocalFilteringSpanProcessor implements SpanProcessor {
     if (this._blockedParentMap.size <= LocalFilteringSpanProcessor.MAX_ENTRIES) {
       return;
     }
-    const excess = this._blockedParentMap.size - LocalFilteringSpanProcessor.MAX_ENTRIES;
-    const keys = Array.from(this._blockedParentMap.keys()).slice(0, excess);
+    // Batch-evict 25% to amortize cost and avoid per-insertion eviction
+    const toRemove = Math.max(
+      this._blockedParentMap.size - LocalFilteringSpanProcessor.MAX_ENTRIES,
+      Math.ceil(LocalFilteringSpanProcessor.MAX_ENTRIES * 0.25),
+    );
+    const keys = Array.from(this._blockedParentMap.keys()).slice(0, toRemove);
     for (const key of keys) {
       this._blockedParentMap.delete(key);
     }
