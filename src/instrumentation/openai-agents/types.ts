@@ -62,4 +62,6 @@ export interface TracingProcessor {
 
 export interface InstrumentorOptions {
   tracerProvider?: { getTracer(name: string, version?: string): any };
+  /** Override the `llm.system` attribute value (default: `"openai"`). */
+  systemName?: string;
 }

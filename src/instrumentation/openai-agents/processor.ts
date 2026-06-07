@@ -9,6 +9,7 @@ import {
 import { SpanType } from "../../types";
 import { SpanAttributes } from "../span-attributes";
 import {
+  DEFAULT_LLM_SYSTEM,
   NETRA_AGENTS_GROUP_ID,
   NETRA_AGENTS_METADATA,
   NETRA_AGENTS_PARENT_AGENT,
@@ -16,7 +17,8 @@ import {
   NETRA_SPAN_TYPE_ATTR,
   NETRA_WORKFLOW_NAME,
 } from "./constants";
-import { getNetraSpanType, getSpanName, safeJsonStringify, setSpanDataAttributes } from "./utils";
+import { getNetraSpanType, getSpanName, safeJsonStringify } from "./utils";
+import { setSpanDataAttributes } from "./attributes";
 import { Logger } from "../../logger";
 import type { AgentSpan, AgentTrace, TracingProcessor } from "./types";
 
@@ -25,14 +27,17 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
   private static readonly MAX_TRACKED_TRACES = 1_000;
 
   private _tracer: Tracer;
+  private _systemName: string;
   private _isShutdown = false;
   private _rootSpans = new Map<string, OTelSpan>();
   private _otelSpans = new Map<string, OTelSpan>();
   private _handoffs = new Map<string, Map<string, string>>();
   private _traceErrors = new Set<string>();
+  private _traceSpans = new Map<string, Set<string>>();
 
-  constructor(tracer: Tracer) {
+  constructor(tracer: Tracer, systemName: string = DEFAULT_LLM_SYSTEM) {
     this._tracer = tracer;
+    this._systemName = systemName;
   }
 
   private _parseTimestamp(iso: string | null | undefined): Date | undefined {
@@ -66,12 +71,29 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
       this._rootSpans.delete(oldest);
       this._traceErrors.delete(oldest);
       this._handoffs.delete(oldest);
+
+      const orphanedSpanIds = this._traceSpans.get(oldest);
+      if (orphanedSpanIds) {
+        for (const spanId of orphanedSpanIds) {
+          const orphan = this._otelSpans.get(spanId);
+          if (orphan) {
+            try {
+              orphan.setAttribute("netra.agents.evicted", true);
+              orphan.end();
+            } catch { /* already ended */ }
+            this._otelSpans.delete(spanId);
+          }
+        }
+        this._traceSpans.delete(oldest);
+      }
+
       Logger.debug("NetraAgentsTracingProcessor: evicted root trace due to MAX_TRACKED_TRACES limit");
     }
   }
 
   onTraceStart(agentTrace: AgentTrace): void {
     if (this._isShutdown) return;
+    if (agentTrace.disabled) return;
 
     const existingRoot = this._rootSpans.get(agentTrace.traceId);
     if (existingRoot) {
@@ -88,7 +110,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
       attributes: {
         [NETRA_SPAN_TYPE_ATTR]: SpanType.AGENT,
         [NETRA_WORKFLOW_NAME]: agentTrace.name || "Agent workflow",
-        [SpanAttributes.LLM_SYSTEM]: "openai",
+        [SpanAttributes.LLM_SYSTEM]: this._systemName,
       },
     });
 
@@ -118,6 +140,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     this._rootSpans.delete(agentTrace.traceId);
     this._traceErrors.delete(agentTrace.traceId);
     this._handoffs.delete(agentTrace.traceId);
+    this._traceSpans.delete(agentTrace.traceId);
   }
 
   onSpanStart(agentSpan: AgentSpan): void {
@@ -152,7 +175,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
         startTime,
         attributes: {
           [NETRA_SPAN_TYPE_ATTR]: netraType,
-          [SpanAttributes.LLM_SYSTEM]: "openai",
+          [SpanAttributes.LLM_SYSTEM]: this._systemName,
           [NETRA_AGENTS_SPAN_TYPE]: agentSpan.spanData.type,
         },
       },
@@ -160,6 +183,13 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     );
 
     this._otelSpans.set(agentSpan.spanId, span);
+
+    let spanSet = this._traceSpans.get(agentSpan.traceId);
+    if (!spanSet) {
+      spanSet = new Set();
+      this._traceSpans.set(agentSpan.traceId, spanSet);
+    }
+    spanSet.add(agentSpan.spanId);
   }
 
   onSpanEnd(agentSpan: AgentSpan): void {
@@ -169,11 +199,10 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     if (!span) return;
 
     span.updateName(getSpanName(agentSpan));
-    setSpanDataAttributes(span, agentSpan);
+    setSpanDataAttributes(span, agentSpan, this._systemName);
 
     const data = agentSpan.spanData;
 
-    // Track handoff relationships for agent graph linking
     if (data.type === "handoff" && data.to_agent && data.from_agent) {
       let traceHandoffs = this._handoffs.get(agentSpan.traceId);
       if (!traceHandoffs) {
@@ -211,6 +240,14 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     const endTime = this._parseTimestamp(agentSpan.endedAt);
     span.end(endTime);
     this._otelSpans.delete(agentSpan.spanId);
+
+    const spanSet = this._traceSpans.get(agentSpan.traceId);
+    if (spanSet) {
+      spanSet.delete(agentSpan.spanId);
+      if (spanSet.size === 0) {
+        this._traceSpans.delete(agentSpan.traceId);
+      }
+    }
   }
 
   forceFlush(): void {
@@ -223,7 +260,6 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
   shutdown(): void {
     this._isShutdown = true;
 
-    // End any root spans that are still open before clearing
     for (const span of this._rootSpans.values()) {
       try {
         span.setAttribute("netra.agents.interrupted", true);
@@ -237,7 +273,6 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
       }
     }
 
-    // End any child spans that are still open
     for (const span of this._otelSpans.values()) {
       try {
         span.setAttribute("netra.agents.interrupted", true);
@@ -254,5 +289,6 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     this._otelSpans.clear();
     this._handoffs.clear();
     this._traceErrors.clear();
+    this._traceSpans.clear();
   }
 }

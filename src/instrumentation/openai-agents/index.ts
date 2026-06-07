@@ -1,7 +1,7 @@
 import { trace, Tracer } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { NetraAgentsTracingProcessor } from "./processor";
-import { INSTRUMENTATION_NAME } from "./constants";
+import { DEFAULT_LLM_SYSTEM, INSTRUMENTATION_NAME } from "./constants";
 import { __version__ } from "./version";
 import { Logger } from "../../logger";
 import type { InstrumentorOptions } from "./types";
@@ -45,6 +45,13 @@ export class NetraOpenAIAgentsInstrumentor {
     return isInstrumented;
   }
 
+  /**
+   * Register the Netra tracing processor with the OpenAI Agents SDK.
+   *
+   * Returns `this` in all cases (success **and** failure) so the call can be
+   * chained. Check {@link isInstrumented} afterwards to verify the processor
+   * was registered successfully.
+   */
   async instrument(
     options: InstrumentorOptions = {},
   ): Promise<NetraOpenAIAgentsInstrumentor> {
@@ -72,7 +79,8 @@ export class NetraOpenAIAgentsInstrumentor {
       return this;
     }
 
-    activeProcessor = new NetraAgentsTracingProcessor(activeTracer!);
+    const systemName = options.systemName ?? DEFAULT_LLM_SYSTEM;
+    activeProcessor = new NetraAgentsTracingProcessor(activeTracer!, systemName);
 
     try {
       if (typeof agentsModule.addTraceProcessor === "function") {
