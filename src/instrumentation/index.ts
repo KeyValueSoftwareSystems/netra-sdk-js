@@ -25,6 +25,7 @@ import { groqInstrumentor } from "./groq";
 import { langgraphInstrumentor } from "./langgraph";
 import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
+import { openaiAgentsInstrumentor } from "./openai-agents";
 import { typeORMInstrumentor } from "./typeorm";
 import { FilteringSpanExporter, TrialAwareOTLPExporter } from "../exporters";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
@@ -180,6 +181,7 @@ export function initInstrumentations(
     langgraph: false,
     googleGenAI: false,
     anthropic: false,
+    openaiAgents: false,
   };
 
   if (!instruments || instruments.size === 0) {
@@ -190,6 +192,7 @@ export function initInstrumentations(
     customInstrumentModules.langgraph = true;
     customInstrumentModules.googleGenAI = true;
     customInstrumentModules.anthropic = true;
+    customInstrumentModules.openaiAgents = true;
   } else if (instruments.size) {
     // When specific instruments are provided, explicitly disable all Traceloop modules
     // to prevent default "enable all" behavior
@@ -241,6 +244,9 @@ export function initInstrumentations(
     }
     if (instruments.has(NetraInstruments.ANTHROPIC)) {
       customInstrumentModules.anthropic = true;
+    }
+    if (instruments.has(NetraInstruments.OPENAI_AGENTS)) {
+      customInstrumentModules.openaiAgents = true;
     }
   }
 
@@ -413,6 +419,26 @@ async function initCustomInstrumentationsAsync(
       Logger.debug("Custom Anthropic instrumentation enabled");
     } catch (e) {
       Logger.debug("Failed to initialize custom Anthropic instrumentation:", e);
+    }
+  }
+
+  // Initialize OpenAI Agents SDK instrumentation
+  if (
+    customInstrumentModules.openaiAgents &&
+    !blockInstruments?.has(NetraInstruments.OPENAI_AGENTS)
+  ) {
+    try {
+      await openaiAgentsInstrumentor.instrument({ tracerProvider });
+      if (config.debugMode) {
+        console.debug("Custom OpenAI Agents SDK instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug(
+          "Failed to initialize custom OpenAI Agents SDK instrumentation:",
+          e,
+        );
+      }
     }
   }
 }
@@ -677,5 +703,15 @@ export async function uninstrumentAll(): Promise<void> {
     }
   } catch (e) {
     Logger.debug("Failed to uninstrument TypeORM:", e);
+  }
+
+  // Uninstrument custom OpenAI Agents SDK instrumentation
+  try {
+    if (openaiAgentsInstrumentor.isInstrumented()) {
+      openaiAgentsInstrumentor.uninstrument();
+      console.debug("Custom OpenAI Agents SDK instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument OpenAI Agents SDK:", e);
   }
 }
