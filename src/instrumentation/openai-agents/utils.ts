@@ -19,6 +19,7 @@ import {
   NETRA_SPAN_NAME,
   NETRA_SPAN_TYPE_ATTR,
 } from "./constants";
+import { Logger } from "../../logger";
 import { AgentSpan, SpanData } from "./types";
 
 export function safeJsonStringify(obj: unknown): string {
@@ -159,6 +160,13 @@ function setResponseAttributes(span: OTelSpan, agentSpan: AgentSpan): void {
 
   if (data.response_id) {
     span.setAttribute(GEN_AI_RESPONSE_ID, data.response_id);
+  }
+
+  if (!data._response && !data._input) {
+    Logger.debug(
+      "NetraAgentsTracingProcessor: response span has no _response/_input data;",
+      "the @openai/agents SDK may have changed its internal fields",
+    );
   }
 
   let promptStartIndex = 0;

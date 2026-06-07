@@ -429,16 +429,9 @@ async function initCustomInstrumentationsAsync(
   ) {
     try {
       await openaiAgentsInstrumentor.instrument({ tracerProvider });
-      if (config.debugMode) {
-        console.debug("Custom OpenAI Agents SDK instrumentation enabled");
-      }
+      Logger.debug("Custom OpenAI Agents SDK instrumentation enabled");
     } catch (e) {
-      if (config.debugMode) {
-        console.debug(
-          "Failed to initialize custom OpenAI Agents SDK instrumentation:",
-          e,
-        );
-      }
+      Logger.debug("Failed to initialize custom OpenAI Agents SDK instrumentation:", e);
     }
   }
 }
@@ -709,9 +702,9 @@ export async function uninstrumentAll(): Promise<void> {
   try {
     if (openaiAgentsInstrumentor.isInstrumented()) {
       openaiAgentsInstrumentor.uninstrument();
-      console.debug("Custom OpenAI Agents SDK instrumentation disabled");
+      Logger.debug("Custom OpenAI Agents SDK instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument OpenAI Agents SDK:", e);
+    Logger.debug("Failed to uninstrument OpenAI Agents SDK:", e);
   }
 }

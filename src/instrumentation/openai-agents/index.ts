@@ -3,6 +3,7 @@ import { createRequire } from "module";
 import { NetraAgentsTracingProcessor } from "./processor";
 import { INSTRUMENTATION_NAME } from "./constants";
 import { __version__ } from "./version";
+import { Logger } from "../../logger";
 import type { InstrumentorOptions } from "./types";
 
 let cachedAgentsModule: any = null;
@@ -23,8 +24,8 @@ async function resolveAgentsModule(): Promise<any> {
     const mod = await import("@openai/agents");
     cachedAgentsModule = mod;
     return cachedAgentsModule;
-  } catch (e) {
-    console.debug("ESM resolution of @openai/agents failed, trying CJS fallback:", e);
+  } catch {
+    Logger.debug("ESM resolution of @openai/agents failed, trying CJS fallback");
   }
 
   try {
@@ -32,8 +33,8 @@ async function resolveAgentsModule(): Promise<any> {
     const mod = req("@openai/agents");
     cachedAgentsModule = mod;
     return cachedAgentsModule;
-  } catch (e) {
-    console.debug("CJS resolution of @openai/agents also failed:", e);
+  } catch {
+    Logger.debug("CJS resolution of @openai/agents also failed");
   }
 
   return null;
@@ -48,7 +49,7 @@ export class NetraOpenAIAgentsInstrumentor {
     options: InstrumentorOptions = {},
   ): Promise<NetraOpenAIAgentsInstrumentor> {
     if (isInstrumented) {
-      console.warn("OpenAI Agents SDK is already instrumented");
+      Logger.warn("OpenAI Agents SDK is already instrumented");
       return this;
     }
 
@@ -58,14 +59,14 @@ export class NetraOpenAIAgentsInstrumentor {
         ? provider.getTracer(INSTRUMENTATION_NAME, __version__)
         : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
-      console.error(`Failed to initialize tracer for OpenAI Agents: ${error}`);
+      Logger.error(`Failed to initialize tracer for OpenAI Agents: ${error}`);
       return this;
     }
 
     const agentsModule = await resolveAgentsModule();
     if (!agentsModule) {
-      console.warn(
-        "OpenAI Agents SDK (@openai/agents) not found. " +
+      Logger.warn(
+        "OpenAI Agents SDK (@openai/agents) not found.",
         "Install it to enable automatic agent tracing.",
       );
       return this;
@@ -82,14 +83,18 @@ export class NetraOpenAIAgentsInstrumentor {
           : [];
         agentsModule.setTraceProcessors([...existing, activeProcessor]);
       } else {
-        console.warn(
-          "OpenAI Agents SDK does not expose addTraceProcessor or setTraceProcessors. " +
+        Logger.warn(
+          "OpenAI Agents SDK does not expose addTraceProcessor or setTraceProcessors.",
           "Tracing integration may not work.",
         );
+        activeProcessor = null;
+        activeTracer = null;
         return this;
       }
     } catch (error) {
-      console.warn("Failed to register trace processor with @openai/agents:", error);
+      Logger.warn("Failed to register trace processor with @openai/agents:", error);
+      activeProcessor = null;
+      activeTracer = null;
       return this;
     }
 
@@ -99,7 +104,7 @@ export class NetraOpenAIAgentsInstrumentor {
 
   uninstrument(): void {
     if (!isInstrumented) {
-      console.warn("OpenAI Agents SDK is not instrumented");
+      Logger.warn("OpenAI Agents SDK is not instrumented");
       return;
     }
 

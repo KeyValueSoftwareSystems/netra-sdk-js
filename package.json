@@ -70,7 +70,7 @@
     "groq-sdk": ">=0.3.0",
     "openai": "^4.0.0 || ^5.0.0 || ^6.0.0",
     "@anthropic-ai/sdk": ">=0.60.0",
-    "@openai/agents": ">=0.10.0"
+    "@openai/agents": ">=0.10.0 <1.0.0"
   },
   "peerDependenciesMeta": {
     "@opentelemetry/instrumentation-http": {

@@ -17,23 +17,25 @@ import {
   NETRA_WORKFLOW_NAME,
 } from "./constants";
 import { getNetraSpanType, getSpanName, safeJsonStringify, setSpanDataAttributes } from "./utils";
+import { Logger } from "../../logger";
 import type { AgentSpan, AgentTrace, TracingProcessor } from "./types";
 
 export class NetraAgentsTracingProcessor implements TracingProcessor {
   private static readonly MAX_TRACKED_SPANS = 10_000;
+  private static readonly MAX_TRACKED_TRACES = 1_000;
 
   private _tracer: Tracer;
   private _isShutdown = false;
   private _rootSpans = new Map<string, OTelSpan>();
   private _otelSpans = new Map<string, OTelSpan>();
-  private _handoffs = new Map<string, string>();
+  private _handoffs = new Map<string, Map<string, string>>();
   private _traceErrors = new Set<string>();
 
   constructor(tracer: Tracer) {
     this._tracer = tracer;
   }
 
-  private _parseStartTime(iso: string | null | undefined): Date | undefined {
+  private _parseTimestamp(iso: string | null | undefined): Date | undefined {
     if (!iso) return undefined;
     const ts = new Date(iso);
     return isNaN(ts.getTime()) ? undefined : ts;
@@ -43,13 +45,43 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     const oldest = this._otelSpans.keys().next().value;
     if (oldest) {
       const stale = this._otelSpans.get(oldest);
-      try { stale?.end(); } catch { /* already ended */ }
+      try {
+        stale?.setAttribute("netra.agents.evicted", true);
+        stale?.end();
+      } catch { /* already ended */ }
       this._otelSpans.delete(oldest);
+      Logger.debug("NetraAgentsTracingProcessor: evicted span due to MAX_TRACKED_SPANS limit");
+    }
+  }
+
+  private _evictOldestTrace(): void {
+    const oldest = this._rootSpans.keys().next().value;
+    if (oldest) {
+      const stale = this._rootSpans.get(oldest);
+      try {
+        stale?.setAttribute("netra.agents.evicted", true);
+        stale?.setStatus({ code: SpanStatusCode.ERROR, message: "Trace evicted due to limit" });
+        stale?.end();
+      } catch { /* already ended */ }
+      this._rootSpans.delete(oldest);
+      this._traceErrors.delete(oldest);
+      this._handoffs.delete(oldest);
+      Logger.debug("NetraAgentsTracingProcessor: evicted root trace due to MAX_TRACKED_TRACES limit");
     }
   }
 
   onTraceStart(agentTrace: AgentTrace): void {
     if (this._isShutdown) return;
+
+    const existingRoot = this._rootSpans.get(agentTrace.traceId);
+    if (existingRoot) {
+      try { existingRoot.end(); } catch { /* already ended */ }
+      this._rootSpans.delete(agentTrace.traceId);
+    }
+
+    if (this._rootSpans.size >= NetraAgentsTracingProcessor.MAX_TRACKED_TRACES) {
+      this._evictOldestTrace();
+    }
 
     const span = this._tracer.startSpan(agentTrace.name || "Agent workflow", {
       kind: SpanKind.INTERNAL,
@@ -85,17 +117,17 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
 
     this._rootSpans.delete(agentTrace.traceId);
     this._traceErrors.delete(agentTrace.traceId);
-
-    // Clean up any orphaned handoff entries for this trace
-    for (const key of this._handoffs.keys()) {
-      if (key.endsWith(`:${agentTrace.traceId}`)) {
-        this._handoffs.delete(key);
-      }
-    }
+    this._handoffs.delete(agentTrace.traceId);
   }
 
   onSpanStart(agentSpan: AgentSpan): void {
     if (this._isShutdown) return;
+
+    const existingSpan = this._otelSpans.get(agentSpan.spanId);
+    if (existingSpan) {
+      try { existingSpan.end(); } catch { /* already ended */ }
+      this._otelSpans.delete(agentSpan.spanId);
+    }
 
     if (this._otelSpans.size >= NetraAgentsTracingProcessor.MAX_TRACKED_SPANS) {
       this._evictOldestSpan();
@@ -111,7 +143,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
 
     const spanName = getSpanName(agentSpan);
     const netraType = getNetraSpanType(agentSpan.spanData);
-    const startTime = this._parseStartTime(agentSpan.startedAt);
+    const startTime = this._parseTimestamp(agentSpan.startedAt);
 
     const span = this._tracer.startSpan(
       spanName,
@@ -143,16 +175,25 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
 
     // Track handoff relationships for agent graph linking
     if (data.type === "handoff" && data.to_agent && data.from_agent) {
-      const key = `${data.to_agent}:${agentSpan.traceId}`;
-      this._handoffs.set(key, data.from_agent);
+      let traceHandoffs = this._handoffs.get(agentSpan.traceId);
+      if (!traceHandoffs) {
+        traceHandoffs = new Map();
+        this._handoffs.set(agentSpan.traceId, traceHandoffs);
+      }
+      traceHandoffs.set(data.to_agent, data.from_agent);
     }
 
     if (data.type === "agent" && data.name) {
-      const key = `${data.name}:${agentSpan.traceId}`;
-      const parentNode = this._handoffs.get(key);
-      if (parentNode) {
-        span.setAttribute(NETRA_AGENTS_PARENT_AGENT, parentNode);
-        this._handoffs.delete(key);
+      const traceHandoffs = this._handoffs.get(agentSpan.traceId);
+      if (traceHandoffs) {
+        const parentNode = traceHandoffs.get(data.name);
+        if (parentNode) {
+          span.setAttribute(NETRA_AGENTS_PARENT_AGENT, parentNode);
+          traceHandoffs.delete(data.name);
+          if (traceHandoffs.size === 0) {
+            this._handoffs.delete(agentSpan.traceId);
+          }
+        }
       }
     }
 
@@ -167,7 +208,8 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
       span.setStatus({ code: SpanStatusCode.OK });
     }
 
-    span.end();
+    const endTime = this._parseTimestamp(agentSpan.endedAt);
+    span.end(endTime);
     this._otelSpans.delete(agentSpan.spanId);
   }
 
@@ -179,9 +221,12 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
   }
 
   shutdown(): void {
+    this._isShutdown = true;
+
     // End any root spans that are still open before clearing
     for (const span of this._rootSpans.values()) {
       try {
+        span.setAttribute("netra.agents.interrupted", true);
         span.setStatus({
           code: SpanStatusCode.ERROR,
           message: "Span interrupted by processor shutdown",
@@ -195,6 +240,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     // End any child spans that are still open
     for (const span of this._otelSpans.values()) {
       try {
+        span.setAttribute("netra.agents.interrupted", true);
         span.setStatus({
           code: SpanStatusCode.ERROR,
           message: "Span interrupted by processor shutdown",
@@ -204,8 +250,6 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
         // span may already be ended
       }
     }
-
-    this._isShutdown = true;
     this._rootSpans.clear();
     this._otelSpans.clear();
     this._handoffs.clear();

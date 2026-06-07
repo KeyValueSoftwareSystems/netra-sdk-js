@@ -28,8 +28,9 @@ export interface SpanData {
   to_agent?: string;
   from_agent?: string;
   // ResponseSpanData — _input and _response are underscore-prefixed private
-  // fields in the @openai/agents SDK (validated against >=0.10.0).
+  // fields in the @openai/agents SDK (validated against >=0.10.0 <1.0.0).
   // These are not part of the public API and may change without notice.
+  // Callers must check for existence at runtime and degrade gracefully.
   // TODO(NET-1053): request public accessors from the Agents SDK team.
   response_id?: string;
   _input?: unknown;
