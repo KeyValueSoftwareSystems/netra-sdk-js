@@ -192,6 +192,22 @@ export const batchesWrapper = (tracer: Tracer) =>
   anthropicWrapper(tracer, BATCHES_SPAN_NAME, "batches"); 
 
 
+const WRAPPER_OWN_PROPS = new Set([
+  'span', 'messageStream', 'startTime', 'requestKwargs', 'completeResponse',
+  'processChunk', 'finalizeSpan', 'processEventData', 'finalizeSpanFromMessage',
+]);
+
+const EVENT_EMITTER_METHODS = new Set([
+  'on', 'once', 'off', 'removeListener', 'addListener',
+  'emit', 'removeAllListeners', 'listeners', 'listenerCount',
+]);
+
+const LISTENER_REGISTRATION_METHODS = new Set(['on', 'once', 'addListener']);
+
+const COMPLETION_METHODS = new Set(['finalMessage', 'done', 'finalText']);
+
+const TRACKED_STREAM_EVENTS = new Set(['message', 'contentBlock', 'text', 'finalMessage']);
+
 export class MessageStreamWrapper {
   private completeResponse: Record<string, any> = {
     content: [],
@@ -215,11 +231,8 @@ export class MessageStreamWrapper {
         if (prop === 'toJSON') {
           return () => target.completeResponse;
         }
-        // Our own properties and private methods
-        if (prop === 'span' || prop === 'messageStream' || prop === 'startTime' || 
-            prop === 'requestKwargs' || prop === 'completeResponse' ||
-            prop === 'processChunk' || prop === 'finalizeSpan' ||
-            prop === 'processEventData' || prop === 'finalizeSpanFromMessage') {
+
+        if (typeof prop === 'string' && WRAPPER_OWN_PROPS.has(prop)) {
           return Reflect.get(target, prop, receiver);
         }
         
@@ -229,13 +242,10 @@ export class MessageStreamWrapper {
         }
         
         // Event emitter methods - need special handling to maintain 'this' context
-        if (prop === 'on' || prop === 'once' || prop === 'off' || prop === 'removeListener' || 
-            prop === 'addListener' || prop === 'emit' || prop === 'removeAllListeners' ||
-            prop === 'listeners' || prop === 'listenerCount') {
+        if (typeof prop === 'string' && EVENT_EMITTER_METHODS.has(prop)) {
           const method = target.messageStream[prop];
           if (typeof method === 'function') {
-            // Wrap event listeners to add instrumentation
-            if (prop === 'on' || prop === 'once' || prop === 'addListener') {
+            if (LISTENER_REGISTRATION_METHODS.has(prop)) {
               return function(event: string, listener: Function) {
                 // Wrap the listener to track events in our span
                 const wrappedListener = (...args: any[]) => {
@@ -243,9 +253,7 @@ export class MessageStreamWrapper {
                     'event.type': event,
                   });
                   
-                  // Process chunks for our complete response tracking
-                  if (event === 'message' || event === 'contentBlock' || 
-                      event === 'text' || event === 'finalMessage') {
+                  if (TRACKED_STREAM_EVENTS.has(event)) {
                     if (args[0]) {
                       target.processEventData(event, args[0]);
                     }
@@ -262,7 +270,7 @@ export class MessageStreamWrapper {
           return method;
         }
         
-        if (prop === 'finalMessage' || prop === 'done' || prop === 'finalText') {
+        if (typeof prop === 'string' && COMPLETION_METHODS.has(prop)) {
           const method = target.messageStream[prop];
           if (typeof method === 'function') {
             return async function(...args: any[]) {
