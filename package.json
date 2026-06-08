@@ -65,6 +65,7 @@
     "@langchain/ollama": "^1.2.1",
     "@mistralai/mistralai": ">=1.0.0",
     "@google/generative-ai": "^0.24.1",
+    "@opentelemetry/instrumentation": ">=0.200.0",
     "@opentelemetry/instrumentation-express": "^0.40.0",
     "@opentelemetry/instrumentation-http": "^0.52.1",
     "@opentelemetry/instrumentation-undici": "^0.6.0",
@@ -75,6 +76,9 @@
     "@openai/agents": ">=0.10.0 <1.0.0"
   },
   "peerDependenciesMeta": {
+    "@opentelemetry/instrumentation": {
+      "optional": true
+    },
     "@opentelemetry/instrumentation-http": {
       "optional": true
     },

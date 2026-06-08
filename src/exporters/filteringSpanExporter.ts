@@ -1,6 +1,11 @@
-import { SpanExporter, ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ExportResultCode } from "@opentelemetry/core";
-
+import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
+import type { SpanContext } from "@opentelemetry/api";
+import {
+  compilePatterns,
+  matchesAnyPattern,
+  CompiledPatterns,
+} from "../utils/pattern-matching";
 import {
   addBlockedTraceId,
   getTraceId,
@@ -8,29 +13,67 @@ import {
   isTrialBlocked,
 } from "./utils";
 
-export class FilteringSpanExporter implements SpanExporter {
-  private exact = new Set<string>();
-  private prefixes: string[] = [];
-  private suffixes: string[] = [];
+/**
+ * Wrapper that overrides parentSpanContext without mutating the original span.
+ * Delegates all other ReadableSpan properties to the original.
+ *
+ * NOTE: This class manually delegates every property of the ReadableSpan
+ * interface. If the upstream interface adds new properties, they must be
+ * forwarded here as well to avoid silent data loss during export.
+ */
+class ReparentedSpan implements ReadableSpan {
+  constructor(
+    private readonly delegate: ReadableSpan,
+    private readonly newParent: SpanContext | undefined,
+  ) {}
 
-  // Persist blocked parents across export() calls
-  private rememberedBlockedParentMap = new Map<string, any>();
+  get parentSpanContext(): SpanContext | undefined {
+    return this.newParent;
+  }
+
+  get name() { return this.delegate.name; }
+  get kind() { return this.delegate.kind; }
+  spanContext() { return this.delegate.spanContext(); }
+  get startTime() { return this.delegate.startTime; }
+  get endTime() { return this.delegate.endTime; }
+  get status() { return this.delegate.status; }
+  get attributes() { return this.delegate.attributes; }
+  get links() { return this.delegate.links; }
+  get events() { return this.delegate.events; }
+  get duration() { return this.delegate.duration; }
+  get ended() { return this.delegate.ended; }
+  get resource() { return this.delegate.resource; }
+  get instrumentationScope() { return this.delegate.instrumentationScope; }
+  get droppedAttributesCount() { return this.delegate.droppedAttributesCount; }
+  get droppedEventsCount() { return this.delegate.droppedEventsCount; }
+  get droppedLinksCount() { return this.delegate.droppedLinksCount; }
+}
+
+export class FilteringSpanExporter implements SpanExporter {
+  private static readonly MAX_REMEMBERED_ENTRIES = 10_000;
+
+  /** Pre-compiled global patterns — compiled once in the constructor. */
+  private readonly compiled: CompiledPatterns;
+
+  /**
+   * Spans that were blocked in a previous export() call but whose children
+   * may still arrive in a later call (e.g. out-of-order export batches).
+   */
+  private readonly rememberedBlockedParentMap = new Map<
+    string,
+    SpanContext | undefined
+  >();
+
+  /** Cache for compiled local pattern sets to avoid per-span recompilation. */
+  private readonly localPatternCache = new Map<string, CompiledPatterns>();
+  private static readonly MAX_LOCAL_PATTERN_CACHE = 100;
 
   constructor(
     private readonly exporter: SpanExporter,
-    patterns: string[],
+    globalPatterns: string[],
+    private readonly localBlockedMap?: ReadonlyMap<string, SpanContext | undefined>,
   ) {
-    for (const p of patterns) {
-      if (!p) continue;
-
-      if (p.endsWith("*") && !p.startsWith("*")) {
-        this.prefixes.push(p.slice(0, -1));
-      } else if (p.startsWith("*") && !p.endsWith("*")) {
-        this.suffixes.push(p.slice(1));
-      } else {
-        this.exact.add(p);
-      }
-    }
+    this.compiled = compilePatterns(globalPatterns);
   }
 
   export(
@@ -47,49 +90,58 @@ export class FilteringSpanExporter implements SpanExporter {
     }
 
     const filtered: ReadableSpan[] = [];
-    const blockedParentMap = new Map<string, any>();
+    const batchBlockedMap = new Map<string, SpanContext | undefined>();
+
+    // Snapshot the shared processor map to avoid iteration/mutation races
+    // when BatchSpanProcessor invokes export() concurrently with onStart().
+    const localBlockedSnapshot = this.localBlockedMap
+      ? new Map(this.localBlockedMap)
+      : undefined;
 
     for (const span of spans) {
       const traceId = getTraceId(span);
       if (traceId && isTraceIdBlocked(traceId)) continue;
 
       const name = span.name;
-      const globallyBlocked = this.isBlocked(name);
+
+      const globallyBlocked = matchesAnyPattern(name, this.compiled);
+
+      const localPatterns = this.getLocalPatterns(span);
       const locallyBlocked =
-        this.matchesLocalPatterns(span) || this.hasLocalBlockFlag(span);
+        (localPatterns.length > 0 &&
+          matchesAnyPattern(name, this.getCompiledLocalPatterns(localPatterns))) ||
+        this.hasLocalBlockFlag(span);
 
       if (!globallyBlocked && !locallyBlocked) {
         filtered.push(span);
         continue;
       }
 
-      // Span is blocked — remember its parent
       const spanId = span.spanContext().spanId;
-      const parent = span.parentSpanContext;
-
-      if (parent) {
-        // current batch
-        blockedParentMap.set(spanId, parent);
-
-        //  persist across export() calls
-        this.rememberedBlockedParentMap.set(spanId, parent);
-      }
+      const parentCtx = span.parentSpanContext;
+      batchBlockedMap.set(spanId, parentCtx);
+      this.rememberedBlockedParentMap.set(spanId, parentCtx);
     }
 
-    //  Merge remembered + current batch blocked parents
-    const merged = new Map<string, any>();
+    const merged = new Map<string, SpanContext | undefined>();
 
     for (const [k, v] of this.rememberedBlockedParentMap) {
       merged.set(k, v);
     }
-
-    for (const [k, v] of blockedParentMap) {
+    if (localBlockedSnapshot) {
+      for (const [k, v] of localBlockedSnapshot) {
+        merged.set(k, v);
+      }
+    }
+    for (const [k, v] of batchBlockedMap) {
       merged.set(k, v);
     }
 
     if (merged.size > 0) {
       this.reparentBlockedChildren(filtered, merged);
     }
+
+    this.evictRememberedIfNeeded();
 
     if (filtered.length === 0) {
       resultCallback({ code: ExportResultCode.SUCCESS });
@@ -100,55 +152,83 @@ export class FilteringSpanExporter implements SpanExporter {
   }
 
   shutdown(): Promise<void> {
+    this.rememberedBlockedParentMap.clear();
+    this.localPatternCache.clear();
     return this.exporter.shutdown();
   }
 
   forceFlush(): Promise<void> {
-    return this.exporter.forceFlush?.() || Promise.resolve();
+    return this.exporter.forceFlush?.() ?? Promise.resolve();
   }
 
-  // ---------- helpers ----------
-
-  private isBlocked(name: string): boolean {
-    if (this.exact.has(name)) return true;
-    if (this.prefixes.some((p) => name.startsWith(p))) return true;
-    if (this.suffixes.some((s) => name.endsWith(s))) return true;
-    return false;
+  private getCompiledLocalPatterns(patterns: string[]): CompiledPatterns {
+    const key = patterns.join("\0");
+    let compiled = this.localPatternCache.get(key);
+    if (!compiled) {
+      compiled = compilePatterns(patterns);
+      this.localPatternCache.set(key, compiled);
+      if (this.localPatternCache.size > FilteringSpanExporter.MAX_LOCAL_PATTERN_CACHE) {
+        const first = this.localPatternCache.keys().next().value;
+        if (first) this.localPatternCache.delete(first);
+      }
+    }
+    return compiled;
   }
 
-  private matchesLocalPatterns(span: ReadableSpan): boolean {
-    const patterns = span.attributes?.["netra.local_blocked_spans"];
-    if (!Array.isArray(patterns)) return false;
+  private evictRememberedIfNeeded(): void {
+    if (this.rememberedBlockedParentMap.size <= FilteringSpanExporter.MAX_REMEMBERED_ENTRIES) {
+      return;
+    }
+    // Batch-evict 25% to amortize cost and avoid per-export eviction overhead
+    const toRemove = Math.max(
+      this.rememberedBlockedParentMap.size - FilteringSpanExporter.MAX_REMEMBERED_ENTRIES,
+      Math.ceil(FilteringSpanExporter.MAX_REMEMBERED_ENTRIES * 0.25),
+    );
+    const keys = Array.from(this.rememberedBlockedParentMap.keys()).slice(0, toRemove);
+    for (const key of keys) {
+      this.rememberedBlockedParentMap.delete(key);
+    }
+  }
 
-    return patterns.some((p) => {
-      if (typeof p !== "string") return false;
-
-      if (p.endsWith("*")) return span.name.startsWith(p.slice(0, -1));
-      if (p.startsWith("*")) return span.name.endsWith(p.slice(1));
-      return span.name === p;
-    });
+  private getLocalPatterns(span: ReadableSpan): string[] {
+    const value = span.attributes?.["netra.local_blocked_spans"];
+    if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+      return (value as string[]).filter((v) => v !== "");
+    }
+    return [];
   }
 
   private hasLocalBlockFlag(span: ReadableSpan): boolean {
     return span.attributes?.["netra.local_blocked"] === true;
   }
 
+  /**
+   * Walk up the blocked-parent chain for each surviving span and wrap it
+   * with a ReparentedSpan pointing to the nearest non-blocked ancestor.
+   *
+   * A cycle guard (visited set) prevents infinite loops in malformed traces.
+   */
   private reparentBlockedChildren(
     spans: ReadableSpan[],
-    blockedMap: Map<string, any>,
-  ) {
-    for (const span of spans) {
+    blockedMap: Map<string, SpanContext | undefined>,
+  ): void {
+    for (let i = 0; i < spans.length; i++) {
+      const span = spans[i];
       let parent = span.parentSpanContext;
+      if (!parent) continue;
+
       const visited = new Set<string>();
+      let changed = false;
 
       while (parent && blockedMap.has(parent.spanId)) {
         if (visited.has(parent.spanId)) break;
         visited.add(parent.spanId);
         parent = blockedMap.get(parent.spanId);
+        changed = true;
       }
 
-      if (parent !== span.parentSpanContext) {
-        (span as any)._parentSpanContext = parent;
+      if (changed) {
+        spans[i] = new ReparentedSpan(span, parent);
       }
     }
   }
