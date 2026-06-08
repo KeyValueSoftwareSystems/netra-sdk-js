@@ -571,9 +571,6 @@ function initOpenTelemetryInstrumentations(
 ): void {
   // HTTP/HTTPS instrumentation
   // Also auto-enabled when Express is requested (Express needs HTTP for traceparent propagation)
-  if (
-    !isBlocked(NetraInstruments.HTTP, blockInstruments) &&
-    (resolved.has(NetraInstruments.HTTP) || resolved.has(NetraInstruments.EXPRESS))
   // Shared URL exclusion — mirrors Python's OTEL_PYTHON_EXCLUDED_URLS global.
   // Always skips internal Netra egress; OTEL_NODE_EXCLUDED_URLS adds user patterns.
   let netraHost = "";
@@ -582,7 +579,7 @@ function initOpenTelemetryInstrumentations(
       netraHost = new URL(config.otlpEndpoint).host;
     }
   } catch {
-      console.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
+    console.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
   }
 
   // Comma-separated regex patterns (unanchored search). Precompiled once;
@@ -610,6 +607,9 @@ function initOpenTelemetryInstrumentations(
     return excludeRegexes.some((re) => re.test(url));
   };
 
+  if (
+    !isBlocked(NetraInstruments.HTTP, blockInstruments) &&
+    (resolved.has(NetraInstruments.HTTP) || resolved.has(NetraInstruments.EXPRESS))
   ) {
     try {
       const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
