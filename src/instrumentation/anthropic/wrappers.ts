@@ -1,6 +1,6 @@
 import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
+import { defineHidden, isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type AnthropicRequestType = "chat" | "beta" | "batches";
@@ -192,26 +192,47 @@ export const batchesWrapper = (tracer: Tracer) =>
   anthropicWrapper(tracer, BATCHES_SPAN_NAME, "batches"); 
 
 
+const WRAPPER_OWN_PROPS = new Set([
+  'span', 'messageStream', 'startTime', 'requestKwargs', 'completeResponse',
+  'processChunk', 'finalizeSpan', 'processEventData', 'finalizeSpanFromMessage',
+]);
+
+const EVENT_EMITTER_METHODS = new Set([
+  'on', 'once', 'off', 'removeListener', 'addListener',
+  'emit', 'removeAllListeners', 'listeners', 'listenerCount',
+]);
+
+const LISTENER_REGISTRATION_METHODS = new Set(['on', 'once', 'addListener']);
+
+const COMPLETION_METHODS = new Set(['finalMessage', 'done', 'finalText']);
+
+const TRACKED_STREAM_EVENTS = new Set(['message', 'contentBlock', 'text', 'finalMessage']);
+
 export class MessageStreamWrapper {
   private completeResponse: Record<string, any> = {
     content: [],
     model: "",
     usage: {},
   };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
+  private span!: Span;
+  private messageStream!: any;
+  private startTime!: number;
+  private requestKwargs!: Record<string, any>;
 
-  constructor(
-    private span: Span,
-    private messageStream: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
-  ) {
+  constructor(span: Span, messageStream: any, startTime: number, requestKwargs: Record<string, any>) {
+    defineHidden(this, "span", span);
+    defineHidden(this, "messageStream", messageStream);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
     // Use Proxy to delegate all properties and methods to messageStream
     return new Proxy(this, {
       get(target, prop, receiver) {
-        // Our own properties
-        if (prop === 'span' || prop === 'messageStream' || prop === 'startTime' || 
-            prop === 'requestKwargs' || prop === 'completeResponse' ||
-            prop === 'processChunk' || prop === 'finalizeSpan') {
+        if (prop === 'toJSON') {
+          return () => target.completeResponse;
+        }
+
+        if (typeof prop === 'string' && WRAPPER_OWN_PROPS.has(prop)) {
           return Reflect.get(target, prop, receiver);
         }
         
@@ -221,13 +242,10 @@ export class MessageStreamWrapper {
         }
         
         // Event emitter methods - need special handling to maintain 'this' context
-        if (prop === 'on' || prop === 'once' || prop === 'off' || prop === 'removeListener' || 
-            prop === 'addListener' || prop === 'emit' || prop === 'removeAllListeners' ||
-            prop === 'listeners' || prop === 'listenerCount') {
+        if (typeof prop === 'string' && EVENT_EMITTER_METHODS.has(prop)) {
           const method = target.messageStream[prop];
           if (typeof method === 'function') {
-            // Wrap event listeners to add instrumentation
-            if (prop === 'on' || prop === 'once' || prop === 'addListener') {
+            if (LISTENER_REGISTRATION_METHODS.has(prop)) {
               return function(event: string, listener: Function) {
                 // Wrap the listener to track events in our span
                 const wrappedListener = (...args: any[]) => {
@@ -235,9 +253,7 @@ export class MessageStreamWrapper {
                     'event.type': event,
                   });
                   
-                  // Process chunks for our complete response tracking
-                  if (event === 'message' || event === 'contentBlock' || 
-                      event === 'text' || event === 'finalMessage') {
+                  if (TRACKED_STREAM_EVENTS.has(event)) {
                     if (args[0]) {
                       target.processEventData(event, args[0]);
                     }
@@ -254,7 +270,7 @@ export class MessageStreamWrapper {
           return method;
         }
         
-        if (prop === 'finalMessage' || prop === 'done' || prop === 'finalText') {
+        if (typeof prop === 'string' && COMPLETION_METHODS.has(prop)) {
           const method = target.messageStream[prop];
           if (typeof method === 'function') {
             return async function(...args: any[]) {
@@ -284,6 +300,10 @@ export class MessageStreamWrapper {
         return value;
       }
     });
+  }
+
+  toJSON() {
+    return this.completeResponse;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
@@ -444,13 +464,22 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
+  private span!: Span;
+  private response!: any;
+  private startTime!: number;
+  private requestKwargs!: Record<string, any>;
 
-  constructor(
-    private span: Span,
-    private response: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
-  ) {}
+  constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
+  }
+
+  toJSON() {
+    return this.completeResponse;
+  }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
     return this;

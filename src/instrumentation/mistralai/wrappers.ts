@@ -10,7 +10,7 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { isPromise } from "../utils";
+import { defineHidden, isPromise } from "../utils";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -240,13 +240,22 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     choices: [],
     model: "",
   };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
+  private span!: Span;
+  private response!: unknown;
+  private startTime!: number;
+  private requestKwargs!: Record<string, unknown>;
 
-  constructor(
-    private span: Span,
-    private response: unknown,
-    private startTime: number,
-    private requestKwargs: Record<string, unknown>
-  ) {}
+  constructor(span: Span, response: unknown, startTime: number, requestKwargs: Record<string, unknown>) {
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
+  }
+
+  toJSON() {
+    return this.completeResponse;
+  }
 
   private isChat(): boolean {
     return (
@@ -423,11 +432,12 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 export class AsyncStreamingWrapper
   implements AsyncIterable<unknown>, AsyncIterator<unknown>
 {
-  private span: Span;
-  private response: unknown;
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
+  private span!: Span;
+  private response!: unknown;
   private iterator: AsyncIterator<unknown> | null = null;
-  private startTime: number;
-  private requestKwargs: Record<string, unknown>;
+  private startTime!: number;
+  private requestKwargs!: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
 
   constructor(
@@ -436,11 +446,15 @@ export class AsyncStreamingWrapper
     startTime: number,
     requestKwargs: Record<string, unknown>
   ) {
-    this.span = span;
-    this.response = response;
-    this.startTime = startTime;
-    this.requestKwargs = requestKwargs;
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
     this.completeResponse = { choices: [], model: "" };
+  }
+
+  toJSON() {
+    return this.completeResponse;
   }
 
   private isChat(): boolean {
