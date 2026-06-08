@@ -19,6 +19,8 @@ const NETRA_USER_OUTPUT = "netra.user.output";
 const NETRA_ENTITY_INPUT = "netra.entity.input";
 const NETRA_ENTITY_OUTPUT = "netra.entity.output";
 
+const MAX_PARSE_LEN = 1_000_000;
+
 type SetAttributeFn = (key: string, value: AttributeValue) => Span;
 
 function buildMessages(indexMap: Map<number, Record<string, string>>): string {
@@ -28,6 +30,8 @@ function buildMessages(indexMap: Map<number, Record<string, string>>): string {
 
 function extractTraceloopInput(raw: AttributeValue): string {
   try {
+    const str = String(raw);
+    if (typeof raw === "string" && str.length > MAX_PARSE_LEN) return str;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     const payload =
       parsed && typeof parsed === "object" && "inputs" in parsed
@@ -41,6 +45,8 @@ function extractTraceloopInput(raw: AttributeValue): string {
 
 function extractTraceloopOutput(raw: AttributeValue): string {
   try {
+    const str = String(raw);
+    if (typeof raw === "string" && str.length > MAX_PARSE_LEN) return str;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     const payload =
       parsed && typeof parsed === "object" && "outputs" in parsed
@@ -74,13 +80,21 @@ export class SpanIOProcessor implements SpanProcessor {
 
   onEnd(span: ReadableSpan): void {
     try {
-      const attrs = (span as any)._attributes;
-      if (!attrs || typeof attrs !== "object") return;
+      const attrs =
+        (span as any)._attributes ?? (span as any).attributes;
+      if (!attrs || typeof attrs !== "object") {
+        Logger.debug(
+          "SpanIOProcessor.onEnd: could not access span attributes — OTel SDK internal API may have changed",
+        );
+        return;
+      }
 
       try {
-        const userInput = attrs[NETRA_USER_INPUT];
-        if (userInput) {
-          attrs["input"] = userInput;
+        if (NETRA_USER_INPUT in attrs) {
+          const userInput = attrs[NETRA_USER_INPUT];
+          if (!isEmpty(userInput)) {
+            attrs["input"] = userInput;
+          }
           delete attrs[NETRA_USER_INPUT];
         }
       } catch (e) {
@@ -91,9 +105,11 @@ export class SpanIOProcessor implements SpanProcessor {
       }
 
       try {
-        const userOutput = attrs[NETRA_USER_OUTPUT];
-        if (userOutput) {
-          attrs["output"] = userOutput;
+        if (NETRA_USER_OUTPUT in attrs) {
+          const userOutput = attrs[NETRA_USER_OUTPUT];
+          if (!isEmpty(userOutput)) {
+            attrs["output"] = userOutput;
+          }
           delete attrs[NETRA_USER_OUTPUT];
         }
       } catch (e) {
@@ -121,8 +137,8 @@ export class SpanIOProcessor implements SpanProcessor {
   private _wrapSetAttribute(span: Span): void {
     const original: SetAttributeFn = span.setAttribute.bind(span);
 
-    const prompts = new Map<number, Record<string, string>>();
-    const completions = new Map<number, Record<string, string>>();
+    let prompts: Map<number, Record<string, string>> | undefined;
+    let completions: Map<number, Record<string, string>> | undefined;
 
     let genAiOwnsInput = false;
     let genAiOwnsOutput = false;
@@ -141,6 +157,7 @@ export class SpanIOProcessor implements SpanProcessor {
           original(key, value);
           const idx = parseInt(promptMatch[1], 10);
           const field = promptMatch[2];
+          if (!prompts) prompts = new Map();
           let entry = prompts.get(idx);
           if (!entry) {
             entry = {};
@@ -160,6 +177,7 @@ export class SpanIOProcessor implements SpanProcessor {
           original(key, value);
           const idx = parseInt(completionMatch[1], 10);
           const field = completionMatch[2];
+          if (!completions) completions = new Map();
           let entry = completions.get(idx);
           if (!entry) {
             entry = {};
