@@ -18,7 +18,7 @@ import {
   fimWrapper,
 } from "./wrappers";
 
-const INSTRUMENTATION_NAME = "netra.instrumentation.mistralai";
+const INSTRUMENTATION_NAME = "netra.instrumentation.mistral_ai";
 const INSTRUMENTS = ["@mistralai/mistralai >= 1.0.0"];
 
 // Store original methods for uninstrumentation
