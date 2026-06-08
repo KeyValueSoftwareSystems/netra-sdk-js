@@ -1,9 +1,11 @@
 import {
-  context,
+  Context,
   Span,
   SpanKind,
   SpanStatusCode,
   Tracer,
+  context,
+  trace,
 } from "@opentelemetry/api";
 import {
   defineHidden,
@@ -272,6 +274,7 @@ export class AsyncStreamingWrapper
 
 function executeStreaming(
   span: Span,
+  ctx: Context,
   kwargs: Record<string, unknown>,
   requestType: OpenAIRequestType,
   call: () => unknown,
@@ -279,7 +282,7 @@ function executeStreaming(
   const startTime = Date.now();
   try {
     setSpanRequestContext(span, kwargs, requestType);
-    const response = call();
+    const response = context.with(trace.setSpan(ctx, span), call);
 
     if (isPromise(response)) {
       return (async () => {
@@ -345,12 +348,13 @@ function openAIWrapper(
       return isPromise(result) ? result.then((v) => v) : result;
     }
 
+    const currentContext = context.active();
     const call = () => wrapped.call(instance, ...args);
     const isStreaming = kwargs.stream === true && STREAMING_TYPES.has(requestType);
 
     if (isStreaming) {
-      const span = tracer.startSpan(spanName, spanOpts, context.active());
-      return executeStreaming(span, kwargs, requestType, call);
+      const span = tracer.startSpan(spanName, spanOpts, currentContext);
+      return executeStreaming(span, currentContext, kwargs, requestType, call);
     }
 
     return tracer.startActiveSpan(spanName, spanOpts, (span) =>
