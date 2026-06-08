@@ -50,6 +50,7 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.0.1",
+    "@opentelemetry/instrumentation-undici": "^0.6.0",
     "@opentelemetry/otlp-transformer": "^0.211.0",
     "@opentelemetry/resources": "^2.0.1",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
@@ -106,7 +107,6 @@
     }
   },
   "devDependencies": {
-    "@opentelemetry/instrumentation-undici": "^0.6.0",
     "@types/node": "^25.0.0",
     "@types/shimmer": "^1.2.0",
     "ts-node": "^10.9.2",
