@@ -52,6 +52,9 @@ export {
 
 const require = createRequire(import.meta.url);
 
+let _httpInstrumentation: any = null;
+let _undiciInstrumentation: any = null;
+
 /**
  * Promise that resolves when custom instrumentations are initialized.
  * Can be awaited after calling initInstrumentations() to ensure
@@ -450,16 +453,87 @@ function initOpenTelemetryInstrumentations(
       instruments.has(NetraInstruments.HTTP) ||
       instruments.has(NetraInstruments.EXPRESS));
 
+  // Shared URL exclusion — mirrors Python's OTEL_PYTHON_EXCLUDED_URLS global.
+  // Always skips internal Netra egress; OTEL_NODE_EXCLUDED_URLS adds user patterns.
+  let netraHost = "";
+  try {
+    if (config.otlpEndpoint) {
+      netraHost = new URL(config.otlpEndpoint).host;
+    }
+  } catch {
+      console.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
+  }
+
+  // Comma-separated regex patterns (unanchored search). Precompiled once;
+  // invalid patterns are skipped so a bad entry never breaks instrumentation.
+  const excludeRegexes = (process.env.OTEL_NODE_EXCLUDED_URLS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern);
+      } catch {
+        if (config.debugMode) {
+          console.debug(
+            `Invalid OTEL_NODE_EXCLUDED_URLS pattern skipped: ${pattern}`,
+          );
+        }
+        return null;
+      }
+    })
+    .filter((re): re is RegExp => re !== null);
+
+  const isExcludedUrl = (url: string): boolean => {
+    if (netraHost && url.includes(netraHost)) return true;
+    return excludeRegexes.some((re) => re.test(url));
+  };
+
   if (httpEnabled) {
     try {
       const { HttpInstrumentation } = require("@opentelemetry/instrumentation-http");
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
-      registerInstrumentations({ instrumentations: [new HttpInstrumentation()] });
+      _httpInstrumentation = new HttpInstrumentation({
+        ignoreOutgoingRequestHook: (request: { host?: string; hostname?: string; path?: string }) => {
+          const url = `${request.host ?? request.hostname ?? ""}${request.path ?? ""}`;
+          return isExcludedUrl(url);
+        },
+      });
+      registerInstrumentations({ instrumentations: [_httpInstrumentation] });
       if (config.debugMode) {
         Logger.debug("HTTP instrumentation enabled");
       }
     } catch (e) {
       Logger.debug("HTTP instrumentation not available:", e);
+    }
+  }
+
+  // undici / native fetch instrumentation. instrumentation-http does NOT cover
+  // Node's global fetch (Node 18+) — it is backed by undici and bypasses the
+  // http module. This is the primary egress path for OpenAI/Anthropic/AI-SDK.
+  const fetchEnabled =
+    !blockInstruments?.has(NetraInstruments.FETCH) &&
+    (!instruments || instruments.has(NetraInstruments.FETCH));
+
+  if (fetchEnabled) {
+    try {
+      const { UndiciInstrumentation } = require("@opentelemetry/instrumentation-undici");
+      const { registerInstrumentations } = require("@opentelemetry/instrumentation");
+
+      _undiciInstrumentation = new UndiciInstrumentation({
+        ignoreRequestHook: (request: { origin?: string; path?: string }) => {
+          const url = `${request.origin ?? ""}${request.path ?? ""}`;
+          return isExcludedUrl(url);
+        },
+      });
+      registerInstrumentations({ instrumentations: [_undiciInstrumentation] });
+      if (config.debugMode) {
+        console.debug("Undici/fetch instrumentation enabled");
+      }
+    } catch (e) {
+      if (config.debugMode) {
+        console.debug("Undici/fetch instrumentation not available:", e);
+      }
     }
   }
 
@@ -706,5 +780,27 @@ export async function uninstrumentAll(): Promise<void> {
     }
   } catch (e) {
     Logger.debug("Failed to uninstrument OpenAI Agents SDK:", e);
+  }
+
+  // Uninstrument HTTP instrumentation
+  try {
+    if (_httpInstrumentation) {
+      _httpInstrumentation.disable();
+      _httpInstrumentation = null;
+      console.debug("HTTP instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument HTTP:", e);
+  }
+
+  // Uninstrument undici/fetch instrumentation
+  try {
+    if (_undiciInstrumentation) {
+      _undiciInstrumentation.disable();
+      _undiciInstrumentation = null;
+      console.debug("Undici/fetch instrumentation disabled");
+    }
+  } catch (e) {
+    console.debug("Failed to uninstrument undici:", e);
   }
 }

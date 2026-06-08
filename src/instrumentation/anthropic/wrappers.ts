@@ -25,13 +25,13 @@ function anthropicWrapper(
       const result = wrapped.call(instance, ...args);
       return isPromise(result) ? result.then((value) => value) : result;
     }
+    const currentContext = context.active();
     const isStreaming = args[0]?.stream === true;
     
     const activeSpan = trace.getSpan(context.active());
     Logger.debug(`Anthropic invoke (${requestType}). Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
 
     if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
-      const currentContext = context.active();
       const span = tracer.startSpan(spanName + ".create", {
         kind: SpanKind.CLIENT,
         attributes: {
@@ -46,7 +46,8 @@ function anthropicWrapper(
         const startTime = Date.now();
 
         // Call the original function and get the APIPromise
-        const response = wrapped.call(instance, ...args);
+        const spanContext = trace.setSpan(currentContext, span);
+        const response = context.with(spanContext, () => wrapped.call(instance, ...args));
 
         if (isPromise(response)) {
           return (async () => {
@@ -94,7 +95,8 @@ function anthropicWrapper(
           try {
             setRequestAttributes(span, kwargs, requestType);
             const startTime = Date.now();
-            const response = wrapped.call(instance, ...args);
+            const spanContext = trace.setSpan(currentContext, span);
+            const response = context.with(spanContext, () => wrapped.call(instance, ...args));
             if (isPromise(response)) {
               // Create a new promise that handles instrumentation
               const instrumentedPromise = (async () => {
