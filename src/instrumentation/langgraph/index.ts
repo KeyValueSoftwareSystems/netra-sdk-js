@@ -4,7 +4,7 @@ import { Logger } from "../../logger";
 import { __version__ } from "./version";
 import { LanggraphWrapper } from "./wrappers";
 
-const INSTRUMENTATION_NAME = "netra.instrumentation.langchain";
+const INSTRUMENTATION_NAME = "netra.instrumentation.langgraph";
 const INSTRUMENTS = ["langgraph >= 1.1.1"];
 
 let isInstrumented = false;

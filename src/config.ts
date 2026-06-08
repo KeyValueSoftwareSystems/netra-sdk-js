@@ -17,13 +17,21 @@ export interface NetraConfig {
   blockedSpans?: string[];
   instruments?: Set<NetraInstruments>;
   blockInstruments?: Set<NetraInstruments>;
+  rootInstruments?: Set<NetraInstruments>;
 }
 
 export enum NetraInstruments {
-  // LLM Providrs
+  /**
+   * Sentinel value: when included in `instruments` or `rootInstruments`,
+   * restores the legacy behaviour where every available instrumentation is
+   * enabled automatically (no curated default list is applied).
+   */
+  ALL = "__all__",
+
+  // LLM Providers
   OPENAI = "openai",
   GOOGLE_GENERATIVE_AI = "google_genai",
-  MISTRAL = "mistral",
+  MISTRAL = "mistral_ai",
   GROQ = "groq",
   VERTEX_AI = "vertexai",
   TOGETHER = "together",
@@ -35,32 +43,59 @@ export enum NetraInstruments {
   LLAMA_INDEX = "llama_index",
   OPENAI_AGENTS = "openai_agents",
 
-  // Vector Dbs
+  // Vector DBs
   PINECONE = "pinecone",
   QDRANT = "qdrant",
   CHROMADB = "chromadb",
 
   // HTTP Clients
   HTTP = "http",
-  HTTPS = "https",
-  FETCH = "fetch",
 
   // Databases
   PRISMA = "prisma",
   TYPEORM = "typeorm",
-  MONGODB = "mongodb",
-  POSTGRES = "postgres",
-  MYSQL = "mysql",
-  REDIS = "redis",
 
   // Web Frameworks
   EXPRESS = "express",
-  FASTIFY = "fastify",
-  NESTJS = "nestjs",
-
-  KAFKA = "kafka",
-  RABBITMQ = "rabbitmq",
 }
+
+/**
+ * Subset of DEFAULT_INSTRUMENTS allowed to produce root-level spans.
+ * Covers core LLM/AI providers and agent frameworks.
+ */
+export const DEFAULT_INSTRUMENTS_FOR_ROOT: Set<NetraInstruments> = new Set([
+  // LLM / AI providers
+  NetraInstruments.OPENAI,
+  NetraInstruments.ANTHROPIC,
+  NetraInstruments.GROQ,
+  NetraInstruments.MISTRAL,
+  NetraInstruments.GOOGLE_GENERATIVE_AI,
+  NetraInstruments.VERTEX_AI,
+  NetraInstruments.TOGETHER,
+  // AI frameworks
+  NetraInstruments.LANGCHAIN,
+  NetraInstruments.LANGGRAPH,
+  NetraInstruments.LLAMA_INDEX,
+]);
+
+/**
+ * Full set of instrumentations installed by default. Includes the root
+ * defaults plus common vector DBs, HTTP clients, and database libraries.
+ */
+export const DEFAULT_INSTRUMENTS: Set<NetraInstruments> = new Set([
+  ...DEFAULT_INSTRUMENTS_FOR_ROOT,
+  // Vector DBs
+  NetraInstruments.PINECONE,
+  NetraInstruments.QDRANT,
+  NetraInstruments.CHROMADB,
+  // HTTP
+  NetraInstruments.HTTP,
+  // Databases
+  NetraInstruments.PRISMA,
+  NetraInstruments.TYPEORM,
+  // Web Frameworks
+  NetraInstruments.EXPRESS,
+]);
 
 export class Config {
   static readonly SDK_NAME = "netra";

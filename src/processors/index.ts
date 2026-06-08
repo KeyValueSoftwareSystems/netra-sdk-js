@@ -14,4 +14,5 @@ export {
   SessionSpanProcessor,
   setSessionBaggage,
 } from "./session-span-processor";
+export { RootInstrumentFilterProcessor } from "./root-instrument-filter-processor";
 export { SpanIOProcessor } from "./span-io-processor";
