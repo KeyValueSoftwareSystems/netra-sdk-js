@@ -23,6 +23,7 @@ export {
   InstrumentationSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
+  SpanIOProcessor,
 } from "./processors";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";

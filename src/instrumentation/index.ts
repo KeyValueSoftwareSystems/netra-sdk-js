@@ -18,6 +18,7 @@ import {
   RootSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
+  SpanIOProcessor,
 } from "../processors";
 import { anthropicInstrumentor } from "./anthropic";
 import { googleGenerativeAIInstrumentor } from "./google-genai";
@@ -579,17 +580,22 @@ function addCustomSpanProcessors(
     const sessionProcessor = new SessionSpanProcessor();
     provider.addSpanProcessor(sessionProcessor);
 
-    // 3. LLM Trace Identifier Span Processor - marks root spans that contain LLM calls
+    // 3. Span I/O Processor - normalises input/output from gen_ai.prompt/completion
+    //    and traceloop.entity attributes; remaps traceloop.* → netra.*
+    const spanIOProcessor = new SpanIOProcessor();
+    provider.addSpanProcessor(spanIOProcessor);
+
+    // 4. LLM Trace Identifier Span Processor - marks root spans that contain LLM calls
     const llmTraceProcessor = new LlmTraceIdentifierSpanProcessor();
     provider.addSpanProcessor(llmTraceProcessor);
 
-    // 4. Root Span Processor - tracks the root span per trace by traceId.
+    // 5. Root Span Processor - tracks the root span per trace by traceId.
     //    Registered AFTER LlmTraceIdentifierSpanProcessor so that on_end cleanup
     //    happens after the LLM processor has finished annotating the root span.
     const rootSpanProcessor = new RootSpanProcessor();
     provider.addSpanProcessor(rootSpanProcessor);
 
-    // 5. Scrubbing Span Processor - scrubs sensitive data (if enabled)
+    // 6. Scrubbing Span Processor - scrubs sensitive data (if enabled)
     if (config.enableScrubbing) {
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);

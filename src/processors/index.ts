@@ -14,3 +14,4 @@ export {
   SessionSpanProcessor,
   setSessionBaggage,
 } from "./session-span-processor";
+export { SpanIOProcessor } from "./span-io-processor";
