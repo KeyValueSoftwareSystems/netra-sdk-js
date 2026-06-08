@@ -21,6 +21,20 @@ export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
   return value instanceof Promise;
 }
 
+/**
+ * Define a non-enumerable, writable, configurable property on `target`.
+ * Used to hide OTel internals (spans, contexts) from JSON.stringify
+ * while keeping them accessible to instance methods.
+ */
+export function defineHidden<T>(target: object, key: string, value: T): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
 export function isDict(v: unknown): v is Record<string, any> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }

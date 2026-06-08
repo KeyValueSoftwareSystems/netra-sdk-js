@@ -6,6 +6,7 @@ import {
   Tracer,
 } from "@opentelemetry/api";
 import {
+  defineHidden,
   isPromise,
   modelAsDict,
   shouldSuppressInstrumentation,
@@ -51,12 +52,24 @@ function finalizeSpanSuccess(
 
 abstract class BaseStreamHandler {
   protected completeResponse: StreamResponse = { choices: [], model: "" };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
+  protected span!: Span;
+  protected startTime!: number;
+  protected requestKwargs!: Record<string, unknown>;
 
   constructor(
-    protected span: Span,
-    protected startTime: number,
-    protected requestKwargs: Record<string, unknown>,
-  ) {}
+    span: Span,
+    startTime: number,
+    requestKwargs: Record<string, unknown>,
+  ) {
+    defineHidden(this, "span", span);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
+  }
+
+  toJSON(): StreamResponse {
+    return this.completeResponse;
+  }
 
   protected processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
@@ -148,14 +161,16 @@ export class StreamingWrapper
   implements Iterable<unknown>
 {
   private iterator: Iterator<unknown> | null = null;
+  private response!: unknown;
 
   constructor(
     span: Span,
-    private response: unknown,
+    response: unknown,
     startTime: number,
     requestKwargs: Record<string, unknown>,
   ) {
     super(span, startTime, requestKwargs);
+    defineHidden(this, "response", response);
   }
 
   [Symbol.iterator](): Iterator<unknown> {
@@ -199,14 +214,16 @@ export class AsyncStreamingWrapper
   implements AsyncIterable<unknown>
 {
   private iterator: AsyncIterator<unknown> | null = null;
+  private response!: unknown;
 
   constructor(
     span: Span,
-    private response: unknown,
+    response: unknown,
     startTime: number,
     requestKwargs: Record<string, unknown>,
   ) {
     super(span, startTime, requestKwargs);
+    defineHidden(this, "response", response);
   }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
