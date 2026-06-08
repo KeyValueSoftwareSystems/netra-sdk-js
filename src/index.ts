@@ -153,6 +153,9 @@ export class Netra {
     const cfg = new Config(config);
     this._config = cfg;
 
+    // Wire the logger before anything else so all modules respect debugMode.
+    Logger.setDebugMode(cfg.debugMode);
+
     // Initialize instrumentations and get effective provider
     const effectiveProvider = initInstrumentations(
       cfg,
