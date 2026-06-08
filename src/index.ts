@@ -15,7 +15,7 @@ import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
-import { SpanType, SpanCallback, SpanOptions } from "./types";
+import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
 
 export { Config, NetraInstruments } from "./config";
 export { agent, span, task, workflow } from "./decorators";
@@ -464,6 +464,7 @@ export class Netra {
       moduleName,
       spanType,
       this._tracer,
+      options?.blockedSpans,
     ).start();
   }
 
@@ -474,7 +475,7 @@ export class Netra {
     optionsOrFn: SpanOptions | SpanCallback<T>,
     fn?: SpanCallback<T>,
   ): T {
-    let attributes: Record<string, string> = {};
+    let attributes: SpanAttributes = {};
     let moduleName = this._SDK_NAME;
     let spanType: SpanType = SpanType.SPAN;
     let callback: SpanCallback<T>;
@@ -488,12 +489,17 @@ export class Netra {
       callback = fn!;
     }
 
+    const blockedSpans = typeof optionsOrFn === "function"
+      ? undefined
+      : optionsOrFn.blockedSpans;
+
     const spanWrapper = new SpanWrapper(
       name,
       attributes,
       moduleName,
       spanType,
       this._tracer,
+      blockedSpans,
     ).start();
 
     return spanWrapper.withActive(() => {
