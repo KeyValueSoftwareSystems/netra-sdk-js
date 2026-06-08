@@ -2,6 +2,7 @@ import { Tracer, Span, SpanKind, SpanStatusCode, context } from "@opentelemetry/
 import { Logger } from "../../logger";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
+  defineHidden,
   modelAsDict,
   isPromise,
   shouldSuppressInstrumentation,
@@ -146,16 +147,17 @@ export const chatWrapper = (tracer: Tracer) =>
 export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private iterator: Iterator<unknown> | null = null;
   private completeResponse: Record<string, any> = { choices: [], model: "" };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
 
   constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
-    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
-    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
-    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
-    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
   }
 
   toJSON() {
@@ -274,16 +276,17 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
 
   constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
-    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
-    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
-    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
-    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
   }
 
   toJSON() {

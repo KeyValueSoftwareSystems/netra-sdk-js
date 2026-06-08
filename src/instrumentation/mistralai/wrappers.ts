@@ -10,7 +10,7 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { isPromise } from "../utils";
+import { defineHidden, isPromise } from "../utils";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -240,16 +240,17 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     choices: [],
     model: "",
   };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: unknown;
   private startTime!: number;
   private requestKwargs!: Record<string, unknown>;
 
   constructor(span: Span, response: unknown, startTime: number, requestKwargs: Record<string, unknown>) {
-    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
-    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
-    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
-    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
   }
 
   toJSON() {
@@ -431,6 +432,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 export class AsyncStreamingWrapper
   implements AsyncIterable<unknown>, AsyncIterator<unknown>
 {
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: unknown;
   private iterator: AsyncIterator<unknown> | null = null;
@@ -444,10 +446,10 @@ export class AsyncStreamingWrapper
     startTime: number,
     requestKwargs: Record<string, unknown>
   ) {
-    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
-    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
-    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
-    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
     this.completeResponse = { choices: [], model: "" };
   }
 

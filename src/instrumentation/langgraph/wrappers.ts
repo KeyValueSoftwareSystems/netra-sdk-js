@@ -15,6 +15,7 @@ import {
 
 import { Logger } from "../../logger";
 import {
+  defineHidden,
   setResponseAttributes as setBaseResponseAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -386,16 +387,21 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
   private iterable: any;
   private output: Record<string, any> = {};
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private rootSpan!: Span;
   private rootContext!: Context;
 
   constructor(rootSpan: Span, rootContext: Context) {
-    Object.defineProperty(this, "rootSpan", { value: rootSpan, writable: true, enumerable: false });
-    Object.defineProperty(this, "rootContext", { value: rootContext, writable: true, enumerable: false });
+    defineHidden(this, "rootSpan", rootSpan);
+    defineHidden(this, "rootContext", rootContext);
   }
 
   toJSON() {
-    return this.output;
+    try {
+      return this.output;
+    } catch {
+      return {};
+    }
   }
 
   async startStream(

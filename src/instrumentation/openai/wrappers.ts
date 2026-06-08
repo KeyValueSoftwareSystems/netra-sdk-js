@@ -6,6 +6,7 @@ import {
   Tracer,
 } from "@opentelemetry/api";
 import {
+  defineHidden,
   isPromise,
   modelAsDict,
   shouldSuppressInstrumentation,
@@ -51,6 +52,7 @@ function finalizeSpanSuccess(
 
 abstract class BaseStreamHandler {
   protected completeResponse: StreamResponse = { choices: [], model: "" };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   protected span!: Span;
   protected startTime!: number;
   protected requestKwargs!: Record<string, unknown>;
@@ -60,11 +62,9 @@ abstract class BaseStreamHandler {
     startTime: number,
     requestKwargs: Record<string, unknown>,
   ) {
-    // Non-enumerable so JSON.stringify never walks into the OTel span's
-    // internal _spanProcessor graph (which is circular).
-    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
-    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
-    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+    defineHidden(this, "span", span);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
   }
 
   toJSON(): StreamResponse {
@@ -161,7 +161,7 @@ export class StreamingWrapper
   implements Iterable<unknown>
 {
   private iterator: Iterator<unknown> | null = null;
-  private response: unknown;
+  private response!: unknown;
 
   constructor(
     span: Span,
@@ -170,7 +170,7 @@ export class StreamingWrapper
     requestKwargs: Record<string, unknown>,
   ) {
     super(span, startTime, requestKwargs);
-    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
+    defineHidden(this, "response", response);
   }
 
   [Symbol.iterator](): Iterator<unknown> {
@@ -214,7 +214,7 @@ export class AsyncStreamingWrapper
   implements AsyncIterable<unknown>
 {
   private iterator: AsyncIterator<unknown> | null = null;
-  private response: unknown;
+  private response!: unknown;
 
   constructor(
     span: Span,
@@ -223,7 +223,7 @@ export class AsyncStreamingWrapper
     requestKwargs: Record<string, unknown>,
   ) {
     super(span, startTime, requestKwargs);
-    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
+    defineHidden(this, "response", response);
   }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {

@@ -1,6 +1,6 @@
 import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
+import { defineHidden, isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type AnthropicRequestType = "chat" | "beta" | "batches";
@@ -198,26 +198,28 @@ export class MessageStreamWrapper {
     model: "",
     usage: {},
   };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private messageStream!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
 
   constructor(span: Span, messageStream: any, startTime: number, requestKwargs: Record<string, any>) {
-    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
-    Object.defineProperty(this, "messageStream", { value: messageStream, writable: true, enumerable: false });
-    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
-    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+    defineHidden(this, "span", span);
+    defineHidden(this, "messageStream", messageStream);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
     // Use Proxy to delegate all properties and methods to messageStream
     return new Proxy(this, {
       get(target, prop, receiver) {
         if (prop === 'toJSON') {
           return () => target.completeResponse;
         }
-        // Our own properties
+        // Our own properties and private methods
         if (prop === 'span' || prop === 'messageStream' || prop === 'startTime' || 
             prop === 'requestKwargs' || prop === 'completeResponse' ||
-            prop === 'processChunk' || prop === 'finalizeSpan') {
+            prop === 'processChunk' || prop === 'finalizeSpan' ||
+            prop === 'processEventData' || prop === 'finalizeSpanFromMessage') {
           return Reflect.get(target, prop, receiver);
         }
         
@@ -290,6 +292,10 @@ export class MessageStreamWrapper {
         return value;
       }
     });
+  }
+
+  toJSON() {
+    return this.completeResponse;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
@@ -450,16 +456,17 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
 
   constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
-    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
-    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
-    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
-    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+    defineHidden(this, "span", span);
+    defineHidden(this, "response", response);
+    defineHidden(this, "startTime", startTime);
+    defineHidden(this, "requestKwargs", requestKwargs);
   }
 
   toJSON() {
