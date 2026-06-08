@@ -198,16 +198,22 @@ export class MessageStreamWrapper {
     model: "",
     usage: {},
   };
+  private span!: Span;
+  private messageStream!: any;
+  private startTime!: number;
+  private requestKwargs!: Record<string, any>;
 
-  constructor(
-    private span: Span,
-    private messageStream: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
-  ) {
+  constructor(span: Span, messageStream: any, startTime: number, requestKwargs: Record<string, any>) {
+    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
+    Object.defineProperty(this, "messageStream", { value: messageStream, writable: true, enumerable: false });
+    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
+    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
     // Use Proxy to delegate all properties and methods to messageStream
     return new Proxy(this, {
       get(target, prop, receiver) {
+        if (prop === 'toJSON') {
+          return () => target.completeResponse;
+        }
         // Our own properties
         if (prop === 'span' || prop === 'messageStream' || prop === 'startTime' || 
             prop === 'requestKwargs' || prop === 'completeResponse' ||
@@ -444,13 +450,21 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  private span!: Span;
+  private response!: any;
+  private startTime!: number;
+  private requestKwargs!: Record<string, any>;
 
-  constructor(
-    private span: Span,
-    private response: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
-  ) {}
+  constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
+    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
+    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
+    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
+    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+  }
+
+  toJSON() {
+    return this.completeResponse;
+  }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
     return this;

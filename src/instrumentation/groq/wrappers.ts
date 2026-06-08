@@ -146,13 +146,21 @@ export const chatWrapper = (tracer: Tracer) =>
 export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private iterator: Iterator<unknown> | null = null;
   private completeResponse: Record<string, any> = { choices: [], model: "" };
+  private span!: Span;
+  private response!: any;
+  private startTime!: number;
+  private requestKwargs!: Record<string, any>;
 
-  constructor(
-    private span: Span,
-    private response: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
-  ) {}
+  constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
+    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
+    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
+    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
+    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+  }
+
+  toJSON() {
+    return this.completeResponse;
+  }
 
   [Symbol.iterator](): Iterator<unknown> {
     return this;
@@ -266,13 +274,21 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  private span!: Span;
+  private response!: any;
+  private startTime!: number;
+  private requestKwargs!: Record<string, any>;
 
-  constructor(
-    private span: Span,
-    private response: any,
-    private startTime: number,
-    private requestKwargs: Record<string, any>
-  ) {}
+  constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
+    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
+    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
+    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
+    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+  }
+
+  toJSON() {
+    return this.completeResponse;
+  }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
     return this;

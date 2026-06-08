@@ -386,11 +386,17 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
 class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
   private iterable: any;
   private output: Record<string, any> = {};
+  private rootSpan!: Span;
+  private rootContext!: Context;
 
-  constructor(
-    private rootSpan: Span,
-    private rootContext: Context,
-  ) {}
+  constructor(rootSpan: Span, rootContext: Context) {
+    Object.defineProperty(this, "rootSpan", { value: rootSpan, writable: true, enumerable: false });
+    Object.defineProperty(this, "rootContext", { value: rootContext, writable: true, enumerable: false });
+  }
+
+  toJSON() {
+    return this.output;
+  }
 
   async startStream(
     originalFunc: (...args: any[]) => any,

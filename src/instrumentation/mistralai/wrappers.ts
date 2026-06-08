@@ -240,13 +240,21 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     choices: [],
     model: "",
   };
+  private span!: Span;
+  private response!: unknown;
+  private startTime!: number;
+  private requestKwargs!: Record<string, unknown>;
 
-  constructor(
-    private span: Span,
-    private response: unknown,
-    private startTime: number,
-    private requestKwargs: Record<string, unknown>
-  ) {}
+  constructor(span: Span, response: unknown, startTime: number, requestKwargs: Record<string, unknown>) {
+    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
+    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
+    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
+    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
+  }
+
+  toJSON() {
+    return this.completeResponse;
+  }
 
   private isChat(): boolean {
     return (
@@ -423,11 +431,11 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 export class AsyncStreamingWrapper
   implements AsyncIterable<unknown>, AsyncIterator<unknown>
 {
-  private span: Span;
-  private response: unknown;
+  private span!: Span;
+  private response!: unknown;
   private iterator: AsyncIterator<unknown> | null = null;
-  private startTime: number;
-  private requestKwargs: Record<string, unknown>;
+  private startTime!: number;
+  private requestKwargs!: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
 
   constructor(
@@ -436,11 +444,15 @@ export class AsyncStreamingWrapper
     startTime: number,
     requestKwargs: Record<string, unknown>
   ) {
-    this.span = span;
-    this.response = response;
-    this.startTime = startTime;
-    this.requestKwargs = requestKwargs;
+    Object.defineProperty(this, "span", { value: span, writable: true, enumerable: false });
+    Object.defineProperty(this, "response", { value: response, writable: true, enumerable: false });
+    Object.defineProperty(this, "startTime", { value: startTime, writable: true, enumerable: false });
+    Object.defineProperty(this, "requestKwargs", { value: requestKwargs, writable: true, enumerable: false });
     this.completeResponse = { choices: [], model: "" };
+  }
+
+  toJSON() {
+    return this.completeResponse;
   }
 
   private isChat(): boolean {
