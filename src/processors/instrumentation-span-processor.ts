@@ -14,6 +14,7 @@ import { Logger } from "../logger";
 // Allowed instrumentation names that we recognize and tag
 const ALLOWED_INSTRUMENTATION_NAMES = new Set([
   "openai",
+  "openai_agents",
   "groq",
   "mistral_ai",
   "mistralai",
