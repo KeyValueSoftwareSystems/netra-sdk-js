@@ -2,17 +2,19 @@ import {
   context as otelContext,
   propagation,
   ROOT_CONTEXT,
+  SpanContext,
+  trace,
 } from "@opentelemetry/api";
 import type { Baggage, Context, Span } from "@opentelemetry/api";
 import type {
   ReadableSpan,
   SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
+import { Logger } from "../logger";
+import { compilePatterns, matchesAnyPattern, CompiledPatterns } from "../utils/pattern-matching";
 
 export const LOCAL_BLOCKED_SPANS_BAGGAGE_KEY = "netra.local_blocked_spans";
 export const LOCAL_BLOCKED_SPANS_ATTR_KEY = "netra.local_blocked_spans";
-
-/* ---------------------------------- utils --------------------------------- */
 
 function decodePatterns(raw: string): string[] | null {
   try {
@@ -26,33 +28,30 @@ function decodePatterns(raw: string): string[] | null {
   return null;
 }
 
-function matchesAnyPattern(name: string, patterns: readonly string[]): boolean {
-  return patterns.some((p) => {
-    if (!p) return false;
-    if (p.endsWith("*") && !p.startsWith("*")) {
-      return name.startsWith(p.slice(0, -1));
-    }
-    if (p.startsWith("*") && !p.endsWith("*")) {
-      return name.endsWith(p.slice(1));
-    }
-    return name === p;
-  });
-}
-
-/* ----------------------- context-based local blocking ----------------------- */
-
-export async function withBlockedSpansLocal<T>(
+export function withBlockedSpansLocal<T>(
+  patterns: readonly string[],
+  fn: () => Promise<T>,
+): Promise<T>;
+export function withBlockedSpansLocal<T>(
+  patterns: readonly string[],
+  fn: () => T,
+): T;
+export function withBlockedSpansLocal<T>(
   patterns: readonly string[],
   fn: () => Promise<T> | T,
-): Promise<T> {
-  const payload = JSON.stringify(patterns.filter(Boolean));
+): Promise<T> | T {
+  const incoming = patterns.filter(Boolean);
   const activeCtx = otelContext.active();
 
-  // Always ensure baggage exists
   const baggage: Baggage =
     propagation.getBaggage(activeCtx) ??
     propagation.getBaggage(ROOT_CONTEXT) ??
     propagation.createBaggage();
+
+  const existingRaw = baggage.getEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY)?.value;
+  const existingPatterns = existingRaw ? (decodePatterns(existingRaw) ?? []) : [];
+  const merged = [...new Set([...existingPatterns, ...incoming])];
+  const payload = JSON.stringify(merged);
 
   const nextBaggage = baggage.setEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY, {
     value: payload,
@@ -62,37 +61,123 @@ export async function withBlockedSpansLocal<T>(
   return otelContext.with(nextCtx, fn);
 }
 
-/* -------------------------- span processor (mark) --------------------------- */
-
 export class LocalFilteringSpanProcessor implements SpanProcessor {
+  private static readonly MAX_ENTRIES = 10_000;
+
+  /**
+   * Instance-scoped registry: spanId → parent SpanContext.
+   *
+   * Populated in onStart when a span's name matches blocking patterns
+   * (both global and local). Shared with FilteringSpanExporter via
+   * constructor injection (as a ReadonlyMap) for reparenting.
+   *
+   * Eviction is size-based (FIFO) rather than per-span onEnd deletion to
+   * avoid a race condition: with SimpleSpanProcessor, onEnd fires before
+   * export(), so deleting here would remove entries the exporter still needs.
+   *
+   * This map solves a timing problem with SimpleSpanProcessor: a child span may
+   * be exported (and need reparenting) before its blocked parent is exported.
+   * Pre-registering the blocked parent here lets the exporter find it immediately.
+   */
+  private readonly _blockedParentMap = new Map<string, SpanContext | undefined>();
+
+  get blockedParentMap(): ReadonlyMap<string, SpanContext | undefined> {
+    return this._blockedParentMap;
+  }
+
+  private readonly globalCompiled: CompiledPatterns;
+
+  /** Cache for compiled local pattern sets from baggage. */
+  private readonly localPatternCache = new Map<string, CompiledPatterns>();
+  private static readonly MAX_LOCAL_PATTERN_CACHE = 50;
+
+  constructor(globalPatterns: string[] = []) {
+    this.globalCompiled = compilePatterns(globalPatterns);
+  }
+
   onStart(span: Span, parentContext: Context): void {
-    const bag = propagation.getBaggage(parentContext);
-    const raw = bag?.getEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY)?.value;
-    if (!raw) return;
+    try {
+      // The OTel API `Span` interface does not expose `.name`, but the SDK's
+      // concrete Span class (sdk-trace-base >=1.x) stores it as a public field.
+      // This cast relies on that implementation detail.
+      const name = (span as any).name as string | undefined;
+      if (!name) return;
 
-    const patterns = decodePatterns(raw);
-    if (!patterns || patterns.length === 0) return;
+      let blocked = false;
 
-    const name = (span as any).name as string | undefined;
-    if (!name) return;
+      if (matchesAnyPattern(name, this.globalCompiled)) {
+        blocked = true;
+      }
 
-    // expose patterns for exporter
-    span.setAttribute(LOCAL_BLOCKED_SPANS_ATTR_KEY, patterns);
+      const bag = propagation.getBaggage(parentContext);
+      const raw = bag?.getEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY)?.value;
 
-    if (matchesAnyPattern(name, patterns)) {
-      span.setAttribute("netra.local_blocked", true);
+      if (raw) {
+        const patterns = decodePatterns(raw);
+        if (patterns && patterns.length > 0) {
+          span.setAttribute(LOCAL_BLOCKED_SPANS_ATTR_KEY, patterns);
+
+          const compiled = this.getCompiledLocalPatterns(raw, patterns);
+          if (matchesAnyPattern(name, compiled)) {
+            span.setAttribute("netra.local_blocked", true);
+            blocked = true;
+          }
+        }
+      }
+
+      if (blocked) {
+        const spanId = span.spanContext().spanId;
+        const parentSpan = trace.getSpan(parentContext);
+        const parentSpanContext = parentSpan?.spanContext();
+        this._blockedParentMap.set(spanId, parentSpanContext);
+        this.evictIfNeeded();
+      }
+    } catch (e) {
+      Logger.debug("LocalFilteringSpanProcessor.onStart error:", e);
     }
   }
 
   onEnd(_span: ReadableSpan): void {
-    // no-op (exporter handles removal)
+    // No-op: cleanup is handled by size-based eviction in onStart and by
+    // FilteringSpanExporter.evictRememberedIfNeeded() to avoid race
+    // conditions with out-of-order export batches.
   }
 
   shutdown(): Promise<void> {
+    this._blockedParentMap.clear();
+    this.localPatternCache.clear();
     return Promise.resolve();
   }
 
   forceFlush(): Promise<void> {
     return Promise.resolve();
+  }
+
+  private getCompiledLocalPatterns(cacheKey: string, patterns: string[]): CompiledPatterns {
+    let compiled = this.localPatternCache.get(cacheKey);
+    if (!compiled) {
+      compiled = compilePatterns(patterns);
+      this.localPatternCache.set(cacheKey, compiled);
+      if (this.localPatternCache.size > LocalFilteringSpanProcessor.MAX_LOCAL_PATTERN_CACHE) {
+        const first = this.localPatternCache.keys().next().value;
+        if (first) this.localPatternCache.delete(first);
+      }
+    }
+    return compiled;
+  }
+
+  private evictIfNeeded(): void {
+    if (this._blockedParentMap.size <= LocalFilteringSpanProcessor.MAX_ENTRIES) {
+      return;
+    }
+    // Batch-evict 25% to amortize cost and avoid per-insertion eviction
+    const toRemove = Math.max(
+      this._blockedParentMap.size - LocalFilteringSpanProcessor.MAX_ENTRIES,
+      Math.ceil(LocalFilteringSpanProcessor.MAX_ENTRIES * 0.25),
+    );
+    const keys = Array.from(this._blockedParentMap.keys()).slice(0, toRemove);
+    for (const key of keys) {
+      this._blockedParentMap.delete(key);
+    }
   }
 }

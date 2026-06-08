@@ -35,10 +35,14 @@ export interface ActionModel {
   metadata?: Record<string, string>;
 }
 
+export type SpanAttributes = Record<string, string | string[] | boolean>;
+
 export interface SpanOptions {
-  attributes?: Record<string, string>;
+  attributes?: SpanAttributes;
   moduleName?: string;
   asType?: SpanType;
+  /** Patterns for blocking descendant spans (e.g. ["http.*", "*.resolve"]) */
+  blockedSpans?: string[];
 }
 
 export interface DecoratorOptions {
