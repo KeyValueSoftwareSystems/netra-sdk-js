@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0-beta.0] - 2026-06-08
+
+### Added
+
+- **OpenAI Agents Instrumentation**: Full instrumentation support for the `@openai/agents` SDK, including span creation, attribute extraction, and trace correlation for agent runs.
+- **Prompt Management Utility**: Added API client and utilities for fetching and managing prompts programmatically.
+- **Test Run Details Utility**: Added utility to fetch evaluation test run details via the API.
+- **HTTP Instrumentation Support**: Registered Express and HTTP instrumentation within the SDK for automatic HTTP span capture.
+- **Span Blocking Functionality**: Added local filtering span processor with pattern-matching support to selectively block spans from being exported.
+- **SpanIOProcessor**: New processor to normalise input/output attributes across different instrumentation providers.
+
+### Changed
+
+- **Label Made Optional**: The `label` parameter is now optional when fetching prompts, aligning with Python SDK behavior.
+- **SDK Parity with Python SDK**: Refactored core modules (decorators, session manager, instrumentation utilities) to reduce disparity with the Python SDK implementation.
+
+### Fixed
+
+- **Streaming Wrapper Serialization**: Made OTel properties on streaming wrappers non-enumerable to prevent circular JSON serialization errors in LangGraph, Mistral, and OpenAI instrumentations.
+
 ## [1.0.5] - 2026-02-18
 
 - Added support for audio duration & character count metric in dashboard query
