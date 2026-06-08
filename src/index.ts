@@ -29,6 +29,11 @@ export { SpanType } from "./types";
 export type { ActionModel, UsageModel, SpanOptions } from "./types";
 // Expose provider instrumentors for advanced usage/testing
 export { mistralAIInstrumentor } from "./instrumentation/mistralai";
+export {
+  NetraOpenAIAgentsInstrumentor,
+  openaiAgentsInstrumentor,
+  NetraAgentsTracingProcessor,
+} from "./instrumentation/openai-agents";
 
 // Export API types and classes
 export {

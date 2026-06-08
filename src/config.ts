@@ -33,6 +33,7 @@ export enum NetraInstruments {
   LANGCHAIN = "langchain",
   LANGGRAPH = "langgraph",
   LLAMA_INDEX = "llama_index",
+  OPENAI_AGENTS = "openai_agents",
 
   // Vector Dbs
   PINECONE = "pinecone",

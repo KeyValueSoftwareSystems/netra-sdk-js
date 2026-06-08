@@ -10,6 +10,8 @@ export enum SpanType {
   TOOL = "TOOL",
   EMBEDDING = "EMBEDDING",
   AGENT = "AGENT",
+  HANDOFF = "HANDOFF",
+  GUARDRAIL = "GUARDRAIL",
 }
 
 export enum ConversationType {
