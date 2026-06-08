@@ -18,6 +18,7 @@ import {
   RootSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
+  SpanIOProcessor,
 } from "../processors";
 import { anthropicInstrumentor } from "./anthropic";
 import { googleGenerativeAIInstrumentor } from "./google-genai";
@@ -673,10 +674,22 @@ function addCustomSpanProcessors(
       return null;
     }
 
+    // ─── Processor registration order matters ───
+    // Processors that wrap span.setAttribute form an implicit call chain:
+    //   InstrumentationSpanProcessor (#1) wraps setAttribute for truncation,
+    //   then SpanIOProcessor (#3) wraps the already-wrapped setAttribute for
+    //   IO normalisation. Reordering these will break the chain silently.
+    //
+    // onEnd runs in registration order: SpanIOProcessor (#3) promotes
+    // netra.user.input/output → input/output BEFORE RootSpanProcessor (#5)
+    // cleans up its root span map.
+
     // 0. Local Filtering Span Processor - filters spans based on local context
     provider.addSpanProcessor(localFilteringProcessor);
 
-    // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name
+    // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name.
+    //    MUST run before SpanIOProcessor so the IO processor's setAttribute wrapper
+    //    captures the truncation wrapper in its call chain.
     const instrumentationProcessor = new InstrumentationSpanProcessor();
     provider.addSpanProcessor(instrumentationProcessor);
 
@@ -684,17 +697,26 @@ function addCustomSpanProcessors(
     const sessionProcessor = new SessionSpanProcessor();
     provider.addSpanProcessor(sessionProcessor);
 
-    // 3. LLM Trace Identifier Span Processor - marks root spans that contain LLM calls
+    // 3. Span I/O Processor - normalises input/output from gen_ai.prompt/completion
+    //    and traceloop.entity attributes; remaps traceloop.* → netra.*
+    //    MUST run after InstrumentationSpanProcessor (captures its setAttribute wrapper).
+    //    MUST run before RootSpanProcessor (promotes netra.user.* in onEnd first).
+    const spanIOProcessor = new SpanIOProcessor();
+    provider.addSpanProcessor(spanIOProcessor);
+
+    // 4. LLM Trace Identifier Span Processor - marks root spans that contain LLM calls
     const llmTraceProcessor = new LlmTraceIdentifierSpanProcessor();
     provider.addSpanProcessor(llmTraceProcessor);
 
-    // 4. Root Span Processor - tracks the root span per trace by traceId.
+    // 5. Root Span Processor - tracks the root span per trace by traceId.
     //    Registered AFTER LlmTraceIdentifierSpanProcessor so that on_end cleanup
     //    happens after the LLM processor has finished annotating the root span.
+    //    Registered AFTER SpanIOProcessor so root spans have setAttribute wrapped
+    //    before being stored in the root span map.
     const rootSpanProcessor = new RootSpanProcessor();
     provider.addSpanProcessor(rootSpanProcessor);
 
-    // 5. Scrubbing Span Processor - scrubs sensitive data (if enabled)
+    // 6. Scrubbing Span Processor - scrubs sensitive data (if enabled)
     if (config.enableScrubbing) {
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);
