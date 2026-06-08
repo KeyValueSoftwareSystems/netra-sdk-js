@@ -35,6 +35,8 @@ const ALLOWED_INSTRUMENTATION_NAMES = new Set([
   "adk",
   "httpx",
   "aiohttp",
+  "undici",
+  "fetch",
   "cerebras",
   "deepgram",
   "cartesia",
