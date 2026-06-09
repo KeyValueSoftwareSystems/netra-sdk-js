@@ -19,6 +19,53 @@ type MethodDecoratorFn = (
 ) => void;
 type UnifiedDecorator = ClassDecoratorFn & MethodDecoratorFn;
 
+/**
+ * Checks whether `value` is a non-serializable runtime object (streams,
+ * sockets, HTTP messages, etc.) by duck-typing rather than brittle
+ * constructor-name matching.
+ */
+function nonSerializableTag(value: object): string | null {
+  const v = value as any;
+  // EventEmitter with a file descriptor → net.Socket / TLSSocket
+  if (typeof v._handle === "object" && typeof v.remoteAddress === "string")
+    return "Socket";
+  // Node HTTP ServerResponse / IncomingMessage
+  if (typeof v.writeHead === "function" && typeof v.statusCode === "number")
+    return "ServerResponse";
+  if (typeof v.httpVersion === "string" && typeof v.headers === "object")
+    return "IncomingMessage";
+  // Any Readable/Writable/Duplex/Transform stream
+  if (typeof v.pipe === "function")
+    return `Stream`;
+  return null;
+}
+
+/**
+ * Build a JSON.stringify replacer that gracefully handles circular
+ * references, non-serializable Node objects, functions, and BigInts.
+ */
+function safeReplacer(): (key: string, value: unknown) => unknown {
+  const seen = new WeakSet<object>();
+  return (_key: string, value: unknown): unknown => {
+    if (typeof value === "function") return `[Function: ${value.name || "anonymous"}]`;
+    if (typeof value === "bigint") return value.toString();
+    if (value === null || typeof value !== "object") return value;
+
+    if (seen.has(value)) return "[Circular]";
+    seen.add(value);
+
+    const tag = nonSerializableTag(value);
+    if (tag) return `[${tag}]`;
+
+    return value;
+  };
+}
+
+function safeJsonStringify(value: unknown, maxLength?: number): string {
+  const str = JSON.stringify(value, safeReplacer());
+  return maxLength && str.length > maxLength ? str.substring(0, maxLength) : str;
+}
+
 function serializeValue(value: any): string {
   try {
     if (
@@ -30,7 +77,7 @@ function serializeValue(value: any): string {
     ) {
       return String(value);
     } else if (Array.isArray(value) || typeof value === "object") {
-      return JSON.stringify(value).substring(0, 1000);
+      return safeJsonStringify(value, 1000);
     } else {
       return String(value).substring(0, 1000);
     }
@@ -65,7 +112,7 @@ function addInputAttributes(
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
   try {
     if (args.length > 0) {
-      span.setAttribute("input", JSON.stringify(args));
+      span.setAttribute("input", safeJsonStringify(args));
     }
   } catch (e) {
     span.setAttribute("input_error", String(e));
