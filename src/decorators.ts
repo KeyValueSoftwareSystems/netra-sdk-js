@@ -19,25 +19,38 @@ type MethodDecoratorFn = (
 ) => void;
 type UnifiedDecorator = ClassDecoratorFn & MethodDecoratorFn;
 
-function serializeValue(value: any): string {
+/**
+ * Circular-reference-safe JSON.stringify. Non-serializable values
+ * (functions, symbols, cycles, complex class instances) become
+ * descriptive placeholders instead of throwing.
+ */
+function safeStringify(value: any, maxLen = 1000): string {
+  const seen = new WeakSet<object>();
   try {
-    if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean" ||
-      value === null ||
-      value === undefined
-    ) {
-      return String(value);
-    } else if (Array.isArray(value) || typeof value === "object") {
-      return JSON.stringify(value).substring(0, 1000);
-    } else {
-      return String(value).substring(0, 1000);
-    }
-  } catch (e) {
-    Logger.warn("serializeValue: serialization failed, falling back to type name:", e);
-    return String(typeof value);
+    return JSON.stringify(value, (_key, val) => {
+      if (typeof val === "function") return `[Function: ${val.name || "anonymous"}]`;
+      if (typeof val === "symbol") return val.toString();
+      if (typeof val === "bigint") return val.toString();
+      if (val !== null && typeof val === "object") {
+        if (seen.has(val)) return "[Circular]";
+        seen.add(val);
+        const name = val.constructor?.name;
+        if (name && name !== "Object" && name !== "Array" && Object.keys(val).length > 20) {
+          return `[${name}]`;
+        }
+      }
+      return val;
+    }).substring(0, maxLen);
+  } catch {
+    return value?.constructor?.name ? `[${value.constructor.name}]` : String(typeof value);
   }
+}
+
+function serializeValue(value: any): string {
+  if (value === null || value === undefined) return String(value);
+  const t = typeof value;
+  if (t === "string" || t === "number" || t === "boolean") return String(value);
+  return safeStringify(value);
 }
 
 /**
@@ -63,12 +76,8 @@ function addInputAttributes(
   entityType: string,
 ): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
-  try {
-    if (args.length > 0) {
-      span.setAttribute("input", JSON.stringify(args));
-    }
-  } catch (e) {
-    span.setAttribute("input_error", String(e));
+  if (args.length > 0) {
+    span.setAttribute("input", safeStringify(args));
   }
 }
 
