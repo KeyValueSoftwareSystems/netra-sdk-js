@@ -463,6 +463,7 @@ export function initInstrumentations(
     config,
     tracerProvider,
     customInstrumentModules,
+    blockInstruments,
   );
 
   // Initialize additional OpenTelemetry instrumentations (uses resolved set)
@@ -495,6 +496,7 @@ async function initCustomInstrumentationsAsync(
   config: Config,
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   customInstrumentModules: Record<string, boolean>,
+  blockInstruments?: Set<NetraInstruments>,
 ): Promise<void> {
   if (customInstrumentModules.mistral) {
     try {
@@ -633,8 +635,8 @@ function initOpenTelemetryInstrumentations(
   // Node's global fetch (Node 18+) — it is backed by undici and bypasses the
   // http module. This is the primary egress path for OpenAI/Anthropic/AI-SDK.
   const fetchEnabled =
-    !blockInstruments?.has(NetraInstruments.FETCH) &&
-    (!instruments || instruments.has(NetraInstruments.FETCH));
+    !isBlocked(NetraInstruments.HTTP, blockInstruments) &&
+    resolved.has(NetraInstruments.HTTP);
 
   if (fetchEnabled) {
     try {
