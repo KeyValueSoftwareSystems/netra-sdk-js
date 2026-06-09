@@ -12,6 +12,7 @@ import { AsyncLocalStorage } from "async_hooks";
 import { Config } from "./config";
 import { Logger } from "./logger";
 import { RootSpanProcessor } from "./processors/root-span-processor";
+import { safeJsonStringify } from "./safe-stringify";
 import { ConversationType } from "./types";
 
 export { ConversationType };
@@ -67,7 +68,7 @@ function serializeValue(value: any): string {
   if (typeof value === "string") {
     return value.substring(0, Config.ATTRIBUTE_MAX_LEN);
   }
-  return JSON.stringify(value).substring(0, Config.ATTRIBUTE_MAX_LEN);
+  return safeJsonStringify(value, Config.ATTRIBUTE_MAX_LEN);
 }
 
 // SessionManager

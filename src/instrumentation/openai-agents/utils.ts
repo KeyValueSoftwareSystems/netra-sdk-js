@@ -1,17 +1,13 @@
 import { SpanType } from "../../types";
 import { MAX_STRINGIFY_LENGTH } from "./constants";
+import { safeJsonStringify as _safeJsonStringify } from "../../safe-stringify";
 import { AgentSpan, SpanData } from "./types";
 
 export function safeJsonStringify(obj: unknown, maxLength: number = MAX_STRINGIFY_LENGTH): string {
-  try {
-    if (typeof obj === "string") {
-      return maxLength > 0 && obj.length > maxLength ? obj.slice(0, maxLength) : obj;
-    }
-    const s = JSON.stringify(obj);
-    return maxLength > 0 && s.length > maxLength ? s.slice(0, maxLength) : s;
-  } catch {
-    return String(obj);
+  if (typeof obj === "string") {
+    return maxLength > 0 && obj.length > maxLength ? obj.slice(0, maxLength) : obj;
   }
+  return _safeJsonStringify(obj, maxLength);
 }
 
 export function getNetraSpanType(data: SpanData): SpanType {
