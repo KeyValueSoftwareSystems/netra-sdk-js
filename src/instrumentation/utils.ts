@@ -127,12 +127,23 @@ export function recordSpanTiming(
 }
 
 /**
- * Records TTFT and RTTFT span attributes at the given (or current) instant.
- * Callers must guard with their own `firstTokenRecorded` flag to ensure
- * this is called at most once per span.
+ * Records LLM response timing attributes on a span.
+ *
+ * Always records TTFT and RTTFT. When `startTime` is provided, also records
+ * `llm.response.duration` (elapsed from `startTime` to `eventTime`).
+ *
+ * For non-streaming calls, pass `startTime` to record all three attributes at once.
+ * For streaming first-token, omit `startTime` to record only TTFT/RTTFT.
+ * Callers on streaming paths must guard with a `firstTokenRecorded` flag.
  */
-export function recordFirstTokenTiming(span: Span, eventTime?: number): void {
+export function recordResponseTiming(
+  span: Span,
+  { startTime, eventTime }: { startTime?: number; eventTime?: number } = {},
+): void {
   const t = eventTime ?? Date.now();
+  if (startTime !== undefined) {
+    recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, t, { referenceTime: startTime });
+  }
   recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, t, { recordEventTimestamp: true });
   recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, t, { useRootSpan: true });
 }

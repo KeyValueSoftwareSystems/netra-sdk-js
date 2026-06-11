@@ -5,7 +5,7 @@ import {
   defineHidden,
   modelAsDict,
   isPromise,
-  recordFirstTokenTiming,
+  recordResponseTiming,
   recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -97,8 +97,7 @@ function groqWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
-                  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordFirstTokenTiming(span, endTime);
+                  recordResponseTiming(span, { startTime, eventTime: endTime });
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -118,8 +117,7 @@ function groqWrapper(
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
-              recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-              recordFirstTokenTiming(span, endTime);
+              recordResponseTiming(span, { startTime, eventTime: endTime });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -222,7 +220,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         if (delta?.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordFirstTokenTiming(this.span);
+            recordResponseTiming(this.span);
           }
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
@@ -366,7 +364,7 @@ export class AsyncStreamingWrapper
         if (typeof delta === "object" && delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordFirstTokenTiming(this.span);
+            recordResponseTiming(this.span);
           }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];

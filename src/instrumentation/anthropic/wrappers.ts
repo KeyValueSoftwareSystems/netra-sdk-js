@@ -1,6 +1,6 @@
 import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, modelAsDict, recordFirstTokenTiming, recordSpanTiming, shouldSuppressInstrumentation } from "../utils";
+import { defineHidden, isPromise, modelAsDict, recordResponseTiming, recordSpanTiming, shouldSuppressInstrumentation } from "../utils";
 import { SpanAttributes } from "../span-attributes";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
@@ -106,8 +106,7 @@ function anthropicWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
-                  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordFirstTokenTiming(span, endTime);
+                  recordResponseTiming(span, { startTime, eventTime: endTime });
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -159,8 +158,7 @@ function anthropicWrapper(
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
-              recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-              recordFirstTokenTiming(span, endTime);
+              recordResponseTiming(span, { startTime, eventTime: endTime });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -403,7 +401,7 @@ export class MessageStreamWrapper {
         if (lastBlock && chunk.delta?.text) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordFirstTokenTiming(this.span);
+            recordResponseTiming(this.span);
           }
           lastBlock.text += chunk.delta.text;
         }
@@ -554,7 +552,7 @@ export class AsyncStreamingWrapper
         if (lastBlock && chunk.delta?.text) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordFirstTokenTiming(this.span);
+            recordResponseTiming(this.span);
           }
           lastBlock.text += chunk.delta.text;
         }

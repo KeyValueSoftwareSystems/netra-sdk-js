@@ -10,7 +10,7 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, recordFirstTokenTiming, recordSpanTiming } from "../utils";
+import { defineHidden, isPromise, recordResponseTiming, recordSpanTiming } from "../utils";
 import { SpanAttributes } from "../span-attributes";
 import {
   modelAsDict,
@@ -64,8 +64,7 @@ function mistralWrapper(
                 const value = await response;
                 const endTime = Date.now();
                 setResponseAttributes(span, modelAsDict(value));
-                recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                recordFirstTokenTiming(span, endTime);
+                recordResponseTiming(span, { startTime, eventTime: endTime });
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return value;
@@ -85,8 +84,7 @@ function mistralWrapper(
 
           const endTime = Date.now();
           setResponseAttributes(span, modelAsDict(response));
-          recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-          recordFirstTokenTiming(span, endTime);
+          recordResponseTiming(span, { startTime, eventTime: endTime });
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;
@@ -343,7 +341,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
           if (typeof delta === "object" && delta.content) {
             if (!this.firstTokenRecorded) {
               this.firstTokenRecorded = true;
-              recordFirstTokenTiming(this.span);
+              recordResponseTiming(this.span);
             }
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
@@ -382,7 +380,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         if (typeof delta === "object" && delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordFirstTokenTiming(this.span);
+            recordResponseTiming(this.span);
           }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
@@ -568,7 +566,7 @@ export class AsyncStreamingWrapper
           if (typeof delta === "object" && delta.content) {
             if (!this.firstTokenRecorded) {
               this.firstTokenRecorded = true;
-              recordFirstTokenTiming(this.span);
+              recordResponseTiming(this.span);
             }
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
@@ -607,7 +605,7 @@ export class AsyncStreamingWrapper
         if (typeof delta === "object" && delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordFirstTokenTiming(this.span);
+            recordResponseTiming(this.span);
           }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];

@@ -9,7 +9,7 @@ import { Logger } from "../../logger";
 import {
   isPromise,
   modelAsDict,
-  recordFirstTokenTiming,
+  recordResponseTiming,
   recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -67,8 +67,7 @@ function googleGenAIWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
-                  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordFirstTokenTiming(span, endTime);
+                  recordResponseTiming(span, { startTime, eventTime: endTime });
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -88,8 +87,7 @@ function googleGenAIWrapper(
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
-              recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-              recordFirstTokenTiming(span, endTime);
+              recordResponseTiming(span, { startTime, eventTime: endTime });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -174,8 +172,7 @@ function googleGenAIStreamWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(streamResult);
                   setResponseAttributes(span, responseDict);
-                  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordFirstTokenTiming(span, endTime);
+                  recordResponseTiming(span, { startTime, eventTime: endTime });
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return streamResult;
@@ -237,7 +234,7 @@ function googleGenAIStreamWrapper(
                             if (typeof t === "string") {
                               if (t && !firstTokenRecorded) {
                                 firstTokenRecorded = true;
-                                recordFirstTokenTiming(span);
+                                recordResponseTiming(span);
                               }
                               finalText += t;
                             }

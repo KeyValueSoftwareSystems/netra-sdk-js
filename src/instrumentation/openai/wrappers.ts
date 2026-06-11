@@ -11,7 +11,7 @@ import {
   defineHidden,
   isPromise,
   modelAsDict,
-  recordFirstTokenTiming,
+  recordResponseTiming,
   recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -51,8 +51,7 @@ function finalizeSpanSuccess(
 ): void {
   const endTime = Date.now();
   setResponseAttributes(span, response);
-  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-  recordFirstTokenTiming(span, endTime);
+  recordResponseTiming(span, { startTime, eventTime: endTime });
   span.setStatus({ code: SpanStatusCode.OK });
   span.end();
 }
@@ -95,7 +94,7 @@ abstract class BaseStreamHandler {
         if (delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordFirstTokenTiming(this.span);
+            recordResponseTiming(this.span);
           }
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
@@ -122,7 +121,7 @@ abstract class BaseStreamHandler {
     if (responseChunk?.status === "completed") {
       if (!this.firstTokenRecorded) {
         this.firstTokenRecorded = true;
-        recordFirstTokenTiming(this.span);
+        recordResponseTiming(this.span);
       }
       const outputs = (responseChunk.output ?? []) as Array<
         Record<string, unknown>
@@ -159,7 +158,7 @@ abstract class BaseStreamHandler {
       setResponseAttributes(this.span, this.completeResponse as Record<string, unknown>);
       recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
       if (!this.firstTokenRecorded) {
-        recordFirstTokenTiming(this.span);
+        recordResponseTiming(this.span);
       }
       this.span.setStatus({ code: SpanStatusCode.OK });
       this.span.end();
