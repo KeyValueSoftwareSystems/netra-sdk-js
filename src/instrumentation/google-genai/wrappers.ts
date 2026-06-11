@@ -9,8 +9,10 @@ import { Logger } from "../../logger";
 import {
   isPromise,
   modelAsDict,
+  recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
+import { SpanAttributes } from "../span-attributes";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type GoogleGenAIRequestType = "chat" | "embedding";
@@ -64,12 +66,9 @@ function googleGenAIWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
-                  span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
-                  );
+                  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -89,10 +88,9 @@ function googleGenAIWrapper(
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
-              span.setAttribute(
-                "llm.response.duration",
-                (endTime - startTime) / 1000,
-              );
+              recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -177,12 +175,9 @@ function googleGenAIStreamWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(streamResult);
                   setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
-                  span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
-                  );
+                  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return streamResult;
@@ -225,11 +220,7 @@ function googleGenAIStreamWrapper(
                               setResponseAttributes(span, responseDict);
                             }
 
-                            const duration = (endTime - startTime) / 1000;
-                            span.setAttribute(
-                              "llm.response.duration",
-                              duration,
-                            );
+                            recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
                             span.setStatus({ code: SpanStatusCode.OK });
                             span.end();
                             return res;
@@ -247,11 +238,10 @@ function googleGenAIStreamWrapper(
                                 : chunk?.text;
                             if (typeof t === "string") {
                               if (t && !firstTokenRecorded) {
-                                span.setAttribute(
-                                  "gen_ai.performance.time_to_first_token",
-                                  (Date.now() - startTime) / 1000,
-                                );
                                 firstTokenRecorded = true;
+                                const now = Date.now();
+                                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+                                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
                               }
                               finalText += t;
                             }
@@ -277,9 +267,7 @@ function googleGenAIStreamWrapper(
                       },
                       async return() {
                         // Called if consumer stops early (break)
-                        const endTime = Date.now();
-                        const duration = (endTime - startTime) / 1000;
-                        span.setAttribute("llm.response.duration", duration);
+                        recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: startTime });
                         span.setStatus({ code: SpanStatusCode.OK });
                         span.end();
                         return { value: undefined, done: true };

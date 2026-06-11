@@ -6,6 +6,7 @@
 import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { RootSpanProcessor } from "../processors/root-span-processor";
 import { SpanAttributes } from "./span-attributes";
 
 // Suppression
@@ -33,6 +34,96 @@ export function defineHidden<T>(target: object, key: string, value: T): void {
     enumerable: false,
     configurable: true,
   });
+}
+
+const TIMESTAMP_ATTRIBUTE_SUFFIX = ".timestamp";
+
+/**
+ * Extracts the start time of an OTel span as milliseconds since epoch.
+ *
+ * The OTel JS SDK stores `startTime` as an `HrTime` tuple `[seconds, nanos]`.
+ * Returns `undefined` if the start time cannot be resolved.
+ */
+function getSpanStartTimeMs(span: Span): number | undefined {
+  const readable = span as unknown as { startTime?: [number, number] };
+  if (Array.isArray(readable.startTime) && readable.startTime.length === 2) {
+    const [seconds, nanos] = readable.startTime;
+    return seconds * 1000 + nanos / 1e6;
+  }
+  return undefined;
+}
+
+/**
+ * Compute elapsed time for an event and set it as a span attribute.
+ *
+ * Elapsed time is measured from:
+ *   - `referenceTime` (ms since epoch) if provided explicitly.
+ *   - `useRootSpan=false` (default): the start time of the given span.
+ *   - `useRootSpan=true`: the start time of the root span for the trace.
+ *
+ * @param span                - The span on which to record the timing attribute.
+ * @param attribute           - The attribute key under which elapsed time is stored.
+ * @param eventTime           - Event timestamp in ms since epoch. Defaults to Date.now().
+ * @param useRootSpan         - If true, elapsed time is measured from the root span's
+ *                              start time. Ignored when `referenceTime` is provided.
+ * @param referenceTime       - Explicit reference timestamp in ms since epoch.
+ *                              When provided, elapsed = eventTime − referenceTime.
+ * @param recordEventTimestamp - If true, also stores the event time as a UTC ISO-8601
+ *                              string under `{attribute}.timestamp`.
+ * @returns true if the timing attribute was successfully set.
+ */
+export function recordSpanTiming(
+  span: Span,
+  attribute: string,
+  eventTime?: number,
+  {
+    useRootSpan = false,
+    referenceTime,
+    recordEventTimestamp = false,
+  }: {
+    useRootSpan?: boolean;
+    referenceTime?: number;
+    recordEventTimestamp?: boolean;
+  } = {},
+): boolean {
+  if (!span.isRecording()) return false;
+
+  const t = eventTime ?? Date.now();
+
+  let elapsed: number | undefined;
+
+  if (referenceTime !== undefined) {
+    elapsed = (t - referenceTime) / 1000;
+  } else {
+    let startMs: number | undefined;
+
+    if (!useRootSpan) {
+      startMs = getSpanStartTimeMs(span);
+    } else {
+      try {
+        const rootSpan = RootSpanProcessor.getRootSpan(span);
+        if (rootSpan) {
+          startMs = getSpanStartTimeMs(rootSpan);
+        }
+      } catch {
+        // Best-effort: root span lookup can fail
+      }
+    }
+
+    if (startMs === undefined) return false;
+    elapsed = (t - startMs) / 1000;
+  }
+
+  span.setAttribute(attribute, elapsed);
+
+  if (recordEventTimestamp) {
+    span.setAttribute(
+      `${attribute}${TIMESTAMP_ATTRIBUTE_SUFFIX}`,
+      new Date(t).toISOString(),
+    );
+  }
+
+  return true;
 }
 
 export function isDict(v: unknown): v is Record<string, any> {

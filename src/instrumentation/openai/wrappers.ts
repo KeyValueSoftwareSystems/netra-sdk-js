@@ -11,10 +11,12 @@ import {
   defineHidden,
   isPromise,
   modelAsDict,
+  recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import { OpenAIRequestType, StreamResponse, WrapperFn } from "./types";
+import { SpanAttributes } from "../span-attributes";
 
 const SPAN_NAMES: Record<OpenAIRequestType, string> = {
   chat: "openai.chat",
@@ -46,8 +48,11 @@ function finalizeSpanSuccess(
   response: Record<string, unknown>,
   startTime: number,
 ): void {
+  const endTime = Date.now();
   setResponseAttributes(span, response);
-  span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
+  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
   span.setStatus({ code: SpanStatusCode.OK });
   span.end();
 }
@@ -58,6 +63,7 @@ abstract class BaseStreamHandler {
   protected span!: Span;
   protected startTime!: number;
   protected requestKwargs!: Record<string, unknown>;
+  private firstTokenRecorded = false;
 
   constructor(
     span: Span,
@@ -87,6 +93,12 @@ abstract class BaseStreamHandler {
         this.ensureChoice(index);
         const delta = (choice.delta ?? {}) as Record<string, unknown>;
         if (delta.content) {
+          if (!this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            const now = Date.now();
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+          }
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
             entry.message = { role: "assistant", content: "" };
@@ -110,6 +122,12 @@ abstract class BaseStreamHandler {
       | Record<string, unknown>
       | undefined;
     if (responseChunk?.status === "completed") {
+      if (!this.firstTokenRecorded) {
+        this.firstTokenRecorded = true;
+        const now = Date.now();
+        recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+        recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+      }
       const outputs = (responseChunk.output ?? []) as Array<
         Record<string, unknown>
       >;
@@ -148,10 +166,7 @@ abstract class BaseStreamHandler {
         this.startTime,
       );
     } else {
-      this.span.setAttribute(
-        "llm.response.duration",
-        (Date.now() - this.startTime) / 1000,
-      );
+      recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
       this.span.setStatus({ code });
       this.span.end();
     }

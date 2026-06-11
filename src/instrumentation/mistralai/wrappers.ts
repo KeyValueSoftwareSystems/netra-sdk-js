@@ -10,7 +10,8 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise } from "../utils";
+import { defineHidden, isPromise, recordSpanTiming } from "../utils";
+import { SpanAttributes } from "../span-attributes";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -63,10 +64,9 @@ function mistralWrapper(
                 const value = await response;
                 const endTime = Date.now();
                 setResponseAttributes(span, modelAsDict(value));
-                span.setAttribute(
-                  "llm.response.duration",
-                  (endTime - startTime) / 1000
-                );
+                recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return value;
@@ -86,10 +86,9 @@ function mistralWrapper(
 
           const endTime = Date.now();
           setResponseAttributes(span, modelAsDict(response));
-          span.setAttribute(
-            "llm.response.duration",
-            (endTime - startTime) / 1000
-          );
+          recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+          recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+          recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;
@@ -245,6 +244,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private response!: unknown;
   private startTime!: number;
   private requestKwargs!: Record<string, unknown>;
+  private firstTokenRecorded = false;
 
   constructor(span: Span, response: unknown, startTime: number, requestKwargs: Record<string, unknown>) {
     defineHidden(this, "span", span);
@@ -343,6 +343,12 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
           if (typeof delta === "object" && delta.content) {
+            if (!this.firstTokenRecorded) {
+              this.firstTokenRecorded = true;
+              const now = Date.now();
+              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            }
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -378,6 +384,12 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
+          if (!this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            const now = Date.now();
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+          }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {
@@ -405,10 +417,8 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   }
 
   private finalizeSpan(error?: unknown): void {
-    const endTime = Date.now();
-    const duration = (endTime - this.startTime) / 1000;
     setResponseAttributes(this.span, this.completeResponse);
-    this.span.setAttribute("llm.response.duration", duration);
+    recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
     if (error) {
       this.span.setStatus({
         code: SpanStatusCode.ERROR,
@@ -439,6 +449,7 @@ export class AsyncStreamingWrapper
   private startTime!: number;
   private requestKwargs!: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
+  private firstTokenRecorded = false;
 
   constructor(
     span: Span,
@@ -561,6 +572,12 @@ export class AsyncStreamingWrapper
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
           if (typeof delta === "object" && delta.content) {
+            if (!this.firstTokenRecorded) {
+              this.firstTokenRecorded = true;
+              const now = Date.now();
+              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            }
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -596,6 +613,12 @@ export class AsyncStreamingWrapper
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
+          if (!this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            const now = Date.now();
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+          }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {
@@ -623,10 +646,8 @@ export class AsyncStreamingWrapper
   }
 
   private finalizeSpan(error?: unknown): void {
-    const endTime = Date.now();
-    const duration = (endTime - this.startTime) / 1000;
     setResponseAttributes(this.span, this.completeResponse);
-    this.span.setAttribute("llm.response.duration", duration);
+    recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
     if (error) {
       this.span.setStatus({
         code: SpanStatusCode.ERROR,

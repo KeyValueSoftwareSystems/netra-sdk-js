@@ -1,6 +1,7 @@
 import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
+import { defineHidden, isPromise, modelAsDict, recordSpanTiming, shouldSuppressInstrumentation } from "../utils";
+import { SpanAttributes } from "../span-attributes";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type AnthropicRequestType = "chat" | "beta" | "batches";
@@ -105,10 +106,9 @@ function anthropicWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
-                  span.setAttribute(
-                    "llm.response.duration",
-                    (endTime - startTime) / 1000
-                  );
+                  recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -160,10 +160,9 @@ function anthropicWrapper(
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
-              span.setAttribute(
-                "llm.response.duration",
-                (endTime - startTime) / 1000
-              );
+              recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
+              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
+              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -221,6 +220,7 @@ export class MessageStreamWrapper {
   private messageStream!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
+  private firstTokenRecorded = false;
 
   constructor(span: Span, messageStream: any, startTime: number, requestKwargs: Record<string, any>) {
     defineHidden(this, "span", span);
@@ -403,6 +403,12 @@ export class MessageStreamWrapper {
           ];
 
         if (lastBlock && chunk.delta?.text) {
+          if (!this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            const now = Date.now();
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+          }
           lastBlock.text += chunk.delta.text;
         }
         break;
@@ -443,16 +449,13 @@ export class MessageStreamWrapper {
   }
 
   private finalizeSpan(code: SpanStatusCode): void {
-    const endTime = Date.now();
-    const duration = (endTime - this.startTime) / 1000;
-
     setResponseAttributes(this.span, {
       model: this.completeResponse.model,
       content: this.completeResponse.content,
       usage: this.completeResponse.usage,
     });
 
-    this.span.setAttribute("llm.response.duration", duration);
+    recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
     this.span.setStatus({ code });
     this.span.end();
   }
@@ -471,6 +474,7 @@ export class AsyncStreamingWrapper
   private response!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
+  private firstTokenRecorded = false;
 
   constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
     defineHidden(this, "span", span);
@@ -552,6 +556,12 @@ export class AsyncStreamingWrapper
         const lastBlock = content[content.length - 1];
 
         if (lastBlock && chunk.delta?.text) {
+          if (!this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            const now = Date.now();
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
+            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+          }
           lastBlock.text += chunk.delta.text;
         }
         break;
@@ -582,17 +592,13 @@ export class AsyncStreamingWrapper
   }
 
   private finalizeSpan(code: SpanStatusCode): void {
-    const endTime = Date.now();
-    const duration = (endTime - this.startTime) / 1000;
-    
-    // We match the format expected by setResponseAttributes
     setResponseAttributes(this.span, {
         model: this.completeResponse.model,
         content: this.completeResponse.content,
         usage: this.completeResponse.usage,
       });
 
-    this.span.setAttribute("llm.response.duration", duration);
+    recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
     this.span.setStatus({ code });
     this.span.end();
   }
