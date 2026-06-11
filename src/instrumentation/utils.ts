@@ -4,6 +4,7 @@
  */
 
 import { Span, context } from "@opentelemetry/api";
+import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
 import { Logger } from "../logger";
 import { RootSpanProcessor } from "../processors/root-span-processor";
@@ -36,21 +37,18 @@ export function defineHidden<T>(target: object, key: string, value: T): void {
   });
 }
 
-const TIMESTAMP_ATTRIBUTE_SUFFIX = ".timestamp";
-
 /**
  * Extracts the start time of an OTel span as milliseconds since epoch.
  *
- * The OTel JS SDK stores `startTime` as an `HrTime` tuple `[seconds, nanos]`.
+ * Relies on the `startTime` (`HrTime`) property exposed by the SDK's
+ * `ReadableSpan` from `@opentelemetry/sdk-trace-base` (>= 1.x).
  * Returns `undefined` if the start time cannot be resolved.
  */
 function getSpanStartTimeMs(span: Span): number | undefined {
-  const readable = span as unknown as { startTime?: [number, number] };
-  if (Array.isArray(readable.startTime) && readable.startTime.length === 2) {
-    const [seconds, nanos] = readable.startTime;
-    return seconds * 1000 + nanos / 1e6;
-  }
-  return undefined;
+  const startTime = (span as unknown as ReadableSpan).startTime;
+  if (!Array.isArray(startTime) || startTime.length !== 2) return undefined;
+  const [seconds, nanos] = startTime;
+  return seconds * 1000 + nanos / 1e6;
 }
 
 /**
@@ -104,9 +102,11 @@ export function recordSpanTiming(
         const rootSpan = RootSpanProcessor.getRootSpan(span);
         if (rootSpan) {
           startMs = getSpanStartTimeMs(rootSpan);
+        } else {
+          Logger.debug("recordSpanTiming: root span not available for attribute", attribute);
         }
-      } catch {
-        // Best-effort: root span lookup can fail
+      } catch (e) {
+        Logger.debug("recordSpanTiming: root span lookup failed for attribute", attribute, e);
       }
     }
 
@@ -114,16 +114,27 @@ export function recordSpanTiming(
     elapsed = (t - startMs) / 1000;
   }
 
-  span.setAttribute(attribute, elapsed);
+  span.setAttribute(attribute, Math.max(0, elapsed));
 
   if (recordEventTimestamp) {
     span.setAttribute(
-      `${attribute}${TIMESTAMP_ATTRIBUTE_SUFFIX}`,
+      `${attribute}.timestamp`,
       new Date(t).toISOString(),
     );
   }
 
   return true;
+}
+
+/**
+ * Records TTFT and RTTFT span attributes at the given (or current) instant.
+ * Callers must guard with their own `firstTokenRecorded` flag to ensure
+ * this is called at most once per span.
+ */
+export function recordFirstTokenTiming(span: Span, eventTime?: number): void {
+  const t = eventTime ?? Date.now();
+  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, t, { recordEventTimestamp: true });
+  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, t, { useRootSpan: true });
 }
 
 export function isDict(v: unknown): v is Record<string, any> {

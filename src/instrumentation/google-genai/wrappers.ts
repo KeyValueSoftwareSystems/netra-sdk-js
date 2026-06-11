@@ -9,6 +9,7 @@ import { Logger } from "../../logger";
 import {
   isPromise,
   modelAsDict,
+  recordFirstTokenTiming,
   recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -67,8 +68,7 @@ function googleGenAIWrapper(
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
                   recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+                  recordFirstTokenTiming(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -89,8 +89,7 @@ function googleGenAIWrapper(
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
               recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+              recordFirstTokenTiming(span, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -176,8 +175,7 @@ function googleGenAIStreamWrapper(
                   const responseDict = modelAsDict(streamResult);
                   setResponseAttributes(span, responseDict);
                   recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+                  recordFirstTokenTiming(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return streamResult;
@@ -239,9 +237,7 @@ function googleGenAIStreamWrapper(
                             if (typeof t === "string") {
                               if (t && !firstTokenRecorded) {
                                 firstTokenRecorded = true;
-                                const now = Date.now();
-                                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-                                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+                                recordFirstTokenTiming(span);
                               }
                               finalText += t;
                             }

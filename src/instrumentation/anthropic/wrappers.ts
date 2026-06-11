@@ -1,6 +1,6 @@
 import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, modelAsDict, recordSpanTiming, shouldSuppressInstrumentation } from "../utils";
+import { defineHidden, isPromise, modelAsDict, recordFirstTokenTiming, recordSpanTiming, shouldSuppressInstrumentation } from "../utils";
 import { SpanAttributes } from "../span-attributes";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
@@ -107,8 +107,7 @@ function anthropicWrapper(
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
                   recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+                  recordFirstTokenTiming(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -161,8 +160,7 @@ function anthropicWrapper(
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
               recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+              recordFirstTokenTiming(span, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -405,9 +403,7 @@ export class MessageStreamWrapper {
         if (lastBlock && chunk.delta?.text) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            const now = Date.now();
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            recordFirstTokenTiming(this.span);
           }
           lastBlock.text += chunk.delta.text;
         }
@@ -558,9 +554,7 @@ export class AsyncStreamingWrapper
         if (lastBlock && chunk.delta?.text) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            const now = Date.now();
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            recordFirstTokenTiming(this.span);
           }
           lastBlock.text += chunk.delta.text;
         }

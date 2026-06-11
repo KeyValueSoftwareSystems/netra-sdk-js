@@ -11,6 +11,7 @@ import {
   defineHidden,
   isPromise,
   modelAsDict,
+  recordFirstTokenTiming,
   recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -51,8 +52,7 @@ function finalizeSpanSuccess(
   const endTime = Date.now();
   setResponseAttributes(span, response);
   recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+  recordFirstTokenTiming(span, endTime);
   span.setStatus({ code: SpanStatusCode.OK });
   span.end();
 }
@@ -95,9 +95,7 @@ abstract class BaseStreamHandler {
         if (delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            const now = Date.now();
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            recordFirstTokenTiming(this.span);
           }
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
@@ -124,9 +122,7 @@ abstract class BaseStreamHandler {
     if (responseChunk?.status === "completed") {
       if (!this.firstTokenRecorded) {
         this.firstTokenRecorded = true;
-        const now = Date.now();
-        recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-        recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+        recordFirstTokenTiming(this.span);
       }
       const outputs = (responseChunk.output ?? []) as Array<
         Record<string, unknown>
@@ -160,11 +156,13 @@ abstract class BaseStreamHandler {
 
   protected finalizeSpan(code: SpanStatusCode): void {
     if (code === SpanStatusCode.OK) {
-      finalizeSpanSuccess(
-        this.span,
-        this.completeResponse as Record<string, unknown>,
-        this.startTime,
-      );
+      setResponseAttributes(this.span, this.completeResponse as Record<string, unknown>);
+      recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
+      if (!this.firstTokenRecorded) {
+        recordFirstTokenTiming(this.span);
+      }
+      this.span.setStatus({ code: SpanStatusCode.OK });
+      this.span.end();
     } else {
       recordSpanTiming(this.span, SpanAttributes.LLM_RESPONSE_DURATION, undefined, { referenceTime: this.startTime });
       this.span.setStatus({ code });

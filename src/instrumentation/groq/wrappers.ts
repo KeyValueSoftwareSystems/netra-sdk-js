@@ -5,6 +5,7 @@ import {
   defineHidden,
   modelAsDict,
   isPromise,
+  recordFirstTokenTiming,
   recordSpanTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -97,8 +98,7 @@ function groqWrapper(
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
                   recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-                  recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+                  recordFirstTokenTiming(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -119,8 +119,7 @@ function groqWrapper(
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
               recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-              recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+              recordFirstTokenTiming(span, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -223,9 +222,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         if (delta?.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            const now = Date.now();
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            recordFirstTokenTiming(this.span);
           }
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
@@ -369,9 +366,7 @@ export class AsyncStreamingWrapper
         if (typeof delta === "object" && delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            const now = Date.now();
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            recordFirstTokenTiming(this.span);
           }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];

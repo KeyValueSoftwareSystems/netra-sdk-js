@@ -10,7 +10,7 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, recordSpanTiming } from "../utils";
+import { defineHidden, isPromise, recordFirstTokenTiming, recordSpanTiming } from "../utils";
 import { SpanAttributes } from "../span-attributes";
 import {
   modelAsDict,
@@ -65,8 +65,7 @@ function mistralWrapper(
                 const endTime = Date.now();
                 setResponseAttributes(span, modelAsDict(value));
                 recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-                recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+                recordFirstTokenTiming(span, endTime);
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return value;
@@ -87,8 +86,7 @@ function mistralWrapper(
           const endTime = Date.now();
           setResponseAttributes(span, modelAsDict(response));
           recordSpanTiming(span, SpanAttributes.LLM_RESPONSE_DURATION, endTime, { referenceTime: startTime });
-          recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_TTFT, endTime, { recordEventTimestamp: true });
-          recordSpanTiming(span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, endTime, { useRootSpan: true });
+          recordFirstTokenTiming(span, endTime);
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;
@@ -345,9 +343,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
           if (typeof delta === "object" && delta.content) {
             if (!this.firstTokenRecorded) {
               this.firstTokenRecorded = true;
-              const now = Date.now();
-              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+              recordFirstTokenTiming(this.span);
             }
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
@@ -386,9 +382,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         if (typeof delta === "object" && delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            const now = Date.now();
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            recordFirstTokenTiming(this.span);
           }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
@@ -574,9 +568,7 @@ export class AsyncStreamingWrapper
           if (typeof delta === "object" && delta.content) {
             if (!this.firstTokenRecorded) {
               this.firstTokenRecorded = true;
-              const now = Date.now();
-              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-              recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+              recordFirstTokenTiming(this.span);
             }
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
@@ -615,9 +607,7 @@ export class AsyncStreamingWrapper
         if (typeof delta === "object" && delta.content) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            const now = Date.now();
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_TTFT, now, { recordEventTimestamp: true });
-            recordSpanTiming(this.span, SpanAttributes.LLM_PERFORMANCE_RELATIVE_TTFT, now, { useRootSpan: true });
+            recordFirstTokenTiming(this.span);
           }
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
