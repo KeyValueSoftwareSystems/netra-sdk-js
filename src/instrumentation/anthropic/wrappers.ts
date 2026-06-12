@@ -1,6 +1,6 @@
 import { context, Span, SpanKind, SpanStatusCode, trace, Tracer } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, modelAsDict, shouldSuppressInstrumentation } from "../utils";
+import { defineHidden, isPromise, modelAsDict, recordTTFTAttributes, shouldSuppressInstrumentation } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type AnthropicRequestType = "chat" | "beta" | "batches";
@@ -109,6 +109,7 @@ function anthropicWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000
                   );
+                  recordTTFTAttributes(span, startTime, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -164,6 +165,7 @@ function anthropicWrapper(
                 "llm.response.duration",
                 (endTime - startTime) / 1000
               );
+              recordTTFTAttributes(span, startTime, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -216,6 +218,7 @@ export class MessageStreamWrapper {
     model: "",
     usage: {},
   };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private messageStream!: any;
@@ -403,6 +406,10 @@ export class MessageStreamWrapper {
           ];
 
         if (lastBlock && chunk.delta?.text) {
+          if (!this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            recordTTFTAttributes(this.span, this.startTime, Date.now());
+          }
           lastBlock.text += chunk.delta.text;
         }
         break;
@@ -466,6 +473,7 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
@@ -552,6 +560,10 @@ export class AsyncStreamingWrapper
         const lastBlock = content[content.length - 1];
 
         if (lastBlock && chunk.delta?.text) {
+          if (!this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            recordTTFTAttributes(this.span, this.startTime, Date.now());
+          }
           lastBlock.text += chunk.delta.text;
         }
         break;

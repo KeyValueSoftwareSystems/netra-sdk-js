@@ -9,6 +9,7 @@ import { Logger } from "../../logger";
 import {
   isPromise,
   modelAsDict,
+  recordTTFTAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
@@ -64,12 +65,8 @@ function googleGenAIWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
-                  span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
-                  );
+                  span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+                  recordTTFTAttributes(span, startTime, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -177,12 +174,8 @@ function googleGenAIStreamWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(streamResult);
                   setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
-                  span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
-                  );
+                  span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+                  recordTTFTAttributes(span, startTime, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return streamResult;
@@ -247,11 +240,8 @@ function googleGenAIStreamWrapper(
                                 : chunk?.text;
                             if (typeof t === "string") {
                               if (t && !firstTokenRecorded) {
-                                span.setAttribute(
-                                  "gen_ai.performance.time_to_first_token",
-                                  (Date.now() - startTime) / 1000,
-                                );
                                 firstTokenRecorded = true;
+                                recordTTFTAttributes(span, startTime, Date.now());
                               }
                               finalText += t;
                             }

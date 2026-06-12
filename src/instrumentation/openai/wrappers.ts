@@ -11,6 +11,7 @@ import {
   defineHidden,
   isPromise,
   modelAsDict,
+  recordTTFTAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
@@ -46,14 +47,16 @@ function finalizeSpanSuccess(
   response: Record<string, unknown>,
   startTime: number,
 ): void {
+  const endTime = Date.now();
   setResponseAttributes(span, response);
-  span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
+  span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
   span.setStatus({ code: SpanStatusCode.OK });
   span.end();
 }
 
 abstract class BaseStreamHandler {
   protected completeResponse: StreamResponse = { choices: [], model: "" };
+  protected firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   protected span!: Span;
   protected startTime!: number;
@@ -82,17 +85,23 @@ abstract class BaseStreamHandler {
 
     const chunkChoices = chunkDict.choices;
     if (Array.isArray(chunkChoices)) {
+      console.log("chunkChoices", chunkChoices);
       for (const choice of chunkChoices as Array<Record<string, unknown>>) {
         const index = Number(choice.index ?? 0);
         this.ensureChoice(index);
         const delta = (choice.delta ?? {}) as Record<string, unknown>;
         if (delta.content) {
+          const contentPiece = String(delta.content);
+          if (contentPiece && !this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            recordTTFTAttributes(this.span, this.startTime, Date.now());
+          }
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
             entry.message = { role: "assistant", content: "" };
           }
           const msg = entry.message as Record<string, unknown>;
-          msg.content = String(msg.content ?? "") + String(delta.content);
+          msg.content = String(msg.content ?? "") + contentPiece;
         }
         if (choice.finish_reason) {
           this.completeResponse.choices[index].finish_reason =
@@ -126,6 +135,12 @@ abstract class BaseStreamHandler {
         }
       }
       this.completeResponse.usage = responseChunk.usage ?? {};
+    }
+
+    // Responses API TTFT: trigger on any chunk carrying a delta field
+    if (chunkDict.delta && !this.firstTokenRecorded) {
+      this.firstTokenRecorded = true;
+      recordTTFTAttributes(this.span, this.startTime, Date.now());
     }
 
     this.span.addEvent("llm.content.completion.chunk");
@@ -317,6 +332,7 @@ function executeNonStreaming(
     if (isPromise(result)) {
       return result.then(
         (value) => {
+          recordTTFTAttributes(span, startTime, Date.now());
           finalizeSpanSuccess(span, modelAsDict(value), startTime);
           return value;
         },
@@ -327,6 +343,7 @@ function executeNonStreaming(
       );
     }
 
+    recordTTFTAttributes(span, startTime, Date.now());
     finalizeSpanSuccess(span, modelAsDict(result), startTime);
     return result;
   } catch (error) {

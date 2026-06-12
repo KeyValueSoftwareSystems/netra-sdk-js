@@ -26,4 +26,8 @@ export const SpanAttributes = {
   LLM_IS_STREAMING: "llm.is_streaming",
   LLM_COMPLETIONS: "gen_ai.completion",
   LLM_PROMPTS: "gen_ai.prompt",
+
+  LLM_PERFORMANCE_TIME_TO_FIRST_TOKEN: "gen_ai.performance.time_to_first_token",
+  LLM_PERFORMANCE_RELATIVE_TIME_TO_FIRST_TOKEN: "gen_ai.performance.relative_time_to_first_token",
+  LLM_PERFORMANCE_TIME_TO_FIRST_TOKEN_TIMESTAMP: "gen_ai.performance.time_to_first_token.timestamp",
 } as const;

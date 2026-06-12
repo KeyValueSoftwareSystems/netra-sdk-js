@@ -4,8 +4,10 @@
  */
 
 import { Span, context } from "@opentelemetry/api";
+import { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { RootSpanProcessor } from "../processors/root-span-processor";
 import { SpanAttributes } from "./span-attributes";
 
 // Suppression
@@ -105,6 +107,64 @@ export function hasContent(value: unknown): boolean {
   if (typeof value === "string") return value.length > 0;
   if (Array.isArray(value)) return value.length > 0;
   return true;
+}
+
+/**
+ * Convert an OTel HrTime ([seconds, nanoseconds]) to milliseconds since epoch.
+ */
+function hrTimeToMs(hrTime: [number, number]): number {
+  return hrTime[0] * 1000 + hrTime[1] / 1e6;
+}
+
+/**
+ * Record time-to-first-token and relative-time-to-first-token attributes on a span.
+ *
+ * - `gen_ai.performance.time_to_first_token`: seconds from span start (approximated
+ *    by the `startTimeMs` captured at request initiation) to the first token event.
+ * - `gen_ai.performance.relative_time_to_first_token`: seconds from the root span's
+ *    start time to the first token event. Only set when a root span is found via
+ *    {@link RootSpanProcessor}.
+ * - `gen_ai.performance.time_to_first_token.timestamp`: UTC ISO 8601 wall-clock
+ *    timestamp of the first token event.
+ *
+ * @param span - The active span to annotate.
+ * @param startTimeMs - `Date.now()` value captured when the LLM request started.
+ * @param firstTokenTimeMs - `Date.now()` value captured when the first content token arrived.
+ */
+export function recordTTFTAttributes(
+  span: Span,
+  startTimeMs: number,
+  firstTokenTimeMs: number,
+): void {
+  if (!span.isRecording()) return;
+
+  try {
+    const ttft = (firstTokenTimeMs - startTimeMs) / 1000;
+    span.setAttribute(
+      SpanAttributes.LLM_PERFORMANCE_TIME_TO_FIRST_TOKEN,
+      String(ttft),
+    );
+
+    span.setAttribute(
+      SpanAttributes.LLM_PERFORMANCE_TIME_TO_FIRST_TOKEN_TIMESTAMP,
+      new Date(firstTokenTimeMs).toISOString(),
+    );
+
+    const rootSpan = RootSpanProcessor.getRootSpan(span);
+    if (rootSpan) {
+      const rootStartTime = (rootSpan as unknown as ReadableSpan).startTime;
+      if (rootStartTime) {
+        const rootStartMs = hrTimeToMs(rootStartTime as [number, number]);
+        const relativeTtft = (firstTokenTimeMs - rootStartMs) / 1000;
+        span.setAttribute(
+          SpanAttributes.LLM_PERFORMANCE_RELATIVE_TIME_TO_FIRST_TOKEN,
+          String(relativeTtft),
+        );
+      }
+    }
+  } catch (e) {
+    Logger.debug("recordTTFTAttributes: failed to set TTFT attributes:", e);
+  }
 }
 
 // Attribute Mapping (model params → span attributes)

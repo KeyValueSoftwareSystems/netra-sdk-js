@@ -5,6 +5,7 @@ import {
   defineHidden,
   modelAsDict,
   isPromise,
+  recordTTFTAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
 
@@ -98,6 +99,7 @@ function groqWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000
                   );
+                  recordTTFTAttributes(span, startTime, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -121,6 +123,7 @@ function groqWrapper(
                 "llm.response.duration",
                 (endTime - startTime) / 1000
               );
+              recordTTFTAttributes(span, startTime, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -147,6 +150,7 @@ export const chatWrapper = (tracer: Tracer) =>
 export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private iterator: Iterator<unknown> | null = null;
   private completeResponse: Record<string, any> = { choices: [], model: "" };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
@@ -220,10 +224,15 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
         const delta = choice.delta || {};
         if (delta?.content) {
+          const contentPiece = String(delta.content);
+          if (contentPiece && !this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            recordTTFTAttributes(this.span, this.startTime, Date.now());
+          }
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
           }
-          choices[index].message.content += String(delta.content);
+          choices[index].message.content += contentPiece;
         }
 
         if (choice.finish_reason) {
@@ -276,6 +285,7 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
@@ -361,6 +371,10 @@ export class AsyncStreamingWrapper
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
+          if (contentPiece && !this.firstTokenRecorded) {
+            this.firstTokenRecorded = true;
+            recordTTFTAttributes(this.span, this.startTime, Date.now());
+          }
           const choiceEntry = choices[index];
           if (!choiceEntry.message) {
             choiceEntry.message = { role: "assistant", content: "" };

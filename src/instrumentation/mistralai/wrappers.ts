@@ -10,7 +10,7 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise } from "../utils";
+import { defineHidden, isPromise, recordTTFTAttributes } from "../utils";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -67,6 +67,7 @@ function mistralWrapper(
                   "llm.response.duration",
                   (endTime - startTime) / 1000
                 );
+                recordTTFTAttributes(span, startTime, endTime);
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return value;
@@ -90,6 +91,7 @@ function mistralWrapper(
             "llm.response.duration",
             (endTime - startTime) / 1000
           );
+          recordTTFTAttributes(span, startTime, endTime);
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;
@@ -240,6 +242,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     choices: [],
     model: "",
   };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: unknown;
@@ -316,6 +319,13 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     }
   }
 
+  private recordFirstToken(contentPiece: string): void {
+    if (contentPiece && !this.firstTokenRecorded) {
+      this.firstTokenRecorded = true;
+      recordTTFTAttributes(this.span, this.startTime, Date.now());
+    }
+  }
+
   private processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
     const choices = this.completeResponse.choices as Array<
@@ -344,6 +354,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
           const delta = (choice.delta || {}) as Record<string, unknown>;
           if (typeof delta === "object" && delta.content) {
             const contentPiece = String(delta.content || "");
+            this.recordFirstToken(contentPiece);
             const choiceEntry = choices[index];
             if (this.isChat()) {
               if (!choiceEntry.message) {
@@ -379,6 +390,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
+          this.recordFirstToken(contentPiece);
           const choiceEntry = choices[index];
           if (this.isChat()) {
             if (!choiceEntry.message) {
@@ -439,6 +451,7 @@ export class AsyncStreamingWrapper
   private startTime!: number;
   private requestKwargs!: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
+  private firstTokenRecorded = false;
 
   constructor(
     span: Span,
@@ -534,6 +547,13 @@ export class AsyncStreamingWrapper
     }
   }
 
+  private recordFirstToken(contentPiece: string): void {
+    if (contentPiece && !this.firstTokenRecorded) {
+      this.firstTokenRecorded = true;
+      recordTTFTAttributes(this.span, this.startTime, Date.now());
+    }
+  }
+
   private processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
     const choices = this.completeResponse.choices as Array<
@@ -562,6 +582,7 @@ export class AsyncStreamingWrapper
           const delta = (choice.delta || {}) as Record<string, unknown>;
           if (typeof delta === "object" && delta.content) {
             const contentPiece = String(delta.content || "");
+            this.recordFirstToken(contentPiece);
             const choiceEntry = choices[index];
             if (this.isChat()) {
               if (!choiceEntry.message) {
@@ -597,6 +618,7 @@ export class AsyncStreamingWrapper
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
+          this.recordFirstToken(contentPiece);
           const choiceEntry = choices[index];
           if (this.isChat()) {
             if (!choiceEntry.message) {
