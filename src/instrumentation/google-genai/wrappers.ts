@@ -66,7 +66,7 @@ function googleGenAIWrapper(
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
                   span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
-                  recordTTFTAttributes(span, startTime, endTime);
+                  recordTTFTAttributes(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -175,7 +175,7 @@ function googleGenAIStreamWrapper(
                   const responseDict = modelAsDict(streamResult);
                   setResponseAttributes(span, responseDict);
                   span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
-                  recordTTFTAttributes(span, startTime, endTime);
+                  recordTTFTAttributes(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return streamResult;
@@ -241,7 +241,7 @@ function googleGenAIStreamWrapper(
                             if (typeof t === "string") {
                               if (t && !firstTokenRecorded) {
                                 firstTokenRecorded = true;
-                                recordTTFTAttributes(span, startTime, Date.now());
+                                recordTTFTAttributes(span, Date.now());
                               }
                               finalText += t;
                             }

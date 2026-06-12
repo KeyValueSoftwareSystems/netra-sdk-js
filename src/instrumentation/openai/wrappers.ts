@@ -94,7 +94,7 @@ abstract class BaseStreamHandler {
           const contentPiece = String(delta.content);
           if (contentPiece && !this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordTTFTAttributes(this.span, this.startTime, Date.now());
+            recordTTFTAttributes(this.span, Date.now());
           }
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
@@ -140,7 +140,7 @@ abstract class BaseStreamHandler {
     // Responses API TTFT: trigger on any chunk carrying a delta field
     if (chunkDict.delta && !this.firstTokenRecorded) {
       this.firstTokenRecorded = true;
-      recordTTFTAttributes(this.span, this.startTime, Date.now());
+      recordTTFTAttributes(this.span, Date.now());
     }
 
     this.span.addEvent("llm.content.completion.chunk");
@@ -332,7 +332,7 @@ function executeNonStreaming(
     if (isPromise(result)) {
       return result.then(
         (value) => {
-          recordTTFTAttributes(span, startTime, Date.now());
+          recordTTFTAttributes(span, Date.now());
           finalizeSpanSuccess(span, modelAsDict(value), startTime);
           return value;
         },
@@ -343,7 +343,7 @@ function executeNonStreaming(
       );
     }
 
-    recordTTFTAttributes(span, startTime, Date.now());
+    recordTTFTAttributes(span, Date.now());
     finalizeSpanSuccess(span, modelAsDict(result), startTime);
     return result;
   } catch (error) {

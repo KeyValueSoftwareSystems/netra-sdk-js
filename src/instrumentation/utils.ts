@@ -119,31 +119,37 @@ function hrTimeToMs(hrTime: [number, number]): number {
 /**
  * Record time-to-first-token and relative-time-to-first-token attributes on a span.
  *
- * - `gen_ai.performance.time_to_first_token`: seconds from span start (approximated
- *    by the `startTimeMs` captured at request initiation) to the first token event.
- * - `gen_ai.performance.relative_time_to_first_token`: seconds from the root span's
- *    start time to the first token event. Only set when a root span is found via
- *    {@link RootSpanProcessor}.
+ * Both durations are derived from the OTel SDK's internal {@link ReadableSpan.startTime}
+ * (HrTime) so that TTFT and relative TTFT are consistent when the span itself is the
+ * root span.
+ *
+ * - `gen_ai.performance.time_to_first_token`: seconds from the span's own start time
+ *    to the first token event.
+ * - `gen_ai.performance.relative_time_to_first_token`: seconds from the trace root
+ *    span's start time to the first token event. Only set when a root span is found
+ *    via {@link RootSpanProcessor}.
  * - `gen_ai.performance.time_to_first_token.timestamp`: UTC ISO 8601 wall-clock
  *    timestamp of the first token event.
  *
  * @param span - The active span to annotate.
- * @param startTimeMs - `Date.now()` value captured when the LLM request started.
  * @param firstTokenTimeMs - `Date.now()` value captured when the first content token arrived.
  */
 export function recordTTFTAttributes(
   span: Span,
-  startTimeMs: number,
   firstTokenTimeMs: number,
 ): void {
   if (!span.isRecording()) return;
 
   try {
-    const ttft = (firstTokenTimeMs - startTimeMs) / 1000;
-    span.setAttribute(
-      SpanAttributes.LLM_PERFORMANCE_TIME_TO_FIRST_TOKEN,
-      String(ttft),
-    );
+    const spanStartTime = (span as unknown as ReadableSpan).startTime;
+    if (spanStartTime) {
+      const spanStartMs = hrTimeToMs(spanStartTime as [number, number]);
+      const ttft = (firstTokenTimeMs - spanStartMs) / 1000;
+      span.setAttribute(
+        SpanAttributes.LLM_PERFORMANCE_TIME_TO_FIRST_TOKEN,
+        String(ttft),
+      );
+    }
 
     span.setAttribute(
       SpanAttributes.LLM_PERFORMANCE_TIME_TO_FIRST_TOKEN_TIMESTAMP,

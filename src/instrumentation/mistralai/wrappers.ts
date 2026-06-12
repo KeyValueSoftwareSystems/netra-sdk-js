@@ -67,7 +67,7 @@ function mistralWrapper(
                   "llm.response.duration",
                   (endTime - startTime) / 1000
                 );
-                recordTTFTAttributes(span, startTime, endTime);
+                recordTTFTAttributes(span, endTime);
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return value;
@@ -91,7 +91,7 @@ function mistralWrapper(
             "llm.response.duration",
             (endTime - startTime) / 1000
           );
-          recordTTFTAttributes(span, startTime, endTime);
+          recordTTFTAttributes(span, endTime);
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;
@@ -322,7 +322,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private recordFirstToken(contentPiece: string): void {
     if (contentPiece && !this.firstTokenRecorded) {
       this.firstTokenRecorded = true;
-      recordTTFTAttributes(this.span, this.startTime, Date.now());
+      recordTTFTAttributes(this.span, Date.now());
     }
   }
 
@@ -550,7 +550,7 @@ export class AsyncStreamingWrapper
   private recordFirstToken(contentPiece: string): void {
     if (contentPiece && !this.firstTokenRecorded) {
       this.firstTokenRecorded = true;
-      recordTTFTAttributes(this.span, this.startTime, Date.now());
+      recordTTFTAttributes(this.span, Date.now());
     }
   }
 

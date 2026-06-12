@@ -99,7 +99,7 @@ function groqWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000
                   );
-                  recordTTFTAttributes(span, startTime, endTime);
+                  recordTTFTAttributes(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -123,7 +123,7 @@ function groqWrapper(
                 "llm.response.duration",
                 (endTime - startTime) / 1000
               );
-              recordTTFTAttributes(span, startTime, endTime);
+              recordTTFTAttributes(span, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -227,7 +227,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
           const contentPiece = String(delta.content);
           if (contentPiece && !this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordTTFTAttributes(this.span, this.startTime, Date.now());
+            recordTTFTAttributes(this.span, Date.now());
           }
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
@@ -373,7 +373,7 @@ export class AsyncStreamingWrapper
           const contentPiece = String(delta.content || "");
           if (contentPiece && !this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordTTFTAttributes(this.span, this.startTime, Date.now());
+            recordTTFTAttributes(this.span, Date.now());
           }
           const choiceEntry = choices[index];
           if (!choiceEntry.message) {

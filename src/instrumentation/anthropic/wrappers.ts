@@ -109,7 +109,7 @@ function anthropicWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000
                   );
-                  recordTTFTAttributes(span, startTime, endTime);
+                  recordTTFTAttributes(span, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -165,7 +165,7 @@ function anthropicWrapper(
                 "llm.response.duration",
                 (endTime - startTime) / 1000
               );
-              recordTTFTAttributes(span, startTime, endTime);
+              recordTTFTAttributes(span, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -408,7 +408,7 @@ export class MessageStreamWrapper {
         if (lastBlock && chunk.delta?.text) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordTTFTAttributes(this.span, this.startTime, Date.now());
+            recordTTFTAttributes(this.span, Date.now());
           }
           lastBlock.text += chunk.delta.text;
         }
@@ -562,7 +562,7 @@ export class AsyncStreamingWrapper
         if (lastBlock && chunk.delta?.text) {
           if (!this.firstTokenRecorded) {
             this.firstTokenRecorded = true;
-            recordTTFTAttributes(this.span, this.startTime, Date.now());
+            recordTTFTAttributes(this.span, Date.now());
           }
           lastBlock.text += chunk.delta.text;
         }
