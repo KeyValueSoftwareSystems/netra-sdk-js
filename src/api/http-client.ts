@@ -2,6 +2,7 @@
  * Base HTTP client for Netra API calls
  */
 
+import { context, propagation } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
 
@@ -77,6 +78,18 @@ export class NetraHttpClient {
     return this.initialized;
   }
 
+  /**
+   * Merge W3C trace context (traceparent/tracestate) into a copy of the
+   * given headers so outgoing requests propagate the active span context.
+   */
+  private injectTraceContext(
+    headers: Record<string, string>,
+  ): Record<string, string> {
+    const carrier: Record<string, string> = { ...headers };
+    propagation.inject(context.active(), carrier);
+    return carrier;
+  }
+
   async get<T = any>(
     path: string,
     params?: Record<string, string | number | undefined>
@@ -104,7 +117,7 @@ export class NetraHttpClient {
 
       const response = await fetch(url.toString(), {
         method: "GET",
-        headers: this.headers,
+        headers: this.injectTraceContext(this.headers),
         signal: controller.signal,
       });
 
@@ -142,7 +155,7 @@ export class NetraHttpClient {
 
       const response = await fetch(url.toString(), {
         method: "POST",
-        headers: this.headers,
+        headers: this.injectTraceContext(this.headers),
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });

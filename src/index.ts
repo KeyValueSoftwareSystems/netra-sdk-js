@@ -118,6 +118,13 @@ export type {
 } from "./simulation";
 export * from "./exporters";
 
+// Context propagation helpers for distributed tracing
+export {
+  extractContextFromHeaders,
+  netraExpressMiddleware,
+  runWithExtractedContext,
+} from "./utils/context-propagation";
+
 export class Netra {
   private static _SDK_NAME = "netra_sdk";
 

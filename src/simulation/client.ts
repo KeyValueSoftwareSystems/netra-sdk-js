@@ -1,3 +1,4 @@
+import { context, propagation } from "@opentelemetry/api";
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from "axios";
 import { Config } from "../config";
 import { Logger } from "../logger";
@@ -39,11 +40,22 @@ export class SimulationHttpClient {
         const timeout = this._getTimeout();
 
         try {
-            return axios.create({
+            const instance = axios.create({
                 baseURL,
                 headers,
                 timeout,
             });
+
+            // Inject W3C trace context (traceparent/tracestate) into every
+            // outgoing request so the Netra backend can join the active trace.
+            instance.interceptors.request.use((config) => {
+                const carrier: Record<string, string> = {};
+                propagation.inject(context.active(), carrier);
+                Object.assign(config.headers, carrier);
+                return config;
+            });
+
+            return instance;
         } catch (error) {
             Logger.error(`${LOG_PREFIX}: Failed to create HTTP client:`, error);
             return null;
