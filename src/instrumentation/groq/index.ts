@@ -5,6 +5,7 @@
  * to ensure we patch the same module instance the application uses.
  */
 
+import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { __version__ } from "./version";
@@ -15,42 +16,49 @@ const INSTRUMENTS = ["groq-sdk >= 0.3.0"];
 const originalMethods: Map<string, Function> = new Map();
 let isInstrumented = false;
 
-// Cache the resolved Groq class
-let GroqClass: any = null;
+// Cache all resolved Groq classes (ESM + CJS)
+let groqClasses: any[] = [];
 
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
 }
 
 /**
- * Dynamically resolve the Groq module from the application's context.
- * This ensures we patch the same module instance that the application uses.
- *
- * IMPORTANT: We use dynamic import() to ensure we get the same ES module
- * instance that the application uses. Using require() would give us a
- * different instance due to ESM/CJS dual package handling in Node.js.
+ * Resolve the Groq module from the application's context.
+ * Tries ESM dynamic import first, then falls back to CJS require so the
+ * instrumentor works in both ESM and CommonJS projects.
  */
-async function resolveGroqAsync(): Promise<any> {
-  if (GroqClass) return GroqClass;
+async function resolveGroqAsync(): Promise<any[]> {
+  if (groqClasses.length > 0) return groqClasses;
 
   try {
-    // Use dynamic import to get the same ES module instance
     // @ts-ignore - groq-sdk is an optional peer dependency
     const groqModule = await import("groq-sdk");
-    GroqClass = groqModule.Groq || groqModule.default || groqModule;
-    return GroqClass;
+    groqClasses.push(groqModule.Groq || groqModule.default || groqModule);
   } catch {
-    // Package not installed - this is fine, it's optional
-    return null;
+    Logger.warn("Failed to resolve Groq ESM module");
   }
+
+  try {
+    const req = createRequire(import.meta.url);
+    const mod = req("groq-sdk");
+    const cjsClass = mod.Groq || mod.default || mod;
+    if (!groqClasses.includes(cjsClass)) {
+      groqClasses.push(cjsClass);
+    }
+  } catch {
+    Logger.warn("Failed to resolve Groq CJS module");
+  }
+
+  return groqClasses;
 }
 
 /**
- * Synchronous version that returns cached class or null.
+ * Synchronous version that returns cached classes.
  * Must call resolveGroqAsync() first to populate cache.
  */
-function resolveGroq(): any {
-  return GroqClass;
+function resolveGroq(): any[] {
+  return groqClasses;
 }
 
 export class NetraGroqInstrumentor {
@@ -64,8 +72,7 @@ export class NetraGroqInstrumentor {
 
   /**
    * Instrument Groq client methods (async version)
-   * Uses dynamic import() to ensure we get the same ES module instance
-   * that the application uses.
+   * Tries both ESM and CJS resolution to cover dual-package setups.
    */
   async instrumentAsync(
     options: InstrumentorOptions = {}
@@ -75,10 +82,8 @@ export class NetraGroqInstrumentor {
       return this;
     }
 
-    // Resolve Groq from application context using dynamic import
-    const Groq = await resolveGroqAsync();
-    if (!Groq) {
-      // groq-sdk package not installed - skip silently (it's optional)
+    const classes = await resolveGroqAsync();
+    if (classes.length === 0) {
       return this;
     }
 
@@ -97,7 +102,9 @@ export class NetraGroqInstrumentor {
       return this;
     }
 
-    this._instrumentChatCompletions(Groq);
+    classes.forEach((Groq, index) => {
+      this._instrumentChatCompletions(Groq, index);
+    });
 
     isInstrumented = true;
     return this;
@@ -105,7 +112,7 @@ export class NetraGroqInstrumentor {
 
   /**
    * Instrument Groq client methods (sync version - for backwards compatibility)
-   * Note: This uses a cached Groq class. Call instrumentAsync() for proper initialization.
+   * Note: This uses cached Groq classes. Call instrumentAsync() for proper initialization.
    */
   instrument(options: InstrumentorOptions = {}): NetraGroqInstrumentor {
     if (isInstrumented) {
@@ -113,10 +120,8 @@ export class NetraGroqInstrumentor {
       return this;
     }
 
-    // Try to get cached Groq class (must have called instrumentAsync first)
-    const Groq = resolveGroq();
-    if (!Groq) {
-      // Fall back to async initialization
+    const classes = resolveGroq();
+    if (classes.length === 0) {
       this.instrumentAsync(options).catch((e) => {
         Logger.error("Failed to instrument Groq:", e);
       });
@@ -138,7 +143,9 @@ export class NetraGroqInstrumentor {
       return this;
     }
 
-    this._instrumentChatCompletions(Groq);
+    classes.forEach((Groq, index) => {
+      this._instrumentChatCompletions(Groq, index);
+    });
 
     isInstrumented = true;
     return this;
@@ -150,13 +157,13 @@ export class NetraGroqInstrumentor {
       return;
     }
 
-    const Groq = resolveGroq();
-    if (Groq) {
-      this._uninstrumentChatCompletions(Groq);
-    }
+    const classes = resolveGroq();
+    classes.forEach((Groq, index) => {
+      this._uninstrumentChatCompletions(Groq, index);
+    });
 
     originalMethods.clear();
-    GroqClass = null;
+    groqClasses = [];
     isInstrumented = false;
   }
 
@@ -164,7 +171,7 @@ export class NetraGroqInstrumentor {
     return isInstrumented;
   }
 
-  private _instrumentChatCompletions(Groq: any): void {
+  private _instrumentChatCompletions(Groq: any, index: number): void {
     if (!this.tracer) {
       Logger.warn("Groq instrumentation: No tracer available");
       return;
@@ -180,7 +187,7 @@ export class NetraGroqInstrumentor {
         return;
       }
       const originalCreate = CompletionsClass.prototype.create as Function;
-      originalMethods.set("chat.completions.create", originalCreate);
+      originalMethods.set(`chat.completions.create-${index}`, originalCreate);
 
       const tracer = this.tracer;
       const wrapper = chatWrapper(tracer);
@@ -201,11 +208,11 @@ export class NetraGroqInstrumentor {
     }
   }
 
-  private _uninstrumentChatCompletions(Groq: any): void {
+  private _uninstrumentChatCompletions(Groq: any, index: number): void {
     try {
       const CompletionsClass = Groq.Chat?.Completions;
 
-      const originalCreate = originalMethods.get("chat.completions.create");
+      const originalCreate = originalMethods.get(`chat.completions.create-${index}`);
       if (originalCreate && CompletionsClass?.prototype) {
         CompletionsClass.prototype.create =
           originalCreate as typeof CompletionsClass.prototype.create;

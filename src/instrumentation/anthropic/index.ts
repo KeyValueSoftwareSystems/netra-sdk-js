@@ -1,3 +1,4 @@
+import { createRequire } from "module";
 import { SpanKind, trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { setRequestAttributes } from "./utils";
@@ -9,28 +10,45 @@ const INSTRUMENTS = ["anthropic >= 0.71.2"];
 
 const originalMethods: Map<string, Function> = new Map();
 let isInstrumented = false;
-let AnthropicClass: any = null;
+let anthropicClasses: any[] = [];
 
 
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
 }
 
-async function resolveAnthropicAsync(): Promise<any> {
-  if (AnthropicClass) return AnthropicClass;
+/**
+ * Resolve the Anthropic module from the application's context.
+ * Tries ESM dynamic import first, then falls back to CJS require so the
+ * instrumentor works in both ESM and CommonJS projects.
+ */
+async function resolveAnthropicAsync(): Promise<any[]> {
+  if (anthropicClasses.length > 0) return anthropicClasses;
 
   try {
     // @ts-ignore - @anthropic-ai/sdk is an optional peer dependency
     const anthropicModule = await import("@anthropic-ai/sdk");
-    AnthropicClass = anthropicModule.Anthropic || anthropicModule.default || anthropicModule;
-    return AnthropicClass;
+    anthropicClasses.push(anthropicModule.Anthropic || anthropicModule.default || anthropicModule);
   } catch {
-    return null;
+    Logger.warn("Failed to resolve Anthropic ESM module");
   }
+
+  try {
+    const req = createRequire(import.meta.url);
+    const mod = req("@anthropic-ai/sdk");
+    const cjsClass = mod.Anthropic || mod.default || mod;
+    if (!anthropicClasses.includes(cjsClass)) {
+      anthropicClasses.push(cjsClass);
+    }
+  } catch {
+    Logger.warn("Failed to resolve Anthropic CJS module");
+  }
+
+  return anthropicClasses;
 }
 
-function resolveAnthropic(): any {
-  return AnthropicClass;
+function resolveAnthropic(): any[] {
+  return anthropicClasses;
 }
 
 
@@ -49,8 +67,8 @@ export class NetraAnthropicInstrumentor {
           return this;
         }
 
-        const Anthropic = await resolveAnthropicAsync();
-        if (!Anthropic) {
+        const classes = await resolveAnthropicAsync();
+        if (classes.length === 0) {
           return this;
         }
 
@@ -69,9 +87,11 @@ export class NetraAnthropicInstrumentor {
             return this;
         }
 
-    this._instrumentMessages();
-    this._instrumentBetaMessages();
-    this._instrumentBatchMessages();
+    classes.forEach((AnthropicSDK, index) => {
+      this._instrumentMessages(AnthropicSDK, index);
+      this._instrumentBetaMessages(AnthropicSDK, index);
+      this._instrumentBatchMessages(AnthropicSDK, index);
+    });
 
     isInstrumented = true;
     return this;
@@ -83,12 +103,15 @@ export class NetraAnthropicInstrumentor {
         return;
         }
 
-    this._uninstrumentMessages();
-    this._uninstrumentBetaMessages();
-    this._uninstrumentBatchMessages();
+    const classes = resolveAnthropic();
+    classes.forEach((AnthropicSDK, index) => {
+      this._uninstrumentMessages(AnthropicSDK, index);
+      this._uninstrumentBetaMessages(AnthropicSDK, index);
+      this._uninstrumentBatchMessages(AnthropicSDK, index);
+    });
 
     originalMethods.clear();
-    AnthropicClass = null;
+    anthropicClasses = [];
     isInstrumented = false;
   }
 
@@ -96,17 +119,12 @@ export class NetraAnthropicInstrumentor {
     return isInstrumented;
   }
 
-private _instrumentMessages(): void {
+private _instrumentMessages(AnthropicSDK: any, index: number): void {
   if (!this.tracer) {
     Logger.warn("Anthropic instrumentation: No tracer available");
     return;
   }
   try {
-    const AnthropicSDK = resolveAnthropic();
-    if (!AnthropicSDK) {
-      Logger.warn("Anthropic instrumentation: Anthropic SDK not available");
-      return;
-    }
     const MessagesClass = AnthropicSDK.Messages;
     if (!MessagesClass) {
       Logger.error(
@@ -117,7 +135,7 @@ private _instrumentMessages(): void {
 
     if (MessagesClass?.prototype?.stream) {
       const originalStream = MessagesClass.prototype.stream as Function;
-      originalMethods.set("messages.stream", originalStream);
+      originalMethods.set(`messages.stream-${index}`, originalStream);
       const tracer = this.tracer;
       MessagesClass.prototype.stream = function (
         this: unknown,
@@ -138,9 +156,8 @@ private _instrumentMessages(): void {
         setRequestAttributes(span, kwargs, "chat");
         const startTime = Date.now();
 
-        // Temporarily restore the original create method so stream() can use it
         const instrumentedCreate = (this as any).create;
-        const originalCreate = originalMethods.get("messages.create");
+        const originalCreate = originalMethods.get(`messages.create-${index}`);
         if (originalCreate) {
           (this as any).create = originalCreate;
         }
@@ -149,7 +166,6 @@ private _instrumentMessages(): void {
           const messageStream = original(...args);
           return new MessageStreamWrapper(span, messageStream, startTime, kwargs);
         } finally {
-          // Restore the instrumented create method
           if (originalCreate) {
             (this as any).create = instrumentedCreate;
           }
@@ -159,7 +175,7 @@ private _instrumentMessages(): void {
 
     if (MessagesClass?.prototype?.create) {
       const originalCreate = MessagesClass.prototype.create as Function;
-      originalMethods.set("messages.create", originalCreate);
+      originalMethods.set(`messages.create-${index}`, originalCreate);
       const tracer = this.tracer;
       const wrapper = chatWrapper(tracer);
 
@@ -183,17 +199,12 @@ private _instrumentMessages(): void {
   }
 }
 
-private _instrumentBetaMessages(): void {
+private _instrumentBetaMessages(AnthropicSDK: any, index: number): void {
   if (!this.tracer) {
     Logger.warn("Anthropic instrumentation: No tracer available");
     return;
   }
   try {
-    const AnthropicSDK = resolveAnthropic();
-    if (!AnthropicSDK) {
-      Logger.warn("Anthropic instrumentation: Anthropic SDK not available");
-      return;
-    }
     const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
     if (!BetaMessagesClass) {
       Logger.error(
@@ -204,10 +215,9 @@ private _instrumentBetaMessages(): void {
 
     if (BetaMessagesClass?.prototype?.create) {
       const originalCreate = BetaMessagesClass.prototype.create as Function;
-      originalMethods.set("beta.messages.create", originalCreate);
+      originalMethods.set(`beta.messages.create-${index}`, originalCreate);
       const tracer = this.tracer;
       const wrapper = betaWrapper(tracer);
-
 
       BetaMessagesClass.prototype.create = function (
         this: unknown,
@@ -229,17 +239,12 @@ private _instrumentBetaMessages(): void {
   }
 }
 
-private _instrumentBatchMessages():void {
+private _instrumentBatchMessages(AnthropicSDK: any, index: number):void {
   if (!this.tracer) {
     Logger.warn("Anthropic instrumentation: No tracer available");
     return;
   }
   try {
-    const AnthropicSDK = resolveAnthropic();
-    if (!AnthropicSDK) {
-      Logger.warn("Anthropic instrumentation: Anthropic SDK not available");
-      return;
-    }
     const BatchMessageClass = AnthropicSDK.Messages?.Batches;
     if (!BatchMessageClass) {
       Logger.error(
@@ -250,10 +255,9 @@ private _instrumentBatchMessages():void {
 
     if (BatchMessageClass?.prototype?.create) {
       const originalCreate = BatchMessageClass.prototype.create as Function;
-      originalMethods.set("batch.messages.create", originalCreate);
+      originalMethods.set(`batch.messages.create-${index}`, originalCreate);
       const tracer = this.tracer;
       const wrapper = batchesWrapper(tracer);
-
 
       BatchMessageClass.prototype.create = function (
         this: unknown,
@@ -274,28 +278,30 @@ private _instrumentBatchMessages():void {
     Logger.error(`Failed to instrument batches: ${error}`);
   }
 }
-  private _uninstrumentMessages(): void {
+  private _uninstrumentMessages(AnthropicSDK: any, index: number): void {
     try {
-      const AnthropicSDK = resolveAnthropic();
-      if (!AnthropicSDK) return;
       const MessagesClass = AnthropicSDK.Messages;
 
-      const originalCreate = originalMethods.get("messages.create");
+      const originalCreate = originalMethods.get(`messages.create-${index}`);
       if (originalCreate && MessagesClass?.prototype) {
         MessagesClass.prototype.create =
           originalCreate as typeof MessagesClass.prototype.create;
+      }
+
+      const originalStream = originalMethods.get(`messages.stream-${index}`);
+      if (originalStream && MessagesClass?.prototype) {
+        MessagesClass.prototype.stream =
+          originalStream as typeof MessagesClass.prototype.stream;
       }
     } catch (error) {
       Logger.error(`Failed to uninstrument messages: ${error}`);
     }
   }
-  private _uninstrumentBetaMessages(): void {
+  private _uninstrumentBetaMessages(AnthropicSDK: any, index: number): void {
     try {
-      const AnthropicSDK = resolveAnthropic();
-      if (!AnthropicSDK) return;
       const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
 
-      const originalCreate = originalMethods.get("beta.messages.create");
+      const originalCreate = originalMethods.get(`beta.messages.create-${index}`);
       if (originalCreate && BetaMessagesClass?.prototype) {
         BetaMessagesClass.prototype.create =
           originalCreate as typeof BetaMessagesClass.prototype.create;
@@ -304,13 +310,11 @@ private _instrumentBatchMessages():void {
       Logger.error(`Failed to uninstrument beta: ${error}`);
     }
   }
-  private _uninstrumentBatchMessages(): void {
+  private _uninstrumentBatchMessages(AnthropicSDK: any, index: number): void {
     try {
-      const AnthropicSDK = resolveAnthropic();
-      if (!AnthropicSDK) return;
       const BatchMessagesClass = AnthropicSDK.Messages?.Batches;
 
-      const originalCreate = originalMethods.get("batch.messages.create");
+      const originalCreate = originalMethods.get(`batch.messages.create-${index}`);
       if (originalCreate && BatchMessagesClass?.prototype) {
         BatchMessagesClass.prototype.create =
           originalCreate as typeof BatchMessagesClass.prototype.create;
