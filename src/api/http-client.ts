@@ -86,7 +86,11 @@ export class NetraHttpClient {
     headers: Record<string, string>,
   ): Record<string, string> {
     const carrier: Record<string, string> = { ...headers };
-    propagation.inject(context.active(), carrier);
+    try {
+      propagation.inject(context.active(), carrier);
+    } catch {
+      // Context propagation is best-effort; don't fail the request
+    }
     return carrier;
   }
 

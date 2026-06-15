@@ -48,12 +48,19 @@ export class SimulationHttpClient {
 
             // Inject W3C trace context (traceparent/tracestate) into every
             // outgoing request so the Netra backend can join the active trace.
-            instance.interceptors.request.use((config) => {
-                const carrier: Record<string, string> = {};
-                propagation.inject(context.active(), carrier);
-                Object.assign(config.headers, carrier);
-                return config;
-            });
+            instance.interceptors.request.use(
+                (config) => {
+                    try {
+                        const carrier: Record<string, string> = {};
+                        propagation.inject(context.active(), carrier);
+                        Object.assign(config.headers, carrier);
+                    } catch {
+                        // Context propagation is best-effort; don't fail the request
+                    }
+                    return config;
+                },
+                (error) => Promise.reject(error),
+            );
 
             return instance;
         } catch (error) {

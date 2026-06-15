@@ -55,8 +55,8 @@ export function extractContextFromHeaders(
  * ```ts
  * import { runWithExtractedContext } from "netra";
  *
- * app.post("/api/chat", (req, res) => {
- *   runWithExtractedContext(req.headers, async () => {
+ * app.post("/api/chat", async (req, res) => {
+ *   await runWithExtractedContext(req.headers, async () => {
  *     const result = await myAgent(req.body.message);
  *     res.json(result);
  *   });
@@ -80,6 +80,11 @@ export function runWithExtractedContext<T>(
  * servers when `@opentelemetry/instrumentation-http` is not available or not
  * working (e.g. due to ESM module loading order with `tsx`). It is the
  * TypeScript equivalent of the Python SDK's `NetraFastAPIMiddleware`.
+ *
+ * **Note:** In Express 4.x, async errors thrown inside downstream handlers are
+ * not automatically caught by the Express error handler. Wrap async route
+ * handlers with your own try/catch or use Express 5 which supports async
+ * error propagation natively.
  *
  * @returns An Express middleware function.
  *

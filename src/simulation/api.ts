@@ -203,10 +203,10 @@ export class Simulation {
         let sessionId: string | null = null;
 
         while (true) {
-            try {
-                const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);
-                span.start();
+            const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);
+            span.start();
 
+            try {
                 const traceId = span.getCurrentSpan()?.spanContext().traceId ?? "";
 
                 // Run the user's task inside the active span context so child
@@ -230,8 +230,6 @@ export class Simulation {
                         traceId,
                     ),
                 );
-
-                span.end();
 
                 if (response === null) {
                     const errorMsg = "Failed to get conversation response";
@@ -269,6 +267,8 @@ export class Simulation {
                     error: errorMsg,
                     turnId,
                 };
+            } finally {
+                span.end();
             }
         }
     }
