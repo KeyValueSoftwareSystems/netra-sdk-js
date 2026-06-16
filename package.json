@@ -1,6 +1,6 @@
 {
   "name": "netra-sdk",
-  "version": "1.1.0-beta.1",
+  "version": "1.1.0",
   "description": "A comprehensive TypeScript/JavaScript SDK for AI application observability built on top of OpenTelemetry and Traceloop",
   "type": "module",
   "main": "./dist/index.cjs",
