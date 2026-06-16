@@ -14,6 +14,31 @@
  */
 
 import { context, propagation, Context } from "@opentelemetry/api";
+import { Logger } from "../logger";
+
+/**
+ * Inject W3C trace context (traceparent/tracestate) from the currently active
+ * span into a copy of the provided headers object.
+ *
+ * This is used internally by HTTP clients to propagate distributed trace
+ * context on outgoing requests. The injection is best-effort — if propagation
+ * fails for any reason, the original headers are returned unmodified.
+ *
+ * @param headers - Base headers to merge trace context into.
+ * @returns A new headers object containing the original headers plus trace context.
+ */
+export function injectTraceContextHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  const carrier: Record<string, string> = { ...headers };
+  try {
+    propagation.inject(context.active(), carrier);
+  } catch {
+    Logger.warn("netra: Failed to inject trace context headers");
+    return headers;
+  }
+  return carrier;
+}
 
 /**
  * Extract an OpenTelemetry context from HTTP request headers.

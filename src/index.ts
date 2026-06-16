@@ -120,7 +120,6 @@ export * from "./exporters";
 
 // Context propagation helpers for distributed tracing
 export {
-  extractContextFromHeaders,
   netraExpressMiddleware,
   runWithExtractedContext,
 } from "./utils/context-propagation";

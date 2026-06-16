@@ -1,7 +1,7 @@
-import { context, propagation } from "@opentelemetry/api";
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from "axios";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { injectTraceContextHeaders } from "../utils/context-propagation";
 import { ConversationResponse, SimulationItem } from "./models";
 
 const LOG_PREFIX = "netra.simulation";
@@ -50,13 +50,8 @@ export class SimulationHttpClient {
             // outgoing request so the Netra backend can join the active trace.
             instance.interceptors.request.use(
                 (config) => {
-                    try {
-                        const carrier: Record<string, string> = {};
-                        propagation.inject(context.active(), carrier);
-                        Object.assign(config.headers, carrier);
-                    } catch {
-                        // Context propagation is best-effort; don't fail the request
-                    }
+                    const traceHeaders = injectTraceContextHeaders({});
+                    Object.assign(config.headers, traceHeaders);
                     return config;
                 },
                 (error) => Promise.reject(error),
