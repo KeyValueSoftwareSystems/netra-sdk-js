@@ -53,9 +53,7 @@ function anthropicWrapper(
           return (async () => {
             try {
               const stream = await response;
-              // For messages.create({stream: true}), return AsyncStreamingWrapper
-              // which will track streaming events and finalize the span when done
-              return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
+              return new AsyncStreamingWrapper(span, stream, startTime, kwargs, spanContext);
             } catch (error) {
                Logger.error("netra.instrumentation.anthropic:", error);
                 span.setStatus({
@@ -68,8 +66,7 @@ function anthropicWrapper(
             }
           })();
         } else {
-             // Should usually be a promise, but just in case
-             return new AsyncStreamingWrapper(span, response, startTime, kwargs);
+             return new AsyncStreamingWrapper(span, response, startTime, kwargs, spanContext);
         }
 
       } catch (error) {
@@ -221,12 +218,14 @@ export class MessageStreamWrapper {
   private messageStream!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
+  private spanContext!: any;
 
-  constructor(span: Span, messageStream: any, startTime: number, requestKwargs: Record<string, any>) {
+  constructor(span: Span, messageStream: any, startTime: number, requestKwargs: Record<string, any>, spanContext?: any) {
     defineHidden(this, "span", span);
     defineHidden(this, "messageStream", messageStream);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "spanContext", spanContext || trace.setSpan(context.active(), span));
     // Use Proxy to delegate all properties and methods to messageStream
     return new Proxy(this, {
       get(target, prop, receiver) {
@@ -322,6 +321,10 @@ export class MessageStreamWrapper {
     }
   }
 
+  getSpanContext(): any {
+    return this.spanContext;
+  }
+
   private processEventData(eventType: string, data: any): void {
     switch (eventType) {
       case 'message':
@@ -385,10 +388,20 @@ export class MessageStreamWrapper {
         if (!this.completeResponse.content) {
           this.completeResponse.content = [];
         }
-        this.completeResponse.content.push({
-          type: chunk.content_block.type,
-          text: "",
-        });
+        const block = chunk.content_block;
+        if (block.type === "tool_use") {
+          this.completeResponse.content.push({
+            type: "tool_use",
+            id: block.id,
+            name: block.name,
+            input: "",
+          });
+        } else {
+          this.completeResponse.content.push({
+            type: block.type,
+            text: "",
+          });
+        }
         break;
       }
 
@@ -402,8 +415,25 @@ export class MessageStreamWrapper {
             this.completeResponse.content.length - 1
           ];
 
-        if (lastBlock && chunk.delta?.text) {
+        if (chunk.delta?.type === "input_json_delta" && lastBlock?.type === "tool_use") {
+          lastBlock.input += chunk.delta.partial_json ?? "";
+        } else if (lastBlock && chunk.delta?.text) {
           lastBlock.text += chunk.delta.text;
+        }
+        break;
+      }
+
+      case "content_block_stop": {
+        const blocks = this.completeResponse.content;
+        if (blocks && blocks.length > 0) {
+          const finishedBlock = blocks[blocks.length - 1];
+          if (finishedBlock?.type === "tool_use" && typeof finishedBlock.input === "string") {
+            try {
+              finishedBlock.input = JSON.parse(finishedBlock.input);
+            } catch {
+              Logger.warn("netra.instrumentation.anthropic: Failed to parse tool use input", finishedBlock.input);
+            }
+          }
         }
         break;
       }
@@ -471,12 +501,14 @@ export class AsyncStreamingWrapper
   private response!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
+  private spanContext!: any;
 
-  constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
+  constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>, spanContext?: any) {
     defineHidden(this, "span", span);
     defineHidden(this, "response", response);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "spanContext", spanContext || trace.setSpan(context.active(), span));
   }
 
   toJSON() {
@@ -490,7 +522,6 @@ export class AsyncStreamingWrapper
   async next(): Promise<IteratorResult<unknown>> {
     try {
       if (!this.iterator) {
-          // Anthropic Stream is AsyncIterable
         if (Symbol.asyncIterator in this.response) {
           this.iterator = (this.response as AsyncIterable<unknown>)[
             Symbol.asyncIterator
@@ -504,7 +535,7 @@ export class AsyncStreamingWrapper
         }
       }
 
-      const result = await this.iterator!.next();
+      const result = await context.with(this.spanContext, () => this.iterator!.next());
       if (result.done) {
         this.finalizeSpan(SpanStatusCode.OK);
         return result;
@@ -535,10 +566,20 @@ export class AsyncStreamingWrapper
       case "content_block_start": {
         const content = this.completeResponse.content as any[] || [];
         this.completeResponse.content = content;
-        content.push({
-          type: chunk.content_block.type,
-          text: "",
-        });
+        const block = chunk.content_block;
+        if (block.type === "tool_use") {
+          content.push({
+            type: "tool_use",
+            id: block.id,
+            name: block.name,
+            input: "",
+          });
+        } else {
+          content.push({
+            type: block.type,
+            text: "",
+          });
+        }
         break;
       }
 
@@ -551,8 +592,25 @@ export class AsyncStreamingWrapper
         
         const lastBlock = content[content.length - 1];
 
-        if (lastBlock && chunk.delta?.text) {
+        if (chunk.delta?.type === "input_json_delta" && lastBlock?.type === "tool_use") {
+          lastBlock.input += chunk.delta.partial_json ?? "";
+        } else if (lastBlock && chunk.delta?.text) {
           lastBlock.text += chunk.delta.text;
+        }
+        break;
+      }
+
+      case "content_block_stop": {
+        const content = this.completeResponse.content as any[] || [];
+        if (content.length > 0) {
+          const finishedBlock = content[content.length - 1];
+          if (finishedBlock?.type === "tool_use" && typeof finishedBlock.input === "string") {
+            try {
+              finishedBlock.input = JSON.parse(finishedBlock.input);
+            } catch {
+              Logger.warn("netra.instrumentation.anthropic: Failed to parse tool use input", finishedBlock.input);
+            }
+          }
         }
         break;
       }

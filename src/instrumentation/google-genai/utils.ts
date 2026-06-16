@@ -22,6 +22,29 @@ function safeStringify(value: unknown): string {
   }
 }
 
+/**
+ * Extract the model name from the model string.
+ * @param model - The model string.
+ * @returns The model name without the "models/" prefix if it exists.
+ */
+export function extractModelName(model: string): string {
+  if (model && model.startsWith("models/")) {
+    return model.replace(/^models\//, "");
+  }
+  return model;
+}
+
+/**
+ * Normalize role values from Google GenAI.
+ *
+ * Google GenAI uses "model" to indicate the assistant role.
+ * This function maps "model" → "assistant" and returns any other role unchanged in lowercase.
+ */
+function normalizeGenAIRole(raw: string): string {
+  const rawLower = raw.toLowerCase();
+  return rawLower === "model" ? "assistant" : rawLower;
+}
+
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
@@ -205,7 +228,32 @@ function _setPromptAttributes(
     }
   }
 
-  // 2. Add prompts from args (generateContent/embedContent call)
+  // 2. Chat history from startChat (multiturn context)
+  if (kwargs.history && Array.isArray(kwargs.history)) {
+    for (const turn of kwargs.history as Array<Record<string, unknown>>) {
+      const role = normalizeGenAIRole(String(turn.role ?? "user"));
+      const parts = turn.parts as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(parts)) {
+        const textContent = parts
+          .filter((p) => p.text !== undefined)
+          .map((p) => String(p.text))
+          .join("");
+        if (textContent) {
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
+            role,
+          );
+          span.setAttribute(
+            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
+            textContent,
+          );
+          promptIndex++;
+        }
+      }
+    }
+  }
+
+  // 3. Add prompts from args (generateContent/embedContent call)
   if (!args) return;
 
   // Handle string prompt
@@ -524,7 +572,7 @@ function _setCompletionAttributes(
 
     if (!content) continue;
 
-    const role = String(content.role ?? "model");
+    const role = normalizeGenAIRole(String(content.role ?? "model"));
     const parts = content.parts as Array<Record<string, unknown>> | undefined;
 
     if (!Array.isArray(parts)) continue;
