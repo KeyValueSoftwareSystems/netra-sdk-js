@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from "axios";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { injectTraceContextHeaders } from "../utils/context-propagation";
 import { ConversationResponse, SimulationItem } from "./models";
 
 const LOG_PREFIX = "netra.simulation";
@@ -39,11 +40,24 @@ export class SimulationHttpClient {
         const timeout = this._getTimeout();
 
         try {
-            return axios.create({
+            const instance = axios.create({
                 baseURL,
                 headers,
                 timeout,
             });
+
+            // Inject W3C trace context (traceparent/tracestate) into every
+            // outgoing request so the Netra backend can join the active trace.
+            instance.interceptors.request.use(
+                (config) => {
+                    const traceHeaders = injectTraceContextHeaders({});
+                    Object.assign(config.headers, traceHeaders);
+                    return config;
+                },
+                (error) => Promise.reject(error),
+            );
+
+            return instance;
         } catch (error) {
             Logger.error(`${LOG_PREFIX}: Failed to create HTTP client:`, error);
             return null;

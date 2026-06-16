@@ -4,6 +4,7 @@
 
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { injectTraceContextHeaders } from "../utils/context-propagation";
 
 export interface HttpClientConfig {
   baseUrl: string;
@@ -104,7 +105,7 @@ export class NetraHttpClient {
 
       const response = await fetch(url.toString(), {
         method: "GET",
-        headers: this.headers,
+        headers: injectTraceContextHeaders(this.headers),
         signal: controller.signal,
       });
 
@@ -142,7 +143,7 @@ export class NetraHttpClient {
 
       const response = await fetch(url.toString(), {
         method: "POST",
-        headers: this.headers,
+        headers: injectTraceContextHeaders(this.headers),
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
