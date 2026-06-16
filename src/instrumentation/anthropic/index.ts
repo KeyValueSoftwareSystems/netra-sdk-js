@@ -1,5 +1,5 @@
 import { createRequire } from "module";
-import { SpanKind, trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { context, SpanKind, trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { setRequestAttributes } from "./utils";
 import { __version__ } from "./version";
@@ -144,6 +144,7 @@ private _instrumentMessages(AnthropicSDK: any, index: number): void {
         const original = originalStream.bind(this);
         const kwargs = (args[0] || {}) as Record<string, unknown>;
 
+        const currentContext = context.active();
         const span = tracer.startSpan("anthropic" + ".stream", {
           kind: SpanKind.CLIENT,
           attributes: {
@@ -151,7 +152,9 @@ private _instrumentMessages(AnthropicSDK: any, index: number): void {
             "llm.streaming": true,
             "llm.operation": "stream"
           },
-        });
+        }, currentContext);
+
+        const spanContext = trace.setSpan(currentContext, span);
 
         setRequestAttributes(span, kwargs, "chat");
         const startTime = Date.now();
@@ -163,8 +166,8 @@ private _instrumentMessages(AnthropicSDK: any, index: number): void {
         }
 
         try {
-          const messageStream = original(...args);
-          return new MessageStreamWrapper(span, messageStream, startTime, kwargs);
+          const messageStream = context.with(spanContext, () => original(...args));
+          return new MessageStreamWrapper(span, messageStream, startTime, kwargs, spanContext);
         } finally {
           if (originalCreate) {
             (this as any).create = instrumentedCreate;
