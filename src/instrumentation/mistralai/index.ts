@@ -5,6 +5,7 @@
  * to ensure we patch the same module instance the application uses.
  */
 
+import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { __version__ } from "./version";
@@ -27,8 +28,8 @@ const originalMethods: Map<string, Function> = new Map();
 // Track instrumentation state
 let isInstrumented = false;
 
-// Cache the resolved Mistral class
-let MistralClass: any = null;
+// Cache all resolved Mistral classes (ESM + CJS)
+let mistralClasses: any[] = [];
 
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
@@ -37,35 +38,43 @@ export interface InstrumentorOptions {
 type MistralResourceName = "chat" | "embeddings" | "fim" | "agents";
 
 /**
- * Dynamically resolve the Mistral module from the application's context.
- * This ensures we patch the same module instance that the application uses.
- *
- * IMPORTANT: We use dynamic import() to ensure we get the same ES module
- * instance that the application uses. Using require() would give us a
- * different instance due to ESM/CJS dual package handling in Node.js.
+ * Resolve the Mistral module from the application's context.
+ * Tries ESM dynamic import first, then falls back to CJS require so the
+ * instrumentor works in both ESM and CommonJS projects.
  */
-async function resolveMistralAsync(): Promise<any> {
-  if (MistralClass) return MistralClass;
+async function resolveMistralAsync(): Promise<any[]> {
+  if (mistralClasses.length > 0) return mistralClasses;
 
   try {
-    // Use dynamic import to get the same ES module instance
     // @ts-ignore - @mistralai/mistralai is an optional peer dependency
     const mistralModule = await import("@mistralai/mistralai");
-    MistralClass =
-      mistralModule.Mistral || mistralModule.default || mistralModule;
-    return MistralClass;
+    mistralClasses.push(
+      mistralModule.Mistral || mistralModule.default || mistralModule
+    );
   } catch {
-    // Package not installed - this is fine, it's optional
-    return null;
+    Logger.warn("Failed to resolve MistralAI ESM module");
   }
+
+  try {
+    const req = createRequire(import.meta.url);
+    const mod = req("@mistralai/mistralai");
+    const cjsClass = mod.Mistral || mod.default || mod;
+    if (!mistralClasses.includes(cjsClass)) {
+      mistralClasses.push(cjsClass);
+    }
+  } catch {
+    Logger.warn("Failed to resolve MistralAI CJS module");
+  }
+
+  return mistralClasses;
 }
 
 /**
- * Synchronous version that returns cached class or null.
+ * Synchronous version that returns cached classes.
  * Must call resolveMistralAsync() first to populate cache.
  */
-function resolveMistral(): any {
-  return MistralClass;
+function resolveMistral(): any[] {
+  return mistralClasses;
 }
 
 /**
@@ -89,8 +98,7 @@ export class NetraMistralAIInstrumentor {
 
   /**
    * Instrument MistralAI client methods (async version)
-   * Uses dynamic import() to ensure we get the same ES module instance
-   * that the application uses.
+   * Tries both ESM and CJS resolution to cover dual-package setups.
    */
   async instrumentAsync(
     options: InstrumentorOptions = {}
@@ -100,16 +108,13 @@ export class NetraMistralAIInstrumentor {
       return this;
     }
 
-    // Resolve Mistral from application context using dynamic import
-    const Mistral = await resolveMistralAsync();
-    if (!Mistral) {
-      // @mistralai/mistralai package not installed - skip silently (it's optional)
+    const classes = await resolveMistralAsync();
+    if (classes.length === 0) {
       return this;
     }
 
     try {
       this.tracerProvider = options.tracerProvider;
-      // Use provided tracer provider or fall back to global
       if (this.tracerProvider) {
         this.tracer = this.tracerProvider.getTracer(
           INSTRUMENTATION_NAME,
@@ -123,13 +128,16 @@ export class NetraMistralAIInstrumentor {
       return this;
     }
 
-    // Instrument client methods. Mark instrumented only if we actually patched anything.
-    const patchedChat = this._instrumentChat(Mistral);
-    const patchedEmbeddings = this._instrumentEmbeddings(Mistral);
-    const patchedFIM = this._instrumentFIM(Mistral);
-    const patchedAgents = this._instrumentAgents(Mistral);
-    const didPatch =
-      patchedChat || patchedEmbeddings || patchedFIM || patchedAgents;
+    let didPatch = false;
+    classes.forEach((Mistral, index) => {
+      const patchedChat = this._instrumentChat(Mistral, index);
+      const patchedEmbeddings = this._instrumentEmbeddings(Mistral, index);
+      const patchedFIM = this._instrumentFIM(Mistral, index);
+      const patchedAgents = this._instrumentAgents(Mistral, index);
+      if (patchedChat || patchedEmbeddings || patchedFIM || patchedAgents) {
+        didPatch = true;
+      }
+    });
 
     if (!didPatch) {
       Logger.warn(
@@ -144,7 +152,7 @@ export class NetraMistralAIInstrumentor {
 
   /**
    * Instrument MistralAI client methods (sync version - for backwards compatibility)
-   * Note: This uses a cached Mistral class. Call instrumentAsync() for proper initialization.
+   * Note: This uses cached Mistral classes. Call instrumentAsync() for proper initialization.
    */
   instrument(options: InstrumentorOptions = {}): NetraMistralAIInstrumentor {
     if (isInstrumented) {
@@ -152,10 +160,8 @@ export class NetraMistralAIInstrumentor {
       return this;
     }
 
-    // Try to get cached Mistral class (must have called instrumentAsync first)
-    const Mistral = resolveMistral();
-    if (!Mistral) {
-      // Fall back to async initialization
+    const classes = resolveMistral();
+    if (classes.length === 0) {
       this.instrumentAsync(options).catch((e) => {
         Logger.error("Failed to instrument MistralAI:", e);
       });
@@ -164,7 +170,6 @@ export class NetraMistralAIInstrumentor {
 
     try {
       this.tracerProvider = options.tracerProvider;
-      // Use provided tracer provider or fall back to global
       if (this.tracerProvider) {
         this.tracer = this.tracerProvider.getTracer(
           INSTRUMENTATION_NAME,
@@ -178,13 +183,16 @@ export class NetraMistralAIInstrumentor {
       return this;
     }
 
-    // Instrument client methods. Mark instrumented only if we actually patched anything.
-    const patchedChat = this._instrumentChat(Mistral);
-    const patchedEmbeddings = this._instrumentEmbeddings(Mistral);
-    const patchedFIM = this._instrumentFIM(Mistral);
-    const patchedAgents = this._instrumentAgents(Mistral);
-    const didPatch =
-      patchedChat || patchedEmbeddings || patchedFIM || patchedAgents;
+    let didPatch = false;
+    classes.forEach((Mistral, index) => {
+      const patchedChat = this._instrumentChat(Mistral, index);
+      const patchedEmbeddings = this._instrumentEmbeddings(Mistral, index);
+      const patchedFIM = this._instrumentFIM(Mistral, index);
+      const patchedAgents = this._instrumentAgents(Mistral, index);
+      if (patchedChat || patchedEmbeddings || patchedFIM || patchedAgents) {
+        didPatch = true;
+      }
+    });
 
     if (!didPatch) {
       Logger.warn(
@@ -206,16 +214,16 @@ export class NetraMistralAIInstrumentor {
       return;
     }
 
-    const Mistral = resolveMistral();
-    if (Mistral) {
-      this._uninstrumentChat(Mistral);
-      this._uninstrumentEmbeddings(Mistral);
-      this._uninstrumentFIM(Mistral);
-      this._uninstrumentAgents(Mistral);
-    }
+    const classes = resolveMistral();
+    classes.forEach((Mistral, index) => {
+      this._uninstrumentChat(Mistral, index);
+      this._uninstrumentEmbeddings(Mistral, index);
+      this._uninstrumentFIM(Mistral, index);
+      this._uninstrumentAgents(Mistral, index);
+    });
 
     originalMethods.clear();
-    MistralClass = null;
+    mistralClasses = [];
     isInstrumented = false;
   }
 
@@ -268,7 +276,7 @@ export class NetraMistralAIInstrumentor {
     return this.resourceCtors[name] ?? null;
   }
 
-  private _instrumentChat(Mistral: any): boolean {
+  private _instrumentChat(Mistral: any, index: number): boolean {
     if (!this.tracer) return false;
 
     try {
@@ -277,7 +285,7 @@ export class NetraMistralAIInstrumentor {
 
       if (ChatClass?.prototype?.complete) {
         const originalComplete = ChatClass.prototype.complete;
-        originalMethods.set("chat.complete", originalComplete);
+        originalMethods.set(`chat.complete-${index}`, originalComplete);
 
         const tracer = this.tracer;
         const wrapper = chatWrapper(tracer);
@@ -300,7 +308,7 @@ export class NetraMistralAIInstrumentor {
 
       if (ChatClass?.prototype?.stream) {
         const originalStream = ChatClass.prototype.stream;
-        originalMethods.set("chat.stream", originalStream);
+        originalMethods.set(`chat.stream-${index}`, originalStream);
 
         const tracer = this.tracer;
         const wrapper = chatStreamWrapper(tracer);
@@ -328,7 +336,7 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _instrumentEmbeddings(Mistral: any): boolean {
+  private _instrumentEmbeddings(Mistral: any, index: number): boolean {
     if (!this.tracer) return false;
 
     try {
@@ -337,7 +345,7 @@ export class NetraMistralAIInstrumentor {
 
       if (EmbeddingsClass?.prototype?.create) {
         const originalCreate = EmbeddingsClass.prototype.create;
-        originalMethods.set("embeddings.create", originalCreate);
+        originalMethods.set(`embeddings.create-${index}`, originalCreate);
 
         const tracer = this.tracer;
         const wrapper = embeddingsWrapper(tracer);
@@ -365,7 +373,7 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _instrumentFIM(Mistral: any): boolean {
+  private _instrumentFIM(Mistral: any, index: number): boolean {
     if (!this.tracer) return false;
 
     try {
@@ -374,7 +382,7 @@ export class NetraMistralAIInstrumentor {
 
       if (FimClass?.prototype?.complete) {
         const originalComplete = FimClass.prototype.complete;
-        originalMethods.set("fim.complete", originalComplete);
+        originalMethods.set(`fim.complete-${index}`, originalComplete);
 
         const tracer = this.tracer;
         const wrapper = fimWrapper(tracer);
@@ -397,7 +405,7 @@ export class NetraMistralAIInstrumentor {
 
       if (FimClass?.prototype?.stream) {
         const originalStream = FimClass.prototype.stream;
-        originalMethods.set("fim.stream", originalStream);
+        originalMethods.set(`fim.stream-${index}`, originalStream);
 
         const tracer = this.tracer;
         const wrapper = fimStreamWrapper(tracer);
@@ -425,7 +433,7 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _instrumentAgents(Mistral: any): boolean {
+  private _instrumentAgents(Mistral: any, index: number): boolean {
     if (!this.tracer) return false;
 
     try {
@@ -434,7 +442,7 @@ export class NetraMistralAIInstrumentor {
 
       if (AgentsClass?.prototype?.complete) {
         const originalComplete = AgentsClass.prototype.complete;
-        originalMethods.set("agents.complete", originalComplete);
+        originalMethods.set(`agents.complete-${index}`, originalComplete);
 
         const tracer = this.tracer;
         const wrapper = agentsWrapper(tracer);
@@ -457,7 +465,7 @@ export class NetraMistralAIInstrumentor {
 
       if (AgentsClass?.prototype?.stream) {
         const originalStream = AgentsClass.prototype.stream;
-        originalMethods.set("agents.stream", originalStream);
+        originalMethods.set(`agents.stream-${index}`, originalStream);
 
         const tracer = this.tracer;
         const wrapper = agentsStreamWrapper(tracer);
@@ -485,16 +493,16 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentChat(Mistral: any): void {
+  private _uninstrumentChat(Mistral: any, index: number): void {
     try {
       const ChatClass = this._getCtor(Mistral, "chat");
 
-      const originalComplete = originalMethods.get("chat.complete");
+      const originalComplete = originalMethods.get(`chat.complete-${index}`);
       if (originalComplete && ChatClass?.prototype) {
         ChatClass.prototype.complete = originalComplete;
       }
 
-      const originalStream = originalMethods.get("chat.stream");
+      const originalStream = originalMethods.get(`chat.stream-${index}`);
       if (originalStream && ChatClass?.prototype) {
         ChatClass.prototype.stream = originalStream;
       }
@@ -503,11 +511,11 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentEmbeddings(Mistral: any): void {
+  private _uninstrumentEmbeddings(Mistral: any, index: number): void {
     try {
       const EmbeddingsClass = this._getCtor(Mistral, "embeddings");
 
-      const originalCreate = originalMethods.get("embeddings.create");
+      const originalCreate = originalMethods.get(`embeddings.create-${index}`);
       if (originalCreate && EmbeddingsClass?.prototype) {
         EmbeddingsClass.prototype.create = originalCreate;
       }
@@ -516,16 +524,16 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentFIM(Mistral: any): void {
+  private _uninstrumentFIM(Mistral: any, index: number): void {
     try {
       const FimClass = this._getCtor(Mistral, "fim");
 
-      const originalComplete = originalMethods.get("fim.complete");
+      const originalComplete = originalMethods.get(`fim.complete-${index}`);
       if (originalComplete && FimClass?.prototype) {
         FimClass.prototype.complete = originalComplete;
       }
 
-      const originalStream = originalMethods.get("fim.stream");
+      const originalStream = originalMethods.get(`fim.stream-${index}`);
       if (originalStream && FimClass?.prototype) {
         FimClass.prototype.stream = originalStream;
       }
@@ -534,16 +542,16 @@ export class NetraMistralAIInstrumentor {
     }
   }
 
-  private _uninstrumentAgents(Mistral: any): void {
+  private _uninstrumentAgents(Mistral: any, index: number): void {
     try {
       const AgentsClass = this._getCtor(Mistral, "agents");
 
-      const originalComplete = originalMethods.get("agents.complete");
+      const originalComplete = originalMethods.get(`agents.complete-${index}`);
       if (originalComplete && AgentsClass?.prototype) {
         AgentsClass.prototype.complete = originalComplete;
       }
 
-      const originalStream = originalMethods.get("agents.stream");
+      const originalStream = originalMethods.get(`agents.stream-${index}`);
       if (originalStream && AgentsClass?.prototype) {
         AgentsClass.prototype.stream = originalStream;
       }

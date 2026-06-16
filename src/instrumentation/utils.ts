@@ -148,6 +148,14 @@ export function buildInputMessages(
   const messages: TracedMessage[] = [];
 
   if (requestType === "chat") {
+    if (hasContent(kwargs.system)) {
+      const systemContent =
+        typeof kwargs.system === "string"
+          ? kwargs.system
+          : safeStringify(kwargs.system);
+      messages.push({ role: "system", content: systemContent });
+    }
+
     const rawMessages = kwargs.messages;
     if (!Array.isArray(rawMessages)) return messages;
     for (const msg of rawMessages) {

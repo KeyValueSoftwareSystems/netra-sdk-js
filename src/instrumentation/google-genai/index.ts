@@ -1,12 +1,11 @@
 /**
  * Custom Google GenAI instrumentor for Netra SDK
  */
+import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { __version__ } from "./version";
-import { chatStreamWrapper, chatWrapper, embeddingsWrapper } from "./wrappers";
-// Cache the resolved GenerativeModel class
-let GenerativeModel: any = null;
+import { chatStreamWrapper, chatWrapper, embeddingsWrapper, startChatWrapper } from "./wrappers";
 
 import shimmer from "shimmer";
 
@@ -15,44 +14,57 @@ const INSTRUMENTS = ["@google/genai >= 0.24.1"];
 
 // Track instrumentation state
 let isInstrumented = false;
+let generativeModelClasses: any[] = [];
 
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
 }
 
 /**
- * Dynamically resolve the Google GenAI module from the application's context.
- * This ensures we patch the same module instance that the application uses.
- *
- * IMPORTANT: We use dynamic import() to ensure we get the same ES module
- * instance that the application uses. Using require() would give us a
- * different instance due to ESM/CJS dual package handling in Node.js.
+ * Resolve the Google GenAI module from the application's context.
+ * Tries ESM dynamic import first, then falls back to CJS require so the
+ * instrumentor works in both ESM and CommonJS projects.
  */
-async function resolveGoogleGenerativeAIAsync(): Promise<any> {
-  if (GenerativeModel) return GenerativeModel;
+async function resolveGoogleGenerativeAIAsync(): Promise<any[]> {
+  if (generativeModelClasses.length > 0) return generativeModelClasses;
 
   try {
-    // Use dynamic import to get the same ES module instance
     // @ts-ignore - @google/generative-ai is an optional peer dependency
     const googleGenAIModule = await import("@google/generative-ai");
-    GenerativeModel =
+    const esmClass =
       googleGenAIModule.GenerativeModel ||
       googleGenAIModule.default?.GenerativeModel ||
       googleGenAIModule.default ||
       googleGenAIModule;
-    return GenerativeModel;
+    generativeModelClasses.push(esmClass);
   } catch {
-    // Package not installed - this is fine, it's optional
-    return null;
+    Logger.warn("Failed to resolve Google GenAI ESM module");
   }
+
+  try {
+    const req = createRequire(import.meta.url);
+    const mod = req("@google/generative-ai");
+    const cjsClass =
+      mod.GenerativeModel ||
+      mod.default?.GenerativeModel ||
+      mod.default ||
+      mod;
+    if (!generativeModelClasses.includes(cjsClass)) {
+      generativeModelClasses.push(cjsClass);
+    }
+  } catch {
+    Logger.warn("Failed to resolve Google GenAI CJS module");
+  }
+
+  return generativeModelClasses;
 }
 
 /**
- * Synchronous version that returns cached class or null.
+ * Synchronous version that returns cached classes.
  * Must call resolveGoogleGenerativeAIAsync() first to populate cache.
  */
-function resolveGoogleGenerativeAI(): any {
-  return GenerativeModel;
+function resolveGoogleGenerativeAI(): any[] {
+  return generativeModelClasses;
 }
 
 /**
@@ -75,8 +87,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
 
   /**
    * Instrument Google GenAI client methods (async version)
-   * Uses dynamic import() to ensure we get the same ES module instance
-   * that the application uses.
+   * Tries both ESM and CJS resolution to cover dual-package setups.
    */
   async instrumentAsync(
     options: InstrumentorOptions = {},
@@ -86,10 +97,8 @@ export class NetraGoogleGenerativeAIInstrumentor {
       return this;
     }
 
-    // Resolve Google GenAI from application context using dynamic import
-    const model = await resolveGoogleGenerativeAIAsync();
-    if (!model) {
-      // package not installed - skip silently (it's optional)
+    const classes = await resolveGoogleGenerativeAIAsync();
+    if (classes.length === 0) {
       return this;
     }
 
@@ -103,7 +112,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
       return this;
     }
 
-    this._instrumentGenerativeModel();
+    classes.forEach((model) => this._instrumentGenerativeModel(model));
 
     isInstrumented = true;
     return this;
@@ -120,9 +129,8 @@ export class NetraGoogleGenerativeAIInstrumentor {
       return this;
     }
 
-    // Check if we have the cached class
-    if (!resolveGoogleGenerativeAI()) {
-      // Fall back to async initialization
+    const classes = resolveGoogleGenerativeAI();
+    if (classes.length === 0) {
       this.instrumentAsync(options).catch((e) => {
         Logger.error("Failed to instrument Google GenAI:", e);
       });
@@ -139,7 +147,7 @@ export class NetraGoogleGenerativeAIInstrumentor {
       return this;
     }
 
-    this._instrumentGenerativeModel();
+    classes.forEach((model) => this._instrumentGenerativeModel(model));
 
     isInstrumented = true;
     return this;
@@ -154,9 +162,10 @@ export class NetraGoogleGenerativeAIInstrumentor {
       return;
     }
 
-    this._uninstrumentGenerativeModel();
+    const classes = resolveGoogleGenerativeAI();
+    classes.forEach((model) => this._uninstrumentGenerativeModel(model));
 
-    GenerativeModel = null;
+    generativeModelClasses = [];
     isInstrumented = false;
   }
 
@@ -167,11 +176,11 @@ export class NetraGoogleGenerativeAIInstrumentor {
     return isInstrumented;
   }
 
-  private _instrumentGenerativeModel(): void {
+  private _instrumentGenerativeModel(GenerativeModel: any): void {
     if (!this.tracer) return;
 
     try {
-      if (!GenerativeModel) {
+      if (!GenerativeModel?.prototype) {
         Logger.error(
           "Failed to find Google GenAI GenerativeModel to instrument",
         );
@@ -197,6 +206,14 @@ export class NetraGoogleGenerativeAIInstrumentor {
         "embedContent",
         embeddingsWrapper(tracer),
       );
+
+      if (typeof GenerativeModel.prototype.startChat === "function") {
+        shimmer.wrap(
+          GenerativeModel.prototype,
+          "startChat",
+          startChatWrapper(tracer),
+        );
+      }
     } catch (error) {
       Logger.debug(
         `Google GenAI instrumentation: failed to instrument: ${error}`,
@@ -204,9 +221,10 @@ export class NetraGoogleGenerativeAIInstrumentor {
     }
   }
 
-  private _uninstrumentGenerativeModel(): void {
+  private _uninstrumentGenerativeModel(GenerativeModel: any): void {
     try {
-      // Verify methods before unwrapping
+      if (!GenerativeModel?.prototype) return;
+
       if (typeof GenerativeModel.prototype.generateContent === "function") {
         shimmer.unwrap(GenerativeModel.prototype, "generateContent");
       }
@@ -217,6 +235,9 @@ export class NetraGoogleGenerativeAIInstrumentor {
       }
       if (typeof GenerativeModel.prototype.embedContent === "function") {
         shimmer.unwrap(GenerativeModel.prototype, "embedContent");
+      }
+      if (typeof GenerativeModel.prototype.startChat === "function") {
+        shimmer.unwrap(GenerativeModel.prototype, "startChat");
       }
     } catch (error) {
       Logger.debug(`Failed to uninstrument Google GenAI: ${error}`);
@@ -229,7 +250,7 @@ export const googleGenerativeAIInstrumentor =
   new NetraGoogleGenerativeAIInstrumentor();
 
 // Re-export wrappers for advanced usage
-export { chatWrapper, chatStreamWrapper, embeddingsWrapper } from "./wrappers";
+export { chatWrapper, chatStreamWrapper, embeddingsWrapper, startChatWrapper } from "./wrappers";
 
 // Re-export utilities
 export { setRequestAttributes, setResponseAttributes } from "./utils";
