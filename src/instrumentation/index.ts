@@ -581,7 +581,7 @@ function initOpenTelemetryInstrumentations(
       netraHost = new URL(config.otlpEndpoint).host;
     }
   } catch {
-    console.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
+    Logger.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
   }
 
   // Comma-separated regex patterns (unanchored search). Precompiled once;
@@ -595,7 +595,7 @@ function initOpenTelemetryInstrumentations(
         return new RegExp(pattern);
       } catch {
         if (config.debugMode) {
-          console.debug(
+          Logger.debug(
             `Invalid OTEL_NODE_EXCLUDED_URLS pattern skipped: ${pattern}`,
           );
         }
@@ -651,11 +651,11 @@ function initOpenTelemetryInstrumentations(
       });
       registerInstrumentations({ instrumentations: [_undiciInstrumentation] });
       if (config.debugMode) {
-        console.debug("Undici/fetch instrumentation enabled");
+        Logger.debug("Undici/fetch instrumentation enabled");
       }
     } catch (e) {
       if (config.debugMode) {
-        console.debug("Undici/fetch instrumentation not available:", e);
+        Logger.debug("Undici/fetch instrumentation not available:", e);
       }
     }
   }
@@ -938,10 +938,10 @@ export async function uninstrumentAll(): Promise<void> {
     if (_httpInstrumentation) {
       _httpInstrumentation.disable();
       _httpInstrumentation = null;
-      console.debug("HTTP instrumentation disabled");
+      Logger.debug("HTTP instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument HTTP:", e);
+    Logger.debug("Failed to uninstrument HTTP:", e);
   }
 
   // Uninstrument undici/fetch instrumentation
@@ -949,9 +949,9 @@ export async function uninstrumentAll(): Promise<void> {
     if (_undiciInstrumentation) {
       _undiciInstrumentation.disable();
       _undiciInstrumentation = null;
-      console.debug("Undici/fetch instrumentation disabled");
+      Logger.debug("Undici/fetch instrumentation disabled");
     }
   } catch (e) {
-    console.debug("Failed to uninstrument undici:", e);
+    Logger.debug("Failed to uninstrument undici:", e);
   }
 }
