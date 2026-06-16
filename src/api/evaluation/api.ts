@@ -380,11 +380,15 @@ export class Evaluation {
       }
       ctx.sessionId = getSessionIdFromBaggage();
 
-      const { output, status } = await executeTask(task, ctx.itemInput);
+      const { output, status } = await span.withActive(() =>
+        executeTask(task, ctx.itemInput),
+      );
       ctx.taskOutput = output;
       ctx.status = status;
 
-      ctx.testRunItemId = await this.postCompletedStatus(runId, ctx);
+      ctx.testRunItemId = await span.withActive(() =>
+        this.postCompletedStatus(runId, ctx),
+      );
 
       if (evaluators && ctx.status === "completed") {
         const evalTask = this.runEvaluatorsForItem(runId, ctx, evaluators);

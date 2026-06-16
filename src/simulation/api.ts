@@ -203,31 +203,32 @@ export class Simulation {
         let sessionId: string | null = null;
 
         while (true) {
-            try {
-                const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);
-                span.start();
+            const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);
+            span.start();
 
+            try {
                 const traceId = span.getCurrentSpan()?.spanContext().traceId ?? "";
 
-                // Execute the user's task
-                const [responseMessage, taskSessionId] = await executeTask(
-                    task,
-                    message,
-                    sessionId,
+                // Run the user's task inside the active span context so child
+                // spans (LLM calls, HTTP, etc.) are parented correctly and
+                // outgoing HTTP headers carry the W3C trace context.
+                const [responseMessage, taskSessionId] = await span.withActive(
+                    () => executeTask(task, message, sessionId),
                 );
 
                 if (taskSessionId) {
                     sessionId = taskSessionId;
                 }
 
-                span.end();
-
-                // Trigger conversation with the backend
-                const response = await this._client.triggerConversation(
-                    responseMessage,
-                    turnId,
-                    sessionId || "",
-                    traceId,
+                // Trigger conversation inside the same active context so the
+                // axios interceptor injects the correct traceparent header.
+                const response = await span.withActive(() =>
+                    this._client.triggerConversation(
+                        responseMessage,
+                        turnId,
+                        sessionId || "",
+                        traceId,
+                    ),
                 );
 
                 if (response === null) {
@@ -266,6 +267,8 @@ export class Simulation {
                     error: errorMsg,
                     turnId,
                 };
+            } finally {
+                span.end();
             }
         }
     }
