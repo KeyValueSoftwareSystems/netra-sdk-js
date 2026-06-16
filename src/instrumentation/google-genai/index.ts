@@ -5,7 +5,7 @@ import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { __version__ } from "./version";
-import { chatStreamWrapper, chatWrapper, embeddingsWrapper } from "./wrappers";
+import { chatStreamWrapper, chatWrapper, embeddingsWrapper, startChatWrapper } from "./wrappers";
 
 import shimmer from "shimmer";
 
@@ -206,6 +206,14 @@ export class NetraGoogleGenerativeAIInstrumentor {
         "embedContent",
         embeddingsWrapper(tracer),
       );
+
+      if (typeof GenerativeModel.prototype.startChat === "function") {
+        shimmer.wrap(
+          GenerativeModel.prototype,
+          "startChat",
+          startChatWrapper(tracer),
+        );
+      }
     } catch (error) {
       Logger.debug(
         `Google GenAI instrumentation: failed to instrument: ${error}`,
@@ -228,6 +236,9 @@ export class NetraGoogleGenerativeAIInstrumentor {
       if (typeof GenerativeModel.prototype.embedContent === "function") {
         shimmer.unwrap(GenerativeModel.prototype, "embedContent");
       }
+      if (typeof GenerativeModel.prototype.startChat === "function") {
+        shimmer.unwrap(GenerativeModel.prototype, "startChat");
+      }
     } catch (error) {
       Logger.debug(`Failed to uninstrument Google GenAI: ${error}`);
     }
@@ -239,7 +250,7 @@ export const googleGenerativeAIInstrumentor =
   new NetraGoogleGenerativeAIInstrumentor();
 
 // Re-export wrappers for advanced usage
-export { chatWrapper, chatStreamWrapper, embeddingsWrapper } from "./wrappers";
+export { chatWrapper, chatStreamWrapper, embeddingsWrapper, startChatWrapper } from "./wrappers";
 
 // Re-export utilities
 export { setRequestAttributes, setResponseAttributes } from "./utils";

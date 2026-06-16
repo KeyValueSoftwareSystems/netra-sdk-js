@@ -11,7 +11,7 @@ import {
   modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
-import { setRequestAttributes, setResponseAttributes } from "./utils";
+import { extractModelName, setRequestAttributes, setResponseAttributes } from "./utils";
 
 type GoogleGenAIRequestType = "chat" | "embedding";
 
@@ -35,12 +35,16 @@ function googleGenAIWrapper(
       const systemInstruction = modelInstance.systemInstruction as
         | unknown
         | undefined;
+      const history = modelInstance.history as unknown | undefined;
 
-      if (modelName) {
-        kwargs.model = modelName;
+      if(modelName) {
+        kwargs.model = extractModelName(modelName);
       }
       if (systemInstruction) {
         kwargs.systemInstruction = systemInstruction;
+      }
+      if (history) {
+        kwargs.history = history;
       }
 
       const currentContext = context.active();
@@ -131,9 +135,11 @@ function googleGenAIStreamWrapper(
       const systemInstruction = modelInstance.systemInstruction as
         | unknown
         | undefined;
+      const history = modelInstance.history as unknown | undefined;
 
-      if (modelName) kwargs.model = modelName;
+      if (modelName) kwargs.model = extractModelName(modelName);
       if (systemInstruction) kwargs.systemInstruction = systemInstruction;
+      if (history) kwargs.history = history;
 
       const currentContext = context.active();
 
@@ -321,6 +327,57 @@ function googleGenAIStreamWrapper(
   };
 }
 
+/**
+ * Wraps startChat to instrument the returned ChatSession's sendMessage
+ * and sendMessageStream methods with proper tracing.
+ */
+function googleGenAIStartChatWrapper(tracer: Tracer, spanName: string, requestType: GoogleGenAIRequestType) {
+  const sendMessageWrapperFn = googleGenAIWrapper(tracer, spanName, requestType);
+  const sendMessageStreamWrapperFn = googleGenAIStreamWrapper(tracer, spanName, requestType);
+
+  return function wrapper<F extends (...args: any[]) => any>(original: F): F {
+    return function (this: unknown, ...args: Parameters<F>): any {
+      const chatSession = original.apply(this, args);
+      if (!chatSession) return chatSession;
+
+      const modelInstance = this as Record<string, unknown>;
+      const modelName = modelInstance.model as string | undefined;
+      const systemInstruction = modelInstance.systemInstruction as unknown | undefined;
+      const chatHistory = (args[0] as Record<string, unknown> | undefined)?.history;
+
+      if (typeof chatSession.sendMessage === "function" && !chatSession.__netra_patched) {
+        const originalSendMessage = chatSession.sendMessage.bind(chatSession);
+        const wrappedSendMessage = sendMessageWrapperFn(originalSendMessage);
+
+        chatSession.sendMessage = function (this: unknown, ...sendArgs: any[]) {
+          const ctx = this as Record<string, unknown>;
+          if (modelName) ctx.model = modelName;
+          if (systemInstruction) ctx.systemInstruction = systemInstruction;
+          if (chatHistory) ctx.history = chatHistory;
+          return wrappedSendMessage.apply(this, sendArgs);
+        };
+
+        if (typeof chatSession.sendMessageStream === "function") {
+          const originalSendStream = chatSession.sendMessageStream.bind(chatSession);
+          const wrappedSendStream = sendMessageStreamWrapperFn(originalSendStream);
+
+          chatSession.sendMessageStream = function (this: unknown, ...sendArgs: any[]) {
+            const ctx = this as Record<string, unknown>;
+            if (modelName) ctx.model = modelName;
+            if (systemInstruction) ctx.systemInstruction = systemInstruction;
+            if (chatHistory) ctx.history = chatHistory;
+            return wrappedSendStream.apply(this, sendArgs);
+          };
+        }
+
+        chatSession.__netra_patched = true;
+      }
+
+      return chatSession;
+    } as unknown as F;
+  };
+}
+
 /* Specific wrappers for different requests */
 export const chatWrapper = (tracer: Tracer) =>
   googleGenAIWrapper(tracer, CHAT_SPAN_NAME, "chat");
@@ -330,3 +387,6 @@ export const embeddingsWrapper = (tracer: Tracer) =>
 
 export const chatStreamWrapper = (tracer: Tracer) =>
   googleGenAIStreamWrapper(tracer, CHAT_SPAN_NAME, "chat");
+
+export const startChatWrapper = (tracer: Tracer) =>
+  googleGenAIStartChatWrapper(tracer, CHAT_SPAN_NAME, "chat");
