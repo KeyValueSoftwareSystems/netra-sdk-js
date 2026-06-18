@@ -202,7 +202,7 @@ export class Simulation {
         let message = initialMessage;
         let turnId = initialTurnId;
         let sessionId: string | null = null;
-        let rawFiles: FileData[] = initialFiles;
+        let rawFiles: FileData[] = initialFiles ?? [];
 
         while (true) {
             const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);

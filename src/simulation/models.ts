@@ -41,7 +41,7 @@ export interface SimulationItem {
   runItemId: string;
   message: string;
   turnId: string;
-  files: FileData[];
+  files?: FileData[];
 }
 
 /**

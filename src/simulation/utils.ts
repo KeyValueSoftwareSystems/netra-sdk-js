@@ -4,9 +4,13 @@ import { Logger } from "../logger";
 import { FileData, ProcessedFile } from "./models";
 import { BaseTask } from "./task";
 
+type LimitFunction = ReturnType<typeof pLimit>;
+
 const LOG_PREFIX = "netra.simulation";
 const DEFAULT_FILE_DOWNLOAD_TIMEOUT_S = 30;
 const MAX_FILE_DOWNLOAD_WORKERS = 8;
+
+let _cachedFileDownloadTimeoutMs: number | null = null;
 
 /**
  * Format the trace ID as a 32-digit hexadecimal string.
@@ -44,22 +48,29 @@ export function validateSimulationInputs(
  * Get the file download timeout in milliseconds.
  *
  * Reads from the `NETRA_SIMULATION_FILE_DOWNLOAD_TIMEOUT` environment
- * variable (value in seconds).  Falls back to the default of 30 s.
+ * variable (value in seconds) on first access and caches the result.
+ * Falls back to the default of 30 s.
  *
  * @returns Timeout in milliseconds
  */
 function _getFileDownloadTimeout(): number {
+    if (_cachedFileDownloadTimeoutMs !== null) {
+        return _cachedFileDownloadTimeoutMs;
+    }
+
     const envVal = process.env.NETRA_SIMULATION_FILE_DOWNLOAD_TIMEOUT;
     if (envVal) {
         const parsed = parseFloat(envVal);
         if (!isNaN(parsed) && parsed > 0) {
-            return parsed * 1000;
+            _cachedFileDownloadTimeoutMs = parsed * 1000;
+            return _cachedFileDownloadTimeoutMs;
         }
         Logger.warn(
             `${LOG_PREFIX}: Invalid file download timeout '${envVal}', using default ${DEFAULT_FILE_DOWNLOAD_TIMEOUT_S}s`,
         );
     }
-    return DEFAULT_FILE_DOWNLOAD_TIMEOUT_S * 1000;
+    _cachedFileDownloadTimeoutMs = DEFAULT_FILE_DOWNLOAD_TIMEOUT_S * 1000;
+    return _cachedFileDownloadTimeoutMs;
 }
 
 /**
@@ -67,33 +78,59 @@ function _getFileDownloadTimeout(): number {
  *
  * @param fileData - Metadata with the download URL
  * @param timeoutMs - Request timeout in milliseconds
+ * @param signal - AbortSignal to cancel the download if another file in the
+ *                 batch fails
  * @returns ProcessedFile with base64-encoded data
- * @throws Error if the download fails
+ * @throws Error if the download fails, with contextual information about which
+ *         file failed and the HTTP status (if available)
  */
 async function _downloadSingleFile(
     fileData: FileData,
     timeoutMs: number,
+    signal?: AbortSignal,
 ): Promise<ProcessedFile> {
-    const response = await axios.get(fileData.downloadUrl, {
-        responseType: "arraybuffer",
-        timeout: timeoutMs,
-    });
+    try {
+        const response = await axios.get(fileData.downloadUrl, {
+            responseType: "arraybuffer",
+            timeout: timeoutMs,
+            signal,
+        });
 
-    const encoded = Buffer.from(response.data).toString("base64");
-    return {
-        fileName: fileData.fileName,
-        contentType: fileData.contentType,
-        description: fileData.description,
-        data: encoded,
-    };
+        const encoded = Buffer.from(response.data).toString("base64");
+        return {
+            fileName: fileData.fileName,
+            contentType: fileData.contentType,
+            description: fileData.description,
+            data: encoded,
+        };
+    } catch (error) {
+        if (axios.isCancel(error)) {
+            throw new Error(
+                `Download of '${fileData.fileName}' was cancelled`,
+            );
+        }
+
+        const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+        const reason = status
+            ? `HTTP ${status}`
+            : (error instanceof Error ? error.message : String(error));
+
+        Logger.error(
+            `${LOG_PREFIX}: Failed to download file '${fileData.fileName}': ${reason}`,
+        );
+
+        throw new Error(
+            `Failed to download file '${fileData.fileName}': ${reason}`,
+        );
+    }
 }
 
 /**
  * Download and base64-encode a batch of files concurrently.
  *
  * Uses up to {@link MAX_FILE_DOWNLOAD_WORKERS} parallel downloads.  If any
- * single download fails the entire batch is considered failed and the error
- * propagates to the caller.
+ * single download fails, outstanding downloads are cancelled via
+ * AbortController and the error propagates to the caller.
  *
  * @param files - Array of FileData objects to download
  * @returns Array of ProcessedFile objects with base64-encoded data, or null
@@ -108,13 +145,20 @@ export async function processFiles(
     }
 
     const timeoutMs = _getFileDownloadTimeout();
-    const limit = pLimit(MAX_FILE_DOWNLOAD_WORKERS);
+    const limit: LimitFunction = pLimit(MAX_FILE_DOWNLOAD_WORKERS);
+    const controller = new AbortController();
 
     const downloadPromises = files.map((file) =>
-        limit(() => _downloadSingleFile(file, timeoutMs)),
+        limit(() => _downloadSingleFile(file, timeoutMs, controller.signal)),
     );
 
-    return Promise.all(downloadPromises);
+    try {
+        return await Promise.all(downloadPromises);
+    } catch (error) {
+        controller.abort();
+        limit.clearQueue();
+        throw error;
+    }
 }
 
 /**

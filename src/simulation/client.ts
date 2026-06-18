@@ -276,10 +276,10 @@ export class SimulationHttpClient {
      * @param rawFiles - Array of attachment objects from the API response
      * @returns Parsed FileData array (empty when input is null/undefined)
      */
-    static _parseFiles(
+    private static _parseFiles(
         rawFiles: Array<Record<string, string>> | null | undefined,
     ): FileData[] {
-        if (!rawFiles || !Array.isArray(rawFiles)) {
+        if (!rawFiles) {
             return [];
         }
 
