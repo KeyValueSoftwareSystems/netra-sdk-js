@@ -9,6 +9,8 @@ export {
     ConversationStatus,
     type ConversationResponse,
     type ConversationResult,
+    type FileData,
+    type ProcessedFile,
     type SimulationItem,
     type SimulationResult,
     type TaskResult,

@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosResponse, AxiosError } from "axios";
 import { Config } from "../config";
 import { Logger } from "../logger";
 import { injectTraceContextHeaders } from "../utils/context-propagation";
-import { ConversationResponse, SimulationItem } from "./models";
+import { ConversationResponse, FileData, SimulationItem } from "./models";
 
 const LOG_PREFIX = "netra.simulation";
 const DEFAULT_TIMEOUT = 10000; // 10 seconds in milliseconds
@@ -144,6 +144,7 @@ export class SimulationHttpClient {
                     runItemId: msg.testRunItemId || "",
                     message: msg.userMessage || "",
                     turnId: msg.turnId || "",
+                    files: SimulationHttpClient._parseFiles(msg.attachments),
                 }),
             );
 
@@ -206,6 +207,7 @@ export class SimulationHttpClient {
                 nextTurnId: nextMsg.turnId || "",
                 nextUserMessage: nextMsg.userMessage || "",
                 nextRunItemId: nextMsg.testRunItemId || "",
+                nextFiles: SimulationHttpClient._parseFiles(nextMsg.attachments),
             };
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
@@ -264,6 +266,44 @@ export class SimulationHttpClient {
             );
             return { success: false };
         }
+    }
+
+    /**
+     * Parse raw attachment entries from the backend into typed FileData objects.
+     *
+     * Entries missing a `fileName` or `downloadUrl` are skipped with a warning.
+     *
+     * @param rawFiles - Array of attachment objects from the API response
+     * @returns Parsed FileData array (empty when input is null/undefined)
+     */
+    static _parseFiles(
+        rawFiles: Array<Record<string, string>> | null | undefined,
+    ): FileData[] {
+        if (!rawFiles || !Array.isArray(rawFiles)) {
+            return [];
+        }
+
+        const parsed: FileData[] = [];
+        for (const entry of rawFiles) {
+            const fileName = entry.fileName || "";
+            const downloadUrl = entry.downloadUrl || "";
+
+            if (!fileName || !downloadUrl) {
+                Logger.warn(
+                    `${LOG_PREFIX}: Skipping malformed file attachment (missing fileName or downloadUrl)`,
+                );
+                continue;
+            }
+
+            parsed.push({
+                fileName,
+                contentType: entry.contentType || "",
+                description: entry.description || undefined,
+                downloadUrl,
+            });
+        }
+
+        return parsed;
     }
 
     /**
