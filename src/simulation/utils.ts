@@ -126,6 +126,44 @@ async function _downloadSingleFile(
 }
 
 /**
+ * Parse raw attachment entries from the backend into typed FileData objects.
+ *
+ * Entries missing a `fileName` or `downloadUrl` are skipped with a warning.
+ *
+ * @param rawFiles - Array of attachment objects from the API response
+ * @returns Parsed FileData array (empty when input is null/undefined)
+ */
+export function parseFiles(
+    rawFiles: Array<Record<string, string>> | null | undefined,
+): FileData[] {
+    if (!rawFiles) {
+        return [];
+    }
+
+    const parsed: FileData[] = [];
+    for (const entry of rawFiles) {
+        const fileName = entry.fileName || "";
+        const downloadUrl = entry.downloadUrl || "";
+
+        if (!fileName || !downloadUrl) {
+            Logger.warn(
+                `${LOG_PREFIX}: Skipping malformed file attachment (missing fileName or downloadUrl)`,
+            );
+            continue;
+        }
+
+        parsed.push({
+            fileName,
+            contentType: entry.contentType || "",
+            description: entry.description || undefined,
+            downloadUrl,
+        });
+    }
+
+    return parsed;
+}
+
+/**
  * Download and base64-encode a batch of files concurrently.
  *
  * Uses up to {@link MAX_FILE_DOWNLOAD_WORKERS} parallel downloads.  If any
