@@ -7,6 +7,14 @@ export enum ConversationStatus {
 }
 
 /**
+ * Indicates who initiates the first message in a multi-turn conversation.
+ *
+ * - `"user"` — The simulated user (Netra BE) sends the first message.
+ * - `"agent"` — The Agent Under Test generates the opening message.
+ */
+export type Initiator = "agent" | "user";
+
+/**
  * Raw file metadata received from the backend.
  *
  * Contains a pre-signed download URL that the SDK uses to fetch the actual
@@ -36,10 +44,13 @@ export interface ProcessedFile {
 
 /**
  * Represents a single item in a simulation run.
+ *
+ * When `message` is `null`, the Agent Under Test is expected to generate the
+ * opening message (agent-initiated conversation).
  */
 export interface SimulationItem {
   runItemId: string;
-  message: string;
+  message: string | null;
   turnId: string;
   files?: FileData[];
 }
