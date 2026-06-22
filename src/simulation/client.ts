@@ -143,7 +143,7 @@ export class SimulationHttpClient {
             const simulationItems: SimulationItem[] = userMessages.map(
                 (msg: any) => ({
                     runItemId: msg.testRunItemId || "",
-                    message: msg.userMessage || "",
+                    message: msg.userMessage ?? null,
                     turnId: msg.turnId || "",
                     files: parseFiles(msg.attachments),
                 }),

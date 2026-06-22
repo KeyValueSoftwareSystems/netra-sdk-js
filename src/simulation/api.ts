@@ -10,6 +10,7 @@ import { SimulationHttpClient } from "./client";
 import {
     ConversationResult,
     FileData,
+    Initiator,
     SimulationItem,
     SimulationResult,
 } from "./models";
@@ -199,7 +200,9 @@ export class Simulation {
         task: BaseTask,
     ): Promise<ConversationResult> {
         const { runItemId, message: initialMessage, turnId: initialTurnId, files: initialFiles } = runItem;
-        let message = initialMessage;
+
+        let initiator: Initiator = initialMessage === null ? "agent" : "user";
+        let message = initialMessage ?? "";
         let turnId = initialTurnId;
         let sessionId: string | null = null;
         let rawFiles: FileData[] = initialFiles ?? [];
@@ -212,7 +215,7 @@ export class Simulation {
                 const traceId = span.getCurrentSpan()?.spanContext().traceId ?? "";
 
                 const [responseMessage, taskSessionId] = await span.withActive(
-                    () => executeTask(task, message, sessionId, rawFiles),
+                    () => executeTask(task, message, sessionId, rawFiles, initiator),
                 );
 
                 if (taskSessionId) {
@@ -251,9 +254,10 @@ export class Simulation {
                     };
                 }
 
-                message = response.nextUserMessage!;
+                message = response.nextUserMessage ?? "";
                 turnId = response.nextTurnId!;
                 rawFiles = response.nextFiles || [];
+                initiator = !message  ? "agent" : "user";
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 Logger.error(
