@@ -9,6 +9,7 @@ import { SpanWrapper } from "../span-wrapper";
 import { SimulationHttpClient } from "./client";
 import {
     ConversationResult,
+    FileData,
     SimulationItem,
     SimulationResult,
 } from "./models";
@@ -197,10 +198,11 @@ export class Simulation {
         runItem: SimulationItem,
         task: BaseTask,
     ): Promise<ConversationResult> {
-        const { runItemId, message: initialMessage, turnId: initialTurnId } = runItem;
+        const { runItemId, message: initialMessage, turnId: initialTurnId, files: initialFiles } = runItem;
         let message = initialMessage;
         let turnId = initialTurnId;
         let sessionId: string | null = null;
+        let rawFiles: FileData[] = initialFiles ?? [];
 
         while (true) {
             const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);
@@ -209,11 +211,8 @@ export class Simulation {
             try {
                 const traceId = span.getCurrentSpan()?.spanContext().traceId ?? "";
 
-                // Run the user's task inside the active span context so child
-                // spans (LLM calls, HTTP, etc.) are parented correctly and
-                // outgoing HTTP headers carry the W3C trace context.
                 const [responseMessage, taskSessionId] = await span.withActive(
-                    () => executeTask(task, message, sessionId),
+                    () => executeTask(task, message, sessionId, rawFiles),
                 );
 
                 if (taskSessionId) {
@@ -252,9 +251,9 @@ export class Simulation {
                     };
                 }
 
-                // Continue to next turn
                 message = response.nextUserMessage!;
                 turnId = response.nextTurnId!;
+                rawFiles = response.nextFiles || [];
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 Logger.error(

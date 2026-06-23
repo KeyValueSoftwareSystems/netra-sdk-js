@@ -111,6 +111,7 @@ export type {
   ConversationResponse,
   ConversationResult,
   CreateRunResult,
+  ProcessedFile,
   SimulationItem,
   SimulationOptions,
   SimulationResult,

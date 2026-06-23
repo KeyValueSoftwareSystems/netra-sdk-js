@@ -3,6 +3,7 @@ import { Config } from "../config";
 import { Logger } from "../logger";
 import { injectTraceContextHeaders } from "../utils/context-propagation";
 import { ConversationResponse, SimulationItem } from "./models";
+import { parseFiles } from "./utils";
 
 const LOG_PREFIX = "netra.simulation";
 const DEFAULT_TIMEOUT = 10000; // 10 seconds in milliseconds
@@ -144,6 +145,7 @@ export class SimulationHttpClient {
                     runItemId: msg.testRunItemId || "",
                     message: msg.userMessage || "",
                     turnId: msg.turnId || "",
+                    files: parseFiles(msg.attachments),
                 }),
             );
 
@@ -206,6 +208,7 @@ export class SimulationHttpClient {
                 nextTurnId: nextMsg.turnId || "",
                 nextUserMessage: nextMsg.userMessage || "",
                 nextRunItemId: nextMsg.testRunItemId || "",
+                nextFiles: parseFiles(nextMsg.attachments),
             };
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
