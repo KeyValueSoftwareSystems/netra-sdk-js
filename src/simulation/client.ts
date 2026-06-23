@@ -206,7 +206,7 @@ export class SimulationHttpClient {
             return {
                 decision,
                 nextTurnId: nextMsg.turnId || "",
-                nextUserMessage: nextMsg.userMessage || "",
+                nextUserMessage: nextMsg.userMessage ?? null,
                 nextRunItemId: nextMsg.testRunItemId || "",
                 nextFiles: parseFiles(nextMsg.attachments),
             };

@@ -201,7 +201,7 @@ export class Simulation {
     ): Promise<ConversationResult> {
         const { runItemId, message: initialMessage, turnId: initialTurnId, files: initialFiles } = runItem;
 
-        let initiator: Initiator = initialMessage === null ? "agent" : "user";
+        let initiator: Initiator = initialMessage ? "user" : "agent";
         let message = initialMessage ?? "";
         let turnId = initialTurnId;
         let sessionId: string | null = null;
@@ -257,7 +257,7 @@ export class Simulation {
                 message = response.nextUserMessage ?? "";
                 turnId = response.nextTurnId!;
                 rawFiles = response.nextFiles || [];
-                initiator = !message  ? "agent" : "user";
+                initiator = message ? "user" : "agent";
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
                 Logger.error(

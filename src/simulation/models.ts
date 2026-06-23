@@ -62,7 +62,7 @@ export interface ConversationResponse {
   decision: string;
   reason?: string;
   nextTurnId?: string;
-  nextUserMessage?: string;
+  nextUserMessage?: string | null;
   nextRunItemId?: string;
   nextFiles?: FileData[];
 }
