@@ -16,7 +16,63 @@ type AnthropicRequestType = "chat" | "beta" | "batches";
 const CHAT_SPAN_NAME = "anthropic.chat";
 const BETA_SPAN_NAME = "anthropic.beta";
 const BATCHES_SPAN_NAME = "anthropic.batches";
-const STREAM_ENABLED_REQUESTS: AnthropicRequestType[] = ["chat", "beta"];
+
+function isAsyncIterable(value: unknown): boolean {
+  return value != null && typeof (value as any)[Symbol.asyncIterator] === "function";
+}
+
+/**
+ * Wrap an async-iterable Stream from `.create({stream:true})` so that
+ * iterating it accumulates response data and finalizes the span on completion.
+ * Returns a Proxy that preserves the original Stream's properties (e.g.
+ * `.controller`) while intercepting `Symbol.asyncIterator`.
+ */
+function wrapStreamIterable(
+  stream: any,
+  span: Span,
+  startTime: number,
+  parentContext: any,
+): any {
+  const completeResponse: Record<string, any> = {
+    content: [],
+    model: "",
+    usage: {},
+  };
+
+  async function* trackedIterator(): AsyncGenerator<unknown> {
+    try {
+      for await (const chunk of stream) {
+        processStreamChunk(completeResponse, chunk, span);
+        yield chunk;
+      }
+      finalizeStreamSpan(span, completeResponse, startTime, parentContext, SpanStatusCode.OK);
+    } catch (err) {
+      Logger.error("netra.instrumentation.anthropic: Stream iteration error", err);
+      finalizeStreamSpan(span, completeResponse, startTime, parentContext, SpanStatusCode.ERROR);
+      throw err;
+    }
+  }
+
+  let generator: AsyncGenerator<unknown> | null = null;
+
+  return new Proxy(stream, {
+    get(target, prop, receiver) {
+      if (prop === Symbol.asyncIterator) {
+        return function () {
+          if (!generator) {
+            generator = trackedIterator();
+          }
+          return generator;
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value === "function") {
+        return value.bind(target);
+      }
+      return value;
+    },
+  });
+}
 
 function anthropicWrapper(
   tracer: Tracer,
@@ -41,180 +97,116 @@ function anthropicWrapper(
 
     resolveToolCycle(kwargs.messages, tracer);
 
-    if (isStreaming && STREAM_ENABLED_REQUESTS.includes(requestType)) {
-      const span = tracer.startSpan(spanName + ".create", {
+    return tracer.startActiveSpan(
+      spanName,
+      {
         kind: SpanKind.CLIENT,
-        attributes: {
-          "llm.request.type": requestType,
-          "llm.streaming": true
-        },
+        attributes: { "llm.request.type": requestType },
       },
-    currentContext);
-
-      try {
-        setRequestAttributes(span, kwargs, requestType);
-        const startTime = Date.now();
-
-        // Call the original function and get the APIPromise
-        const spanContext = trace.setSpan(currentContext, span);
-        const response = context.with(spanContext, () => wrapped.call(instance, ...args));
-
-        if (isPromise(response)) {
-          return (async () => {
-            try {
-              const stream = await response;
-              return new AsyncStreamingWrapper(
-                span,
-                stream,
-                startTime,
-                kwargs,
-                spanContext,
-                currentContext,
-                tracer,
-              );
-            } catch (error) {
-              Logger.error("netra.instrumentation.anthropic:", error);
-              span.setStatus({
-                code: SpanStatusCode.ERROR,
-                message: error instanceof Error ? error.message : String(error),
-              });
-              span.recordException(error as Error);
-              span.end();
-              throw error;
-            }
-          })();
-        } else {
-          return new AsyncStreamingWrapper(
-            span,
-            response,
-            startTime,
-            kwargs,
-            spanContext,
-            currentContext,
-            tracer,
-          );
-        }
-      } catch (error) {
-        Logger.error("netra.instrumentation.anthropic:", error);
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        span.recordException(error as Error);
-        span.end();
-        throw error;
-      }
-    }
-    // Non streaming
-    else {
-      return tracer.startActiveSpan(
-        spanName,
-        {
-          kind: SpanKind.CLIENT,
-          attributes: { "llm.request.type": requestType },
-        },
-        (span: Span) => {
-          try {
-            setRequestAttributes(span, kwargs, requestType);
-            const startTime = Date.now();
-            const spanContext = trace.setSpan(currentContext, span);
-            const response = context.with(spanContext, () => wrapped.call(instance, ...args));
-            if (isPromise(response)) {
+      (span: Span) => {
+        try {
+          setRequestAttributes(span, kwargs, requestType);
+          if (isStreaming) {
+            span.setAttribute("llm.streaming", true);
+          }
+          const startTime = Date.now();
+          const spanContext = trace.setSpan(currentContext, span);
+          const response = context.with(spanContext, () => wrapped.call(instance, ...args));
+          if (isPromise(response)) {
               // Create a new promise that handles instrumentation
-              const instrumentedPromise = (async () => {
-                try {
-                  const value = await response;
-                  const endTime = Date.now();
-                  const responseDict = modelAsDict(value);
-                  setResponseAttributes(span, responseDict);
-                  span.setAttribute(
-                    "llm.response.duration",
-                    (endTime - startTime) / 1000,
-                  );
-                  registerToolCycle(
-                    responseDict,
-                    span,
-                    currentContext,
-                    endTime,
-                  );
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  span.end();
-                  return value;
-                } catch (error) {
-                  Logger.error("netra.instrumentation.anthropic:", error);
-                  span.setStatus({
-                    code: SpanStatusCode.ERROR,
-                    message:
-                      error instanceof Error ? error.message : String(error),
-                  });
-                  span.recordException(error as Error);
-                  span.end();
-                  throw error;
+            const instrumentedPromise = (async () => {
+              try {
+                const value = await response;
+
+                if (isStreaming && isAsyncIterable(value)) {
+                  return wrapStreamIterable(value, span, startTime, currentContext);
                 }
-              })();
 
-              // Use a Proxy to preserve all methods from the original APIPromise
-              // This includes withResponse(), asResponse(), etc.
-              return new Proxy(instrumentedPromise, {
-                get(target, prop, receiver) {
-                  if (
-                    prop === "then" ||
-                    prop === "catch" ||
-                    prop === "finally"
-                  ) {
-                    const value = Reflect.get(target, prop, receiver);
-                    if (typeof value === "function") {
-                      return value.bind(target);
-                    }
-                    return value;
-                  }
+                const endTime = Date.now();
+                const responseDict = modelAsDict(value);
+                setResponseAttributes(span, responseDict);
+                span.setAttribute(
+                  "llm.response.duration",
+                  (endTime - startTime) / 1000,
+                );
+                registerToolCycle(
+                  responseDict,
+                  span,
+                  currentContext,
+                  endTime,
+                );
+                span.setStatus({ code: SpanStatusCode.OK });
+                span.end();
+                return value;
+              } catch (error) {
+                Logger.error("netra.instrumentation.anthropic:", error);
+                span.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                });
+                span.recordException(error as Error);
+                span.end();
+                throw error;
+              }
+            })();
 
-                  const responseValue = (response as any)[prop];
-                  if (responseValue !== undefined) {
-                    if (typeof responseValue === "function") {
-                      return responseValue.bind(response);
-                    }
-                    return responseValue;
-                  }
-
+            // Proxy preserves SDK methods (.withResponse(), .asResponse(), etc.)
+            // while routing then/catch/finally to the instrumented promise.
+            return new Proxy(instrumentedPromise, {
+              get(target, prop, receiver) {
+                if (
+                  prop === "then" ||
+                  prop === "catch" ||
+                  prop === "finally"
+                ) {
                   const value = Reflect.get(target, prop, receiver);
                   if (typeof value === "function") {
                     return value.bind(target);
                   }
                   return value;
-                },
-              });
-            } else {
-              const endTime = Date.now();
-              const responseDict = modelAsDict(response);
-              setResponseAttributes(span, responseDict);
-              span.setAttribute(
-                "llm.response.duration",
-                (endTime - startTime) / 1000,
-              );
-              registerToolCycle(
-                responseDict,
-                span,
-                currentContext,
-                endTime,
-              );
-              span.setStatus({ code: SpanStatusCode.OK });
-              span.end();
-              return response;
-            }
-          } catch (error) {
-            Logger.error("netra.instrumentation.anthropic:", error);
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: error instanceof Error ? error.message : String(error),
+                }
+
+                const responseValue = (response as any)[prop];
+                if (responseValue !== undefined) {
+                  if (typeof responseValue === "function") {
+                    return responseValue.bind(response);
+                  }
+                  return responseValue;
+                }
+
+                const value = Reflect.get(target, prop, receiver);
+                if (typeof value === "function") {
+                  return value.bind(target);
+                }
+                return value;
+              },
             });
-            span.recordException(error as Error);
+          } else {
+            const endTime = Date.now();
+            const responseDict = modelAsDict(response);
+            setResponseAttributes(span, responseDict);
+            span.setAttribute(
+              "llm.response.duration",
+              (endTime - startTime) / 1000,
+            );
+            registerToolCycle(responseDict, span, currentContext, endTime);
+            span.setStatus({ code: SpanStatusCode.OK });
             span.end();
-            throw error;
+            return response;
           }
-        },
-      );
-    }
+        } catch (error) {
+          Logger.error("netra.instrumentation.anthropic:", error);
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          span.recordException(error as Error);
+          span.end();
+          throw error;
+        }
+      },
+    );
   };
 }
 
@@ -453,89 +445,3 @@ export class MessageStreamWrapper {
   }
 }
 
-export class AsyncStreamingWrapper
-  implements AsyncIterable<unknown>, AsyncIterator<unknown>
-{
-  private iterator: AsyncIterator<unknown> | null = null;
-  private completeResponse: Record<string, unknown> = {
-    choices: [],
-    model: "",
-  };
-  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
-  private span!: Span;
-  private response!: any;
-  private startTime!: number;
-  private requestKwargs!: Record<string, any>;
-  private spanContext!: any;
-  private parentContext!: any;
-  private tracer!: Tracer;
-
-  constructor(
-    span: Span,
-    response: any,
-    startTime: number,
-    requestKwargs: Record<string, any>,
-    spanContext?: any,
-    parentContext?: any,
-    tracer?: Tracer,
-  ) {
-    defineHidden(this, "span", span);
-    defineHidden(this, "response", response);
-    defineHidden(this, "startTime", startTime);
-    defineHidden(this, "requestKwargs", requestKwargs);
-    defineHidden(
-      this,
-      "spanContext",
-      spanContext || trace.setSpan(context.active(), span),
-    );
-    defineHidden(this, "parentContext", parentContext || context.active());
-    if (tracer) defineHidden(this, "tracer", tracer);
-  }
-
-  toJSON() {
-    return this.completeResponse;
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<unknown> {
-    return this;
-  }
-
-  async next(): Promise<IteratorResult<unknown>> {
-    try {
-      if (!this.iterator) {
-        if (Symbol.asyncIterator in this.response) {
-          this.iterator = (this.response as AsyncIterable<unknown>)[
-            Symbol.asyncIterator
-          ]();
-        } else if (
-          typeof (this.response as AsyncIterator<unknown>).next === "function"
-        ) {
-          this.iterator = this.response as AsyncIterator<unknown>;
-        } else {
-          throw new Error("Response is not iterable");
-        }
-      }
-
-      const result = await context.with(this.spanContext, () => this.iterator!.next());
-      if (result.done) {
-        this.finalizeSpan(SpanStatusCode.OK);
-        return result;
-      }
-      processStreamChunk(this.completeResponse, result.value, this.span);
-      return result;
-    } catch (error) {
-      this.finalizeSpan(SpanStatusCode.ERROR);
-      throw error;
-    }
-  }
-
-  private finalizeSpan(code: SpanStatusCode): void {
-    finalizeStreamSpan(
-      this.span,
-      this.completeResponse,
-      this.startTime,
-      this.parentContext,
-      code,
-    );
-  }
-}

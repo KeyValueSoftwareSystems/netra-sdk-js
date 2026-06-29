@@ -226,6 +226,59 @@ export class NetraAnthropicInstrumentor {
         return;
       }
 
+      if (BetaMessagesClass?.prototype?.stream) {
+        const originalStream = BetaMessagesClass.prototype.stream as Function;
+        originalMethods.set(`beta.messages.stream-${index}`, originalStream);
+        const tracer = this.tracer;
+        BetaMessagesClass.prototype.stream = function (
+          this: unknown,
+          ...args: unknown[]
+        ): unknown {
+          const original = originalStream.bind(this);
+          const kwargs = (args[0] || {}) as Record<string, unknown>;
+
+          const currentContext = context.active();
+
+          resolveToolCycle(kwargs.messages, tracer);
+
+          const span = tracer.startSpan("anthropic.beta.stream", {
+            kind: SpanKind.CLIENT,
+            attributes: {
+              "llm.request.type": "beta",
+              "llm.streaming": true,
+              "llm.operation": "stream",
+            },
+          }, currentContext);
+
+          const spanContext = trace.setSpan(currentContext, span);
+
+          setRequestAttributes(span, kwargs, "beta");
+
+          const startTime = Date.now();
+          const instrumentedCreate = (this as any).create;
+          const originalCreate = originalMethods.get(`beta.messages.create-${index}`);
+          if (originalCreate) {
+            (this as any).create = originalCreate;
+          }
+
+          try {
+            const messageStream = context.with(spanContext, () => original(...args));
+            return new MessageStreamWrapper(
+              span,
+              messageStream,
+              startTime,
+              kwargs,
+              spanContext,
+              currentContext,
+            );
+          } finally {
+            if (originalCreate) {
+              (this as any).create = instrumentedCreate;
+            }
+          }
+        } as typeof BetaMessagesClass.prototype.stream;
+      }
+
       if (BetaMessagesClass?.prototype?.create) {
         const originalCreate = BetaMessagesClass.prototype.create as Function;
         originalMethods.set(`beta.messages.create-${index}`, originalCreate);
@@ -321,6 +374,12 @@ export class NetraAnthropicInstrumentor {
         BetaMessagesClass.prototype.create =
           originalCreate as typeof BetaMessagesClass.prototype.create;
       }
+
+      const originalStream = originalMethods.get(`beta.messages.stream-${index}`);
+      if (originalStream && BetaMessagesClass?.prototype) {
+        BetaMessagesClass.prototype.stream =
+          originalStream as typeof BetaMessagesClass.prototype.stream;
+      }
     } catch (error) {
       Logger.error(`Failed to uninstrument beta: ${error}`);
     }
@@ -343,7 +402,7 @@ export class NetraAnthropicInstrumentor {
 
 export const anthropicInstrumentor = new NetraAnthropicInstrumentor();
 
-export { AsyncStreamingWrapper, chatWrapper } from "./wrappers";
+export { chatWrapper } from "./wrappers";
 
 export { setRequestAttributes, setResponseAttributes } from "./utils";
 

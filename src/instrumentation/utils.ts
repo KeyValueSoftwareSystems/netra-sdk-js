@@ -172,7 +172,7 @@ export function buildInputMessages(
 ): TracedMessage[] {
   const messages: TracedMessage[] = [];
 
-  if (requestType === "chat") {
+  if (requestType === "chat" || requestType === "beta") {
     if (hasContent(kwargs.system)) {
       const systemContent =
         typeof kwargs.system === "string"

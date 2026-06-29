@@ -219,8 +219,7 @@ export function registerToolCycle(
 
 /**
  * Accumulate a single Anthropic SSE chunk into `completeResponse`.
- * Both MessageStreamWrapper and AsyncStreamingWrapper delegate here so
- * the chunk-processing logic exists in exactly one place.
+ * MessageStreamWrapper delegates here for chunk-level processing.
  */
 export function processStreamChunk(
   completeResponse: Record<string, any>,
