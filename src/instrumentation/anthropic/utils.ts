@@ -14,34 +14,6 @@ import {
   setResponseAttributes as setBaseResponseAttributes,
 } from "../utils";
 
-interface PendingToolCall {
-  id: string;
-  name: string;
-  input: unknown;
-  responseEndTime: number;
-}
-
-interface PendingToolCycle {
-  parentContext: Context;
-  toolCalls: PendingToolCall[];
-  createdAt: number;
-}
-
-export interface ToolResultBlock {
-  tool_use_id: string;
-  content: unknown;
-  is_error?: boolean;
-}
-
-const pendingToolCycles = new Map<string, PendingToolCycle[]>();
-const TTL_MS = 5 * 60 * 1000;
-
-function millisToHrTime(millis: number): [number, number] {
-  const seconds = Math.floor(millis / 1000);
-  const nanos = (millis % 1000) * 1_000_000;
-  return [seconds, nanos];
-}
-
 function toolSafeStringify(value: unknown): string {
   if (typeof value === "string") return value;
   try {
@@ -51,185 +23,60 @@ function toolSafeStringify(value: unknown): string {
   }
 }
 
-function evictStaleEntries(): void {
-  const now = Date.now();
-  for (const [key, cycles] of pendingToolCycles) {
-    const live = cycles.filter((c) => now - c.createdAt <= TTL_MS);
-    if (live.length === 0) {
-      pendingToolCycles.delete(key);
-    } else if (live.length < cycles.length) {
-      pendingToolCycles.set(key, live);
-    }
-  }
-}
-
-export function registerPendingToolCalls(
-  traceId: string,
-  parentContext: Context,
-  toolUseBlocks: Array<Record<string, unknown>>,
-  responseEndTime: number,
-): void {
-  evictStaleEntries();
-
-  const toolCalls: PendingToolCall[] = toolUseBlocks.map((block) => ({
-    id: String(block.id ?? ""),
-    name: String(block.name ?? "unknown"),
-    input: block.input,
-    responseEndTime,
-  }));
-
-  const existing = pendingToolCycles.get(traceId) ?? [];
-  existing.push({ parentContext, toolCalls, createdAt: Date.now() });
-  pendingToolCycles.set(traceId, existing);
-
-  Logger.debug(
-    `tool-call-tracker: registered ${toolCalls.length} pending tool calls for trace ${traceId}`,
-  );
-}
-
-export function resolveToolCalls(
-  traceId: string,
+/**
+ * Wrap each tool's `run()` method so that every invocation creates a
+ * real-time TOOL span with actual start/end timestamps. Works with
+ * `BetaRunnableTool` objects passed to `toolRunner()`.
+ */
+export function wrapRunnableTools(
+  tools: any[],
   tracer: Tracer,
-  toolResults: ToolResultBlock[],
-  requestStartTime: number,
-): void {
-  const cycles = pendingToolCycles.get(traceId);
-  if (!cycles || cycles.length === 0) return;
+  parentContext: Context,
+): any[] {
+  return tools.map((tool) => {
+    if (typeof tool.run !== "function") return tool;
 
-  const resultIds = new Set(toolResults.map((r) => r.tool_use_id));
-  const resultMap = new Map<string, ToolResultBlock>();
-  for (const result of toolResults) {
-    resultMap.set(result.tool_use_id, result);
-  }
+    const originalRun = tool.run;
+    const toolName = tool.name ?? "unknown_tool";
 
-  // Find the cycle whose tool_use_ids match the incoming tool_result ids
-  const matchIdx = cycles.findIndex((c) =>
-    c.toolCalls.some((tc) => resultIds.has(tc.id)),
-  );
-  if (matchIdx === -1) return;
-
-  const cycle = cycles[matchIdx];
-  cycles.splice(matchIdx, 1);
-  if (cycles.length === 0) {
-    pendingToolCycles.delete(traceId);
-  }
-
-  let resolved = 0;
-  for (const pending of cycle.toolCalls) {
-    try {
-      const toolSpan = tracer.startSpan(
-        pending.name,
+    const wrappedRun = async function (this: any, input: any, runContext?: any) {
+      const toolUseId = runContext?.toolUse?.id ?? runContext?.toolUseBlock?.id;
+      const span = tracer.startSpan(
+        toolName,
         {
           kind: SpanKind.INTERNAL,
-          startTime: millisToHrTime(pending.responseEndTime),
           attributes: {
             "netra.span.type": "TOOL",
-            [SpanAttributes.LLM_REQUEST_TOOL_NAME]: pending.name,
-            [SpanAttributes.LLM_REQUEST_TOOL_ID]: pending.id,
-            input: toolSafeStringify(pending.input),
+            [SpanAttributes.LLM_REQUEST_TOOL_NAME]: toolName,
+            ...(toolUseId ? { [SpanAttributes.LLM_REQUEST_TOOL_ID]: toolUseId } : {}),
+            input: toolSafeStringify(input),
           },
         },
-        cycle.parentContext,
+        parentContext,
       );
 
-      const matched = resultMap.get(pending.id);
-      if (matched) {
-        toolSpan.setAttribute("output", toolSafeStringify(matched.content));
-        if (matched.is_error) {
-          toolSpan.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: "Tool returned an error",
-          });
-        } else {
-          toolSpan.setStatus({ code: SpanStatusCode.OK });
-        }
-      } else {
-        toolSpan.setStatus({ code: SpanStatusCode.OK });
-      }
-
-      toolSpan.end(millisToHrTime(requestStartTime));
-      resolved++;
-    } catch (error) {
-      Logger.error(
-        `tool-call-tracker: failed to create span for tool ${pending.name}:`,
-        error,
-      );
-    }
-  }
-
-  Logger.debug(
-    `tool-call-tracker: resolved ${resolved} tool calls for trace ${traceId}`,
-  );
-}
-
-export function extractToolResults(
-  messages: Array<Record<string, unknown>>,
-): ToolResultBlock[] {
-  const results: ToolResultBlock[] = [];
-  for (const msg of messages) {
-    if (msg.role !== "user" || !Array.isArray(msg.content)) continue;
-    for (const block of msg.content as Array<Record<string, unknown>>) {
-      if (block.type === "tool_result" && block.tool_use_id) {
-        results.push({
-          tool_use_id: String(block.tool_use_id),
-          content: block.content,
-          is_error: block.is_error === true,
+      const spanCtx = trace.setSpan(parentContext, span);
+      try {
+        const result = await context.with(spanCtx, () =>
+          originalRun.call(this, input, runContext),
+        );
+        span.setAttribute("output", toolSafeStringify(result));
+        span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (error) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: error instanceof Error ? error.message : String(error),
         });
+        span.recordException(error as Error);
+        throw error;
+      } finally {
+        span.end();
       }
-    }
-  }
-  return results;
-}
+    };
 
-export function clearPendingToolCycles(): void {
-  pendingToolCycles.clear();
-}
-
-/**
- * If the outgoing request carries tool_result blocks, resolve the pending
- * tool cycle for the active trace — creating retroactive tool spans.
- */
-export function resolveToolCycle(
-  messages: unknown,
-  tracer: Tracer,
-): void {
-  const activeSpan = trace.getSpan(context.active());
-  const traceId = activeSpan?.spanContext().traceId;
-  if (!traceId || !Array.isArray(messages)) return;
-
-  const toolResults = extractToolResults(
-    messages as Array<Record<string, unknown>>,
-  );
-  if (toolResults.length > 0) {
-    resolveToolCalls(traceId, tracer, toolResults, Date.now());
-  }
-}
-
-/**
- * If the LLM response has stop_reason === "tool_use", register the
- * tool_use blocks so the next request can create retroactive tool spans.
- */
-export function registerToolCycle(
-  response: Record<string, unknown>,
-  span: Span,
-  parentContext: Context,
-  endTime: number,
-): void {
-  if (response.stop_reason !== "tool_use" || !Array.isArray(response.content))
-    return;
-
-  const toolUseBlocks = (
-    response.content as Array<Record<string, unknown>>
-  ).filter((b) => b.type === "tool_use");
-
-  if (toolUseBlocks.length > 0) {
-    registerPendingToolCalls(
-      span.spanContext().traceId,
-      parentContext,
-      toolUseBlocks,
-      endTime,
-    );
-  }
+    return { ...tool, run: wrappedRun };
+  });
 }
 
 /**
@@ -339,14 +186,14 @@ export function processStreamChunk(
 }
 
 /**
- * Close out a streaming span: set response attributes, register any
- * pending tool cycle, record duration, and end the span.
+ * Close out a streaming span: set response attributes, record duration,
+ * and end the span.
  */
 export function finalizeStreamSpan(
   span: Span,
   completeResponse: Record<string, any>,
   startTime: number,
-  parentContext: any,
+  _parentContext: any,
   code: SpanStatusCode,
 ): void {
   const endTime = Date.now();
@@ -357,8 +204,6 @@ export function finalizeStreamSpan(
     usage: completeResponse.usage,
     stop_reason: completeResponse.stop_reason,
   });
-
-  registerToolCycle(completeResponse, span, parentContext, endTime);
 
   span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
   span.setStatus({ code });

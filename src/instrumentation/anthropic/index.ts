@@ -1,7 +1,7 @@
 import { createRequire } from "module";
 import { context, SpanKind, SpanStatusCode, trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { clearPendingToolCycles, resolveToolCycle, setRequestAttributes } from "./utils";
+import { setRequestAttributes, wrapRunnableTools } from "./utils";
 import { __version__ } from "./version";
 import { batchesWrapper, betaWrapper, chatWrapper, MessageStreamWrapper } from "./wrappers";
 
@@ -112,7 +112,6 @@ export class NetraAnthropicInstrumentor {
     originalMethods.clear();
     anthropicClasses = [];
     isInstrumented = false;
-    clearPendingToolCycles();
   }
 
   isInstrumented(): boolean {
@@ -145,8 +144,6 @@ export class NetraAnthropicInstrumentor {
           const kwargs = (args[0] || {}) as Record<string, unknown>;
 
           const currentContext = context.active();
-
-          resolveToolCycle(kwargs.messages, tracer);
 
           const span = tracer.startSpan("anthropic.stream", {
               kind: SpanKind.CLIENT,
@@ -243,8 +240,6 @@ export class NetraAnthropicInstrumentor {
 
           const currentContext = context.active();
 
-          resolveToolCycle(kwargs.messages, tracer);
-
           const span = tracer.startSpan("anthropic.beta.stream", {
             kind: SpanKind.CLIENT,
             attributes: {
@@ -307,6 +302,109 @@ export class NetraAnthropicInstrumentor {
             kwargs,
           );
         } as typeof BetaMessagesClass.prototype.create;
+      }
+
+      if (BetaMessagesClass?.prototype?.toolRunner) {
+        const originalToolRunner = BetaMessagesClass.prototype.toolRunner as Function;
+        originalMethods.set(`beta.messages.toolRunner-${index}`, originalToolRunner);
+        const tracer = this.tracer;
+
+        BetaMessagesClass.prototype.toolRunner = function (
+          this: unknown,
+          ...args: unknown[]
+        ): unknown {
+          const original = originalToolRunner.bind(this);
+          const kwargs = (args[0] || {}) as Record<string, unknown>;
+          const currentContext = context.active();
+
+          const span = tracer.startSpan("anthropic.toolRunner", {
+            kind: SpanKind.CLIENT,
+            attributes: {
+              "llm.request.type": "beta",
+              "netra.span.type": "AGENT",
+              "llm.operation": "toolRunner",
+            },
+          }, currentContext);
+
+          setRequestAttributes(span, kwargs, "beta");
+
+          const spanContext = trace.setSpan(currentContext, span);
+
+          const wrappedTools = Array.isArray(kwargs.tools)
+            ? wrapRunnableTools(kwargs.tools as any[], tracer, spanContext)
+            : kwargs.tools;
+
+          const wrappedArgs = [{ ...kwargs, tools: wrappedTools }, ...args.slice(1)];
+
+          const runner = context.with(spanContext, () => original(...wrappedArgs));
+
+          if (runner == null || typeof runner[Symbol.asyncIterator] !== "function") {
+            if (runner != null && typeof runner.then === "function") {
+              return (runner as Promise<any>)
+                .catch((e: any) => {
+                  span.setStatus({ code: SpanStatusCode.ERROR, message: e instanceof Error ? e.message : String(e) });
+                  span.recordException(e);
+                  throw e;
+                })
+                .finally(() => {
+                  span.setStatus({ code: SpanStatusCode.OK });
+                  span.end();
+                });
+            }
+            span.end();
+            return runner;
+          }
+
+          const originalIterator = runner[Symbol.asyncIterator]();
+          let spanEnded = false;
+          const endSpanOnce = (code: SpanStatusCode, error?: Error) => {
+            if (spanEnded) return;
+            spanEnded = true;
+            if (error) {
+              span.setStatus({ code, message: error.message });
+              span.recordException(error);
+            } else {
+              span.setStatus({ code });
+            }
+            span.end();
+          };
+
+          const wrappedIterator: AsyncIterableIterator<unknown> = {
+            [Symbol.asyncIterator]() { return this; },
+            async next() {
+              try {
+                const result = await context.with(spanContext, () => originalIterator.next());
+                if (result.done) {
+                  endSpanOnce(SpanStatusCode.OK);
+                }
+                return result;
+              } catch (error) {
+                endSpanOnce(SpanStatusCode.ERROR, error as Error);
+                throw error;
+              }
+            },
+            async return(value?: any) {
+              endSpanOnce(SpanStatusCode.OK);
+              return originalIterator.return?.(value) ?? { done: true, value };
+            },
+            async throw(error?: any) {
+              endSpanOnce(SpanStatusCode.ERROR, error);
+              if (originalIterator.throw) return originalIterator.throw(error);
+              throw error;
+            },
+          };
+
+          if (typeof runner.then === "function") {
+            const thenableIterator = Object.assign(wrappedIterator, {
+              then: runner.then.bind(runner),
+              catch: runner.catch?.bind(runner),
+              finally: runner.finally?.bind(runner),
+            });
+            return thenableIterator;
+          }
+
+          return wrappedIterator;
+        } as typeof BetaMessagesClass.prototype.toolRunner;
       }
     } catch (error) {
       Logger.error(`Failed to instrument beta: ${error}`);
@@ -387,6 +485,12 @@ export class NetraAnthropicInstrumentor {
       if (originalStream && BetaMessagesClass?.prototype) {
         BetaMessagesClass.prototype.stream =
           originalStream as typeof BetaMessagesClass.prototype.stream;
+      }
+
+      const originalToolRunner = originalMethods.get(`beta.messages.toolRunner-${index}`);
+      if (originalToolRunner && BetaMessagesClass?.prototype) {
+        BetaMessagesClass.prototype.toolRunner =
+          originalToolRunner as typeof BetaMessagesClass.prototype.toolRunner;
       }
     } catch (error) {
       Logger.error(`Failed to uninstrument beta: ${error}`);

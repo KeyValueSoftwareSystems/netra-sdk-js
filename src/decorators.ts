@@ -2,7 +2,7 @@
  * Decorators for easy instrumentation
  */
 
-import { trace, Span, SpanStatusCode } from "@opentelemetry/api";
+import { context, trace, Span, SpanStatusCode } from "@opentelemetry/api";
 import { Config } from "./config";
 import { Logger } from "./logger";
 import { SessionManager } from "./session-manager";
@@ -104,6 +104,42 @@ function isClassConstructor(value: unknown): value is AnyClass {
   );
 }
 
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return (
+    value != null && typeof (value as any)[Symbol.asyncIterator] === "function"
+  );
+}
+
+/**
+ * Wrap an async iterable so the span stays active during iteration
+ * and is only cleaned up when iteration completes, throws, or is aborted.
+ */
+function wrapAsyncIterableWithSpan(
+  iterable: AsyncIterable<unknown>,
+  span: Span,
+  cleanup: (span: Span) => void,
+  handleError: (span: Span, e: any) => void,
+): AsyncGenerator<unknown> {
+  const spanContext = trace.setSpan(context.active(), span);
+
+  async function* tracked(): AsyncGenerator<unknown> {
+    try {
+      const iterator = iterable[Symbol.asyncIterator]();
+      while (true) {
+        const result = await context.with(spanContext, () => iterator.next());
+        if (result.done) break;
+        yield result.value;
+      }
+    } catch (e: any) {
+      handleError(span, e);
+    } finally {
+      cleanup(span);
+    }
+  }
+
+  return tracked();
+}
+
 function createFunctionWrapper<T extends AnyFunction>(
   func: T,
   entityType: string,
@@ -113,6 +149,7 @@ function createFunctionWrapper<T extends AnyFunction>(
   const moduleName = func.name || "unknown";
   const spanName = name || func.name || "anonymous";
   const isAsync = func.constructor.name === "AsyncFunction";
+  const isAsyncGen = func.constructor.name === "AsyncGeneratorFunction";
 
   const initSpan = (span: Span): void => {
     span.setAttribute("netra.span.type", asType);
@@ -134,6 +171,20 @@ function createFunctionWrapper<T extends AnyFunction>(
     SessionManager.unregisterSpan(spanName, span);
     SessionManager.popEntity(entityType);
   };
+
+  if (isAsyncGen) {
+    const wrapper = function (this: any, ...args: any[]) {
+      SessionManager.pushEntity(entityType, spanName);
+      const tracer = trace.getTracer(moduleName);
+      return tracer.startActiveSpan(spanName, (span) => {
+        initSpan(span);
+        addInputAttributes(span, args, entityType);
+        const result = (func as AnyFunction).call(this, ...args);
+        return wrapAsyncIterableWithSpan(result, span, cleanup, handleError);
+      });
+    };
+    return wrapper as T;
+  }
 
   if (isAsync) {
     const wrapper = async function (this: any, ...args: any[]) {
@@ -159,19 +210,24 @@ function createFunctionWrapper<T extends AnyFunction>(
       SessionManager.pushEntity(entityType, spanName);
       const tracer = trace.getTracer(moduleName);
       return tracer.startActiveSpan(spanName, (span) => {
-        // Track whether the function returned a promise so the finally block
-        // can skip its cleanup — the promise chain owns span lifecycle in that case.
-        let returnedPromise = false;
+        let deferredLifecycle = false;
         try {
           initSpan(span);
           addInputAttributes(span, args, entityType);
           const result = (func as AnyFunction).call(this, ...args);
 
-          // Detect promise-returning non-async functions (e.g. `function foo() { return fetch(...) }`)
-          // Without this check, addOutputAttributes would capture the raw Promise object and
-          // cleanup() would end the span before the async work completes.
+          if (isAsyncIterable(result)) {
+            deferredLifecycle = true;
+            return wrapAsyncIterableWithSpan(
+              result,
+              span,
+              cleanup,
+              handleError,
+            );
+          }
+
           if (result != null && typeof (result as any).then === "function") {
-            returnedPromise = true;
+            deferredLifecycle = true;
             return (result as Promise<any>)
               .then((resolved: any) => {
                 addOutputAttributes(span, resolved);
@@ -186,7 +242,7 @@ function createFunctionWrapper<T extends AnyFunction>(
         } catch (e: any) {
           handleError(span, e);
         } finally {
-          if (!returnedPromise) {
+          if (!deferredLifecycle) {
             cleanup(span);
           }
         }

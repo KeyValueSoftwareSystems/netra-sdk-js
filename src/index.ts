@@ -125,6 +125,32 @@ export {
   runWithExtractedContext,
 } from "./utils/context-propagation";
 
+/**
+ * Wrap an async iterable so that `SpanWrapper` stays active during
+ * iteration and ends only when the iterable completes or throws.
+ */
+function wrapAsyncIterableForSpanWrapper(
+  iterable: AsyncIterable<unknown>,
+  spanWrapper: SpanWrapper,
+): AsyncGenerator<unknown> {
+  async function* tracked(): AsyncGenerator<unknown> {
+    try {
+      const iterator = iterable[Symbol.asyncIterator]();
+      while (true) {
+        const result = await spanWrapper.withActive(() => iterator.next());
+        if (result.done) break;
+        yield result.value;
+      }
+    } catch (e: any) {
+      spanWrapper.setError(e instanceof Error ? e.message : String(e));
+      throw e;
+    } finally {
+      spanWrapper.end();
+    }
+  }
+  return tracked();
+}
+
 export class Netra {
   private static _SDK_NAME = "netra_sdk";
 
@@ -528,6 +554,13 @@ export class Netra {
         spanWrapper.setError(e instanceof Error ? e.message : String(e));
         spanWrapper.end();
         throw e;
+      }
+
+      if (
+        result != null &&
+        typeof (result as any)[Symbol.asyncIterator] === "function"
+      ) {
+        return wrapAsyncIterableForSpanWrapper(result as any, spanWrapper) as T;
       }
 
       if (result instanceof Promise) {

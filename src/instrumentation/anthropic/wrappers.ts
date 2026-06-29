@@ -4,8 +4,6 @@ import { defineHidden, isPromise, modelAsDict, shouldSuppressInstrumentation } f
 import {
   finalizeStreamSpan,
   processStreamChunk,
-  registerToolCycle,
-  resolveToolCycle,
   setRequestAttributes,
   setResponseAttributes,
 } from "./utils";
@@ -106,8 +104,6 @@ function anthropicWrapper(
     const activeSpan = trace.getSpan(context.active());
     Logger.debug(`Anthropic invoke (${requestType}). Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
 
-    resolveToolCycle(kwargs.messages, tracer);
-
     return tracer.startActiveSpan(
       spanName,
       {
@@ -139,12 +135,6 @@ function anthropicWrapper(
                 span.setAttribute(
                   "llm.response.duration",
                   (endTime - startTime) / 1000,
-                );
-                registerToolCycle(
-                  responseDict,
-                  span,
-                  currentContext,
-                  endTime,
                 );
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
@@ -201,7 +191,6 @@ function anthropicWrapper(
               "llm.response.duration",
               (endTime - startTime) / 1000,
             );
-            registerToolCycle(responseDict, span, currentContext, endTime);
             span.setStatus({ code: SpanStatusCode.OK });
             span.end();
             return response;
