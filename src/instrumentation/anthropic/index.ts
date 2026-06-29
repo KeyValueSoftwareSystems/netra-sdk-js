@@ -1,5 +1,5 @@
 import { createRequire } from "module";
-import { context, SpanKind, trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { context, SpanKind, SpanStatusCode, trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { clearPendingToolCycles, resolveToolCycle, setRequestAttributes } from "./utils";
 import { __version__ } from "./version";
@@ -162,7 +162,6 @@ export class NetraAnthropicInstrumentor {
           setRequestAttributes(span, kwargs, "chat");
           const startTime = Date.now();
 
-          const instrumentedCreate = (this as any).create;
           const originalCreate = originalMethods.get(`messages.create-${index}`);
           if (originalCreate) {
             (this as any).create = originalCreate;
@@ -176,11 +175,16 @@ export class NetraAnthropicInstrumentor {
               startTime,
               kwargs,
               spanContext,
-              currentContext
+              currentContext,
             );
+          } catch (error) {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
+            span.recordException(error as Error);
+            span.end();
+            throw error;
           } finally {
             if (originalCreate) {
-              (this as any).create = instrumentedCreate;
+              delete (this as any).create;
             }
           }
         } as typeof MessagesClass.prototype.stream;
@@ -255,7 +259,6 @@ export class NetraAnthropicInstrumentor {
           setRequestAttributes(span, kwargs, "beta");
 
           const startTime = Date.now();
-          const instrumentedCreate = (this as any).create;
           const originalCreate = originalMethods.get(`beta.messages.create-${index}`);
           if (originalCreate) {
             (this as any).create = originalCreate;
@@ -271,9 +274,14 @@ export class NetraAnthropicInstrumentor {
               spanContext,
               currentContext,
             );
+          } catch (error) {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
+            span.recordException(error as Error);
+            span.end();
+            throw error;
           } finally {
             if (originalCreate) {
-              (this as any).create = instrumentedCreate;
+              delete (this as any).create;
             }
           }
         } as typeof BetaMessagesClass.prototype.stream;

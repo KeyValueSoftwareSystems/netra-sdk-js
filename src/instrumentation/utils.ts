@@ -543,10 +543,7 @@ function setFinishReason(span: Span, response: Record<string, unknown>): void {
     const reason = choices[0].finish_reason ?? choices[0].finishReason;
     if (reason) {
       span.setAttribute(SpanAttributes.LLM_RESPONSE_FINISH_REASON, String(reason));
-      span.setAttribute(
-        "gen_ai.response.finish_reason",
-        String(response.stop_reason),
-      );
+      span.setAttribute("gen_ai.response.finish_reason", String(reason));
     }
   }
 }

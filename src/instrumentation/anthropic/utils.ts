@@ -33,7 +33,7 @@ export interface ToolResultBlock {
   is_error?: boolean;
 }
 
-const pendingToolCycles = new Map<string, PendingToolCycle>();
+const pendingToolCycles = new Map<string, PendingToolCycle[]>();
 const TTL_MS = 5 * 60 * 1000;
 
 function millisToHrTime(millis: number): [number, number] {
@@ -53,9 +53,12 @@ function toolSafeStringify(value: unknown): string {
 
 function evictStaleEntries(): void {
   const now = Date.now();
-  for (const [key, cycle] of pendingToolCycles) {
-    if (now - cycle.createdAt > TTL_MS) {
+  for (const [key, cycles] of pendingToolCycles) {
+    const live = cycles.filter((c) => now - c.createdAt <= TTL_MS);
+    if (live.length === 0) {
       pendingToolCycles.delete(key);
+    } else if (live.length < cycles.length) {
+      pendingToolCycles.set(key, live);
     }
   }
 }
@@ -75,11 +78,9 @@ export function registerPendingToolCalls(
     responseEndTime,
   }));
 
-  pendingToolCycles.set(traceId, {
-    parentContext,
-    toolCalls,
-    createdAt: Date.now(),
-  });
+  const existing = pendingToolCycles.get(traceId) ?? [];
+  existing.push({ parentContext, toolCalls, createdAt: Date.now() });
+  pendingToolCycles.set(traceId, existing);
 
   Logger.debug(
     `tool-call-tracker: registered ${toolCalls.length} pending tool calls for trace ${traceId}`,
@@ -92,22 +93,35 @@ export function resolveToolCalls(
   toolResults: ToolResultBlock[],
   requestStartTime: number,
 ): void {
-  const cycle = pendingToolCycles.get(traceId);
-  if (!cycle) return;
+  const cycles = pendingToolCycles.get(traceId);
+  if (!cycles || cycles.length === 0) return;
 
-  pendingToolCycles.delete(traceId);
-
+  const resultIds = new Set(toolResults.map((r) => r.tool_use_id));
   const resultMap = new Map<string, ToolResultBlock>();
   for (const result of toolResults) {
     resultMap.set(result.tool_use_id, result);
   }
 
+  // Find the cycle whose tool_use_ids match the incoming tool_result ids
+  const matchIdx = cycles.findIndex((c) =>
+    c.toolCalls.some((tc) => resultIds.has(tc.id)),
+  );
+  if (matchIdx === -1) return;
+
+  const cycle = cycles[matchIdx];
+  cycles.splice(matchIdx, 1);
+  if (cycles.length === 0) {
+    pendingToolCycles.delete(traceId);
+  }
+
+  let resolved = 0;
   for (const pending of cycle.toolCalls) {
     try {
       const toolSpan = tracer.startSpan(
         pending.name,
         {
           kind: SpanKind.INTERNAL,
+          startTime: millisToHrTime(pending.responseEndTime),
           attributes: {
             "netra.span.type": "TOOL",
             [SpanAttributes.LLM_REQUEST_TOOL_NAME]: pending.name,
@@ -134,6 +148,7 @@ export function resolveToolCalls(
       }
 
       toolSpan.end(millisToHrTime(requestStartTime));
+      resolved++;
     } catch (error) {
       Logger.error(
         `tool-call-tracker: failed to create span for tool ${pending.name}:`,
@@ -143,7 +158,7 @@ export function resolveToolCalls(
   }
 
   Logger.debug(
-    `tool-call-tracker: resolved ${cycle.toolCalls.length} tool calls for trace ${traceId}`,
+    `tool-call-tracker: resolved ${resolved} tool calls for trace ${traceId}`,
   );
 }
 
@@ -301,10 +316,10 @@ export function processStreamChunk(
       if (chunk.delta?.stop_reason) {
         completeResponse.stop_reason = chunk.delta.stop_reason;
       }
-      if (chunk.delta?.usage) {
+      if (chunk.usage) {
         completeResponse.usage = {
           ...(completeResponse.usage ?? {}),
-          ...chunk.delta.usage,
+          ...chunk.usage,
         };
       }
       break;

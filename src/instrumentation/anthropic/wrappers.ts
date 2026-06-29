@@ -38,18 +38,29 @@ function wrapStreamIterable(
     model: "",
     usage: {},
   };
+  let spanFinalized = false;
+  const finalizeOnce = (code: SpanStatusCode) => {
+    if (spanFinalized) return;
+    spanFinalized = true;
+    finalizeStreamSpan(span, completeResponse, startTime, parentContext, code);
+  };
 
   async function* trackedIterator(): AsyncGenerator<unknown> {
+    let errorOccurred = false;
     try {
       for await (const chunk of stream) {
         processStreamChunk(completeResponse, chunk, span);
         yield chunk;
       }
-      finalizeStreamSpan(span, completeResponse, startTime, parentContext, SpanStatusCode.OK);
     } catch (err) {
+      errorOccurred = true;
       Logger.error("netra.instrumentation.anthropic: Stream iteration error", err);
-      finalizeStreamSpan(span, completeResponse, startTime, parentContext, SpanStatusCode.ERROR);
+      finalizeOnce(SpanStatusCode.ERROR);
       throw err;
+    } finally {
+      if (!errorOccurred) {
+        finalizeOnce(SpanStatusCode.OK);
+      }
     }
   }
 
@@ -227,11 +238,13 @@ const WRAPPER_OWN_PROPS = new Set([
   "requestKwargs",
   "completeResponse",
   "processChunk",
-  "finalizeSpan",
+  "finalizeSpanOnce",
   "processEventData",
   "finalizeSpanFromMessage",
   "parentContext",
   "tracer",
+  "spanFinalized",
+  "listenerMap",
 ]);
 
 const EVENT_EMITTER_METHODS = new Set([
@@ -257,6 +270,8 @@ const TRACKED_STREAM_EVENTS = new Set([
   "finalMessage",
 ]);
 
+const LISTENER_REMOVAL_METHODS = new Set(["off", "removeListener"]);
+
 export class MessageStreamWrapper {
   private completeResponse: Record<string, any> = {
     content: [],
@@ -270,6 +285,8 @@ export class MessageStreamWrapper {
   private spanContext!: any;
   private parentContext!: any;
   private tracer!: Tracer;
+  private spanFinalized = false;
+  private listenerMap = new WeakMap<Function, Map<string, Function>>();
 
   constructor(
     span: Span,
@@ -323,7 +340,22 @@ export class MessageStreamWrapper {
                   return listener(...args);
                 };
 
+                let eventMap = target.listenerMap.get(listener);
+                if (!eventMap) {
+                  eventMap = new Map();
+                  target.listenerMap.set(listener, eventMap);
+                }
+                eventMap.set(event, wrappedListener);
+
                 return method.call(target.messageStream, event, wrappedListener);
+              };
+            }
+            if (LISTENER_REMOVAL_METHODS.has(prop)) {
+              return function (event: string, listener: Function) {
+                const eventMap = target.listenerMap.get(listener);
+                const wrapped = eventMap?.get(event) ?? listener;
+                eventMap?.delete(event);
+                return method.call(target.messageStream, event, wrapped);
               };
             }
             return method.bind(target.messageStream);
@@ -343,11 +375,13 @@ export class MessageStreamWrapper {
 
                 if (prop === "finalMessage" || prop === "done") {
                   target.finalizeSpanFromMessage(result);
+                } else if (prop === "finalText") {
+                  target.finalizeSpanOnce(SpanStatusCode.OK);
                 }
 
                 return result;
               } catch (error) {
-                target.finalizeSpan(SpanStatusCode.ERROR);
+                target.finalizeSpanOnce(SpanStatusCode.ERROR);
                 throw error;
               }
             };
@@ -369,16 +403,21 @@ export class MessageStreamWrapper {
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
+    let errorOccurred = false;
     try {
       for await (const chunk of this.messageStream) {
         processStreamChunk(this.completeResponse, chunk, this.span);
         yield chunk;
       }
-      this.finalizeSpan(SpanStatusCode.OK);
     } catch (err) {
+      errorOccurred = true;
       Logger.error("netra.instrumentation.anthropic: Stream error", err);
-      this.finalizeSpan(SpanStatusCode.ERROR);
+      this.finalizeSpanOnce(SpanStatusCode.ERROR);
       throw err;
+    } finally {
+      if (!errorOccurred) {
+        this.finalizeSpanOnce(SpanStatusCode.OK);
+      }
     }
   }
 
@@ -389,7 +428,6 @@ export class MessageStreamWrapper {
   private processEventData(eventType: string, data: any): void {
     switch (eventType) {
       case 'message':
-        // This is the message_start event data
         if (data.model) {
           this.completeResponse.model = data.model;
         }
@@ -399,7 +437,6 @@ export class MessageStreamWrapper {
         break;
 
       case 'text':
-        // Accumulate text
         if (!this.completeResponse.currentText) {
           this.completeResponse.currentText = '';
         }
@@ -407,7 +444,6 @@ export class MessageStreamWrapper {
         break;
 
       case 'contentBlock':
-        // Track content blocks
         if (!this.completeResponse.content) {
           this.completeResponse.content = [];
         }
@@ -415,7 +451,6 @@ export class MessageStreamWrapper {
         break;
 
       case 'finalMessage':
-        // Final message contains everything
         if (data.model) this.completeResponse.model = data.model;
         if (data.content) this.completeResponse.content = data.content;
         if (data.usage) this.completeResponse.usage = data.usage;
@@ -431,10 +466,12 @@ export class MessageStreamWrapper {
       if (message.stop_reason)
         this.completeResponse.stop_reason = message.stop_reason;
     }
-    this.finalizeSpan(SpanStatusCode.OK);
+    this.finalizeSpanOnce(SpanStatusCode.OK);
   }
 
-  private finalizeSpan(code: SpanStatusCode): void {
+  private finalizeSpanOnce(code: SpanStatusCode): void {
+    if (this.spanFinalized) return;
+    this.spanFinalized = true;
     finalizeStreamSpan(
       this.span,
       this.completeResponse,
