@@ -326,36 +326,6 @@ export class NetraAnthropicInstrumentor {
             },
           }, currentContext);
 
-          setRequestAttributes(span, kwargs, "beta");
-
-          const spanContext = trace.setSpan(currentContext, span);
-
-          const wrappedTools = Array.isArray(kwargs.tools)
-            ? wrapRunnableTools(kwargs.tools as any[], tracer, spanContext)
-            : kwargs.tools;
-
-          const wrappedArgs = [{ ...kwargs, tools: wrappedTools }, ...args.slice(1)];
-
-          const runner = context.with(spanContext, () => original(...wrappedArgs));
-
-          if (runner == null || typeof runner[Symbol.asyncIterator] !== "function") {
-            if (runner != null && typeof runner.then === "function") {
-              return (runner as Promise<any>)
-                .catch((e: any) => {
-                  span.setStatus({ code: SpanStatusCode.ERROR, message: e instanceof Error ? e.message : String(e) });
-                  span.recordException(e);
-                  throw e;
-                })
-                .finally(() => {
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  span.end();
-                });
-            }
-            span.end();
-            return runner;
-          }
-
-          const originalIterator = runner[Symbol.asyncIterator]();
           let spanEnded = false;
           const endSpanOnce = (code: SpanStatusCode, error?: Error) => {
             if (spanEnded) return;
@@ -369,41 +339,78 @@ export class NetraAnthropicInstrumentor {
             span.end();
           };
 
-          const wrappedIterator: AsyncIterableIterator<unknown> = {
-            [Symbol.asyncIterator]() { return this; },
-            async next() {
-              try {
-                const result = await context.with(spanContext, () => originalIterator.next());
-                if (result.done) {
-                  endSpanOnce(SpanStatusCode.OK);
-                }
-                return result;
-              } catch (error) {
-                endSpanOnce(SpanStatusCode.ERROR, error as Error);
-                throw error;
+          let runner: any;
+          try {
+            setRequestAttributes(span, kwargs, "beta");
+
+            const spanContext = trace.setSpan(currentContext, span);
+
+            const wrappedTools = Array.isArray(kwargs.tools)
+              ? wrapRunnableTools(kwargs.tools as any[], tracer, spanContext)
+              : kwargs.tools;
+
+            const wrappedArgs = [{ ...kwargs, tools: wrappedTools }, ...args.slice(1)];
+
+            runner = context.with(spanContext, () => original(...wrappedArgs));
+
+            if (runner == null || typeof runner[Symbol.asyncIterator] !== "function") {
+              if (runner != null && typeof runner.then === "function") {
+                return (runner as Promise<any>)
+                  .then((v: any) => { endSpanOnce(SpanStatusCode.OK); return v; })
+                  .catch((e: any) => {
+                    endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e)));
+                    throw e;
+                  });
               }
-            },
-            async return(value?: any) {
               endSpanOnce(SpanStatusCode.OK);
-              return originalIterator.return?.(value) ?? { done: true, value };
-            },
-            async throw(error?: any) {
-              endSpanOnce(SpanStatusCode.ERROR, error);
-              if (originalIterator.throw) return originalIterator.throw(error);
-              throw error;
-            },
-          };
+              return runner;
+            }
 
-          if (typeof runner.then === "function") {
-            const thenableIterator = Object.assign(wrappedIterator, {
-              then: runner.then.bind(runner),
-              catch: runner.catch?.bind(runner),
-              finally: runner.finally?.bind(runner),
-            });
-            return thenableIterator;
+            const originalIterator = runner[Symbol.asyncIterator]();
+
+            const wrappedIterator: AsyncIterableIterator<unknown> = {
+              [Symbol.asyncIterator]() { return this; },
+              async next() {
+                try {
+                  const result = await context.with(spanContext, () => originalIterator.next());
+                  if (result.done) {
+                    endSpanOnce(SpanStatusCode.OK);
+                  }
+                  return result;
+                } catch (error) {
+                  endSpanOnce(SpanStatusCode.ERROR, error as Error);
+                  throw error;
+                }
+              },
+              async return(value?: any) {
+                endSpanOnce(SpanStatusCode.OK);
+                return originalIterator.return?.(value) ?? { done: true, value };
+              },
+              async throw(error?: any) {
+                endSpanOnce(SpanStatusCode.ERROR, error);
+                if (originalIterator.throw) return originalIterator.throw(error);
+                throw error;
+              },
+            };
+
+            if (typeof runner.then === "function") {
+              const wrappedThen = (onFulfilled?: Function, onRejected?: Function) => {
+                return runner.then(
+                  onFulfilled ? (v: any) => { endSpanOnce(SpanStatusCode.OK); return onFulfilled(v); } : (v: any) => { endSpanOnce(SpanStatusCode.OK); return v; },
+                  onRejected ? (e: any) => { endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e))); return onRejected(e); } : (e: any) => { endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e))); throw e; },
+                );
+              };
+              return Object.assign(wrappedIterator, {
+                then: wrappedThen,
+                catch: (onRejected?: Function) => wrappedThen(undefined, onRejected),
+              });
+            }
+
+            return wrappedIterator;
+          } catch (error) {
+            endSpanOnce(SpanStatusCode.ERROR, error instanceof Error ? error : new Error(String(error)));
+            throw error;
           }
-
-          return wrappedIterator;
         } as typeof BetaMessagesClass.prototype.toolRunner;
       }
     } catch (error) {

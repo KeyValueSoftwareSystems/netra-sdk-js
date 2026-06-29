@@ -98,8 +98,7 @@ export interface TracedMessage {
   content: string;
 }
 
-// Internal Helpers
-function isTraceContentEnabled(): boolean {
+export function isTraceContentEnabled(): boolean {
   const raw =
     process.env.TRACELOOP_TRACE_CONTENT ??
     process.env.NETRA_TRACE_CONTENT ??

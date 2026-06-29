@@ -113,31 +113,59 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
 /**
  * Wrap an async iterable so the span stays active during iteration
  * and is only cleaned up when iteration completes, throws, or is aborted.
+ * Returns a Proxy that preserves extra methods/properties on the source
+ * and forwards return()/throw() for proper cleanup on early exit.
  */
 function wrapAsyncIterableWithSpan(
   iterable: AsyncIterable<unknown>,
   span: Span,
   cleanup: (span: Span) => void,
   handleError: (span: Span, e: any) => void,
-): AsyncGenerator<unknown> {
+): any {
   const spanContext = trace.setSpan(context.active(), span);
+  const iterator = iterable[Symbol.asyncIterator]();
+  let done = false;
 
-  async function* tracked(): AsyncGenerator<unknown> {
-    try {
-      const iterator = iterable[Symbol.asyncIterator]();
-      while (true) {
-        const result = await context.with(spanContext, () => iterator.next());
-        if (result.done) break;
-        yield result.value;
+  const finalize = () => {
+    if (done) return;
+    done = true;
+    cleanup(span);
+  };
+
+  const wrappedIterator: AsyncIterator<unknown> = {
+    async next(value?: any) {
+      try {
+        const result = await context.with(spanContext, () => iterator.next(value));
+        if (result.done) finalize();
+        return result;
+      } catch (e: any) {
+        try { handleError(span, e); } catch { /* handleError re-throws */ }
+        finalize();
+        throw e;
       }
-    } catch (e: any) {
-      handleError(span, e);
-    } finally {
-      cleanup(span);
-    }
-  }
+    },
+    async return(value?: any) {
+      finalize();
+      return iterator.return?.(value) ?? { done: true as const, value };
+    },
+    async throw(e?: any) {
+      try { handleError(span, e); } catch { /* handleError re-throws */ }
+      finalize();
+      if (iterator.throw) return iterator.throw(e);
+      throw e;
+    },
+  };
 
-  return tracked();
+  return new Proxy(iterable, {
+    get(target, prop, receiver) {
+      if (prop === Symbol.asyncIterator) {
+        return () => wrappedIterator;
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value === "function") return value.bind(target);
+      return value;
+    },
+  });
 }
 
 function createFunctionWrapper<T extends AnyFunction>(
@@ -177,10 +205,18 @@ function createFunctionWrapper<T extends AnyFunction>(
       SessionManager.pushEntity(entityType, spanName);
       const tracer = trace.getTracer(moduleName);
       return tracer.startActiveSpan(spanName, (span) => {
-        initSpan(span);
-        addInputAttributes(span, args, entityType);
-        const result = (func as AnyFunction).call(this, ...args);
-        return wrapAsyncIterableWithSpan(result, span, cleanup, handleError);
+        let wrapped = false;
+        try {
+          initSpan(span);
+          addInputAttributes(span, args, entityType);
+          const result = (func as AnyFunction).call(this, ...args);
+          wrapped = true;
+          return wrapAsyncIterableWithSpan(result, span, cleanup, handleError);
+        } catch (e: any) {
+          handleError(span, e);
+        } finally {
+          if (!wrapped) cleanup(span);
+        }
       });
     };
     return wrapper as T;

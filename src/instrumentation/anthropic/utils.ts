@@ -10,6 +10,7 @@ import {
 import { Logger } from "../../logger";
 import { SpanAttributes } from "../span-attributes";
 import {
+  isTraceContentEnabled,
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
 } from "../utils";
@@ -41,17 +42,17 @@ export function wrapRunnableTools(
 
     const wrappedRun = async function (this: any, input: any, runContext?: any) {
       const toolUseId = runContext?.toolUse?.id ?? runContext?.toolUseBlock?.id;
+      const traceContent = isTraceContentEnabled();
+      const attrs: Record<string, string> = {
+        "netra.span.type": "TOOL",
+        [SpanAttributes.LLM_REQUEST_TOOL_NAME]: toolName,
+      };
+      if (toolUseId) attrs[SpanAttributes.LLM_REQUEST_TOOL_ID] = toolUseId;
+      if (traceContent) attrs.input = toolSafeStringify(input);
+
       const span = tracer.startSpan(
         toolName,
-        {
-          kind: SpanKind.INTERNAL,
-          attributes: {
-            "netra.span.type": "TOOL",
-            [SpanAttributes.LLM_REQUEST_TOOL_NAME]: toolName,
-            ...(toolUseId ? { [SpanAttributes.LLM_REQUEST_TOOL_ID]: toolUseId } : {}),
-            input: toolSafeStringify(input),
-          },
-        },
+        { kind: SpanKind.INTERNAL, attributes: attrs },
         parentContext,
       );
 
@@ -60,7 +61,7 @@ export function wrapRunnableTools(
         const result = await context.with(spanCtx, () =>
           originalRun.call(this, input, runContext),
         );
-        span.setAttribute("output", toolSafeStringify(result));
+        if (traceContent) span.setAttribute("output", toolSafeStringify(result));
         span.setStatus({ code: SpanStatusCode.OK });
         return result;
       } catch (error) {
@@ -75,7 +76,12 @@ export function wrapRunnableTools(
       }
     };
 
-    return { ...tool, run: wrappedRun };
+    const wrapped = Object.create(
+      Object.getPrototypeOf(tool),
+      Object.getOwnPropertyDescriptors(tool),
+    );
+    wrapped.run = wrappedRun;
+    return wrapped;
   });
 }
 

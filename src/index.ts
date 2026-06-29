@@ -132,23 +132,50 @@ export {
 function wrapAsyncIterableForSpanWrapper(
   iterable: AsyncIterable<unknown>,
   spanWrapper: SpanWrapper,
-): AsyncGenerator<unknown> {
-  async function* tracked(): AsyncGenerator<unknown> {
-    try {
-      const iterator = iterable[Symbol.asyncIterator]();
-      while (true) {
-        const result = await spanWrapper.withActive(() => iterator.next());
-        if (result.done) break;
-        yield result.value;
+): any {
+  const iterator = iterable[Symbol.asyncIterator]();
+  let done = false;
+
+  const finalize = () => {
+    if (done) return;
+    done = true;
+    spanWrapper.end();
+  };
+
+  const wrappedIterator: AsyncIterator<unknown> = {
+    async next(value?: any) {
+      try {
+        const result = await spanWrapper.withActive(() => iterator.next(value));
+        if (result.done) finalize();
+        return result;
+      } catch (e: any) {
+        spanWrapper.setError(e instanceof Error ? e.message : String(e));
+        finalize();
+        throw e;
       }
-    } catch (e: any) {
+    },
+    async return(value?: any) {
+      finalize();
+      return iterator.return?.(value) ?? { done: true as const, value };
+    },
+    async throw(e?: any) {
       spanWrapper.setError(e instanceof Error ? e.message : String(e));
+      finalize();
+      if (iterator.throw) return iterator.throw(e);
       throw e;
-    } finally {
-      spanWrapper.end();
-    }
-  }
-  return tracked();
+    },
+  };
+
+  return new Proxy(iterable, {
+    get(target, prop, receiver) {
+      if (prop === Symbol.asyncIterator) {
+        return () => wrappedIterator;
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value === "function") return value.bind(target);
+      return value;
+    },
+  });
 }
 
 export class Netra {
@@ -565,11 +592,21 @@ export class Netra {
 
       if (result instanceof Promise) {
         return (result as Promise<unknown>)
+          .then((resolved) => {
+            if (
+              resolved != null &&
+              typeof (resolved as any)[Symbol.asyncIterator] === "function"
+            ) {
+              return wrapAsyncIterableForSpanWrapper(resolved as any, spanWrapper);
+            }
+            spanWrapper.end();
+            return resolved;
+          })
           .catch((e) => {
             spanWrapper.setError(e instanceof Error ? e.message : String(e));
+            spanWrapper.end();
             throw e;
-          })
-          .finally(() => spanWrapper.end()) as T;
+          }) as T;
       }
 
       spanWrapper.end();
