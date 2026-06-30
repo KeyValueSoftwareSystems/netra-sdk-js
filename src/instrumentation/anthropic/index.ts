@@ -407,7 +407,7 @@ export class NetraAnthropicInstrumentor {
                   }
                 }
 
-                const value = Reflect.get(target, prop, receiver);
+                const value = target[prop];
                 if (typeof value === "function") {
                   return value.bind(target);
                 }
