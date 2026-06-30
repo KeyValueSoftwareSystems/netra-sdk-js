@@ -353,60 +353,67 @@ export class NetraAnthropicInstrumentor {
 
             runner = context.with(spanContext, () => original(...wrappedArgs));
 
-            if (runner == null || typeof runner[Symbol.asyncIterator] !== "function") {
-              if (runner != null && typeof runner.then === "function") {
-                return (runner as Promise<any>)
-                  .then((v: any) => { endSpanOnce(SpanStatusCode.OK); return v; })
-                  .catch((e: any) => {
-                    endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e)));
-                    throw e;
-                  });
-              }
+            if (runner == null) {
               endSpanOnce(SpanStatusCode.OK);
               return runner;
             }
 
-            const originalIterator = runner[Symbol.asyncIterator]();
-
-            const wrappedIterator: AsyncIterableIterator<unknown> = {
-              [Symbol.asyncIterator]() { return this; },
-              async next() {
-                try {
-                  const result = await context.with(spanContext, () => originalIterator.next());
-                  if (result.done) {
-                    endSpanOnce(SpanStatusCode.OK);
-                  }
-                  return result;
-                } catch (error) {
-                  endSpanOnce(SpanStatusCode.ERROR, error as Error);
-                  throw error;
+            return new Proxy(runner, {
+              get(target: any, prop: string | symbol, receiver: any) {
+                if (prop === Symbol.asyncIterator) {
+                  return function () {
+                    const originalIterator = target[Symbol.asyncIterator]();
+                    return {
+                      [Symbol.asyncIterator]() { return this; },
+                      async next() {
+                        try {
+                          const result = await context.with(spanContext, () => originalIterator.next());
+                          if (result.done) {
+                            endSpanOnce(SpanStatusCode.OK);
+                          }
+                          return result;
+                        } catch (error) {
+                          endSpanOnce(SpanStatusCode.ERROR, error as Error);
+                          throw error;
+                        }
+                      },
+                      async return(value?: any) {
+                        endSpanOnce(SpanStatusCode.OK);
+                        return originalIterator.return?.(value) ?? { done: true, value };
+                      },
+                      async throw(error?: any) {
+                        endSpanOnce(SpanStatusCode.ERROR, error);
+                        if (originalIterator.throw) return originalIterator.throw(error);
+                        throw error;
+                      },
+                    };
+                  };
                 }
-              },
-              async return(value?: any) {
-                endSpanOnce(SpanStatusCode.OK);
-                return originalIterator.return?.(value) ?? { done: true, value };
-              },
-              async throw(error?: any) {
-                endSpanOnce(SpanStatusCode.ERROR, error);
-                if (originalIterator.throw) return originalIterator.throw(error);
-                throw error;
-              },
-            };
 
-            if (typeof runner.then === "function") {
-              const wrappedThen = (onFulfilled?: Function, onRejected?: Function) => {
-                return runner.then(
-                  onFulfilled ? (v: any) => { endSpanOnce(SpanStatusCode.OK); return onFulfilled(v); } : (v: any) => { endSpanOnce(SpanStatusCode.OK); return v; },
-                  onRejected ? (e: any) => { endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e))); return onRejected(e); } : (e: any) => { endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e))); throw e; },
-                );
-              };
-              return Object.assign(wrappedIterator, {
-                then: wrappedThen,
-                catch: (onRejected?: Function) => wrappedThen(undefined, onRejected),
-              });
-            }
+                if (prop === "then") {
+                  const originalThen = target.then;
+                  if (typeof originalThen === "function") {
+                    return function (onFulfilled?: Function, onRejected?: Function) {
+                      return originalThen.call(
+                        target,
+                        (v: any) => { endSpanOnce(SpanStatusCode.OK); return onFulfilled ? onFulfilled(v) : v; },
+                        (e: any) => {
+                          endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e)));
+                          if (onRejected) return onRejected(e);
+                          throw e;
+                        },
+                      );
+                    };
+                  }
+                }
 
-            return wrappedIterator;
+                const value = Reflect.get(target, prop, receiver);
+                if (typeof value === "function") {
+                  return value.bind(target);
+                }
+                return value;
+              },
+            });
           } catch (error) {
             endSpanOnce(SpanStatusCode.ERROR, error instanceof Error ? error : new Error(String(error)));
             throw error;
