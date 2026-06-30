@@ -58,6 +58,14 @@ export function extractContentString(content: unknown): string {
   return String(content);
 }
 
+export function parseBooleanEnv(name: string): boolean | undefined {
+  const val = process.env[name];
+  if (val === undefined || val === "") return undefined;
+  if (val === "true" || val === "1") return true;
+  if (val === "false" || val === "0") return false;
+  return undefined;
+}
+
 export function extractInstructions(response: unknown): string | undefined {
   if (!response || typeof response !== "object") return undefined;
   const resp = response as Record<string, unknown>;

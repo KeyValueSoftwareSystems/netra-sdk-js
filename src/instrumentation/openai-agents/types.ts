@@ -64,4 +64,16 @@ export interface InstrumentorOptions {
   tracerProvider?: { getTracer(name: string, version?: string): any };
   /** Override the `llm.system` attribute value (default: `"openai"`). */
   systemName?: string;
+  /**
+   * When `true` (default), replaces the OpenAI Agents SDK's default trace
+   * processors so traces are sent only to Netra, when supported by the
+   * installed SDK version. If the SDK does not expose the required APIs,
+   * the Netra processor is appended alongside the defaults and a warning
+   * is logged. When `false`, the Netra processor is always added alongside
+   * the defaults (traces go to both Netra and OpenAI).
+   *
+   * Can also be set via the `DISABLE_NATIVE_TRACING`
+   * environment variable (`"true"` / `"1"` to disable, `"false"` / `"0"` to keep).
+   */
+  disableNativeTracing?: boolean;
 }
