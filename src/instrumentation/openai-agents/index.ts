@@ -4,12 +4,15 @@ import { NetraAgentsTracingProcessor } from "./processor";
 import { DEFAULT_LLM_SYSTEM, INSTRUMENTATION_NAME } from "./constants";
 import { __version__ } from "./version";
 import { Logger } from "../../logger";
-import type { InstrumentorOptions } from "./types";
+import { parseBooleanEnv } from "./utils";
+import type { InstrumentorOptions, TracingProcessor } from "./types";
 
 let cachedAgentsModule: any = null;
 let isInstrumented = false;
 let activeTracer: Tracer | null = null;
 let activeProcessor: NetraAgentsTracingProcessor | null = null;
+let originalProcessors: TracingProcessor[] | null = null;
+let didReplaceProcessors = false;
 
 /**
  * Resolve the @openai/agents module from the application's context.
@@ -82,22 +85,43 @@ export class NetraOpenAIAgentsInstrumentor {
     const systemName = options.systemName ?? DEFAULT_LLM_SYSTEM;
     activeProcessor = new NetraAgentsTracingProcessor(activeTracer!, systemName);
 
+    const disableNative = options.disableNativeTracing
+      ?? parseBooleanEnv("DISABLE_NATIVE_TRACING")
+      ?? true;
+
+    const canSet = typeof agentsModule.setTraceProcessors === "function";
+    const canAdd = typeof agentsModule.addTraceProcessor === "function";
+    const canGet = typeof agentsModule.getTraceProcessors === "function";
+
+    if (!canSet && !canAdd) {
+      Logger.warn(
+        "OpenAI Agents SDK does not expose addTraceProcessor or setTraceProcessors.",
+        "Tracing integration may not work.",
+      );
+      activeProcessor = null;
+      activeTracer = null;
+      return this;
+    }
+
     try {
-      if (typeof agentsModule.addTraceProcessor === "function") {
-        agentsModule.addTraceProcessor(activeProcessor);
-      } else if (typeof agentsModule.setTraceProcessors === "function") {
-        const existing = typeof agentsModule.getTraceProcessors === "function"
-          ? agentsModule.getTraceProcessors()
-          : [];
-        agentsModule.setTraceProcessors([...existing, activeProcessor]);
-      } else {
-        Logger.warn(
-          "OpenAI Agents SDK does not expose addTraceProcessor or setTraceProcessors.",
-          "Tracing integration may not work.",
+      if (disableNative && canSet && canGet) {
+        originalProcessors = agentsModule.getTraceProcessors();
+        agentsModule.setTraceProcessors([activeProcessor]);
+        didReplaceProcessors = true;
+        Logger.debug(
+          "OpenAI Agents native tracing disabled — traces will only be sent to Netra.",
         );
-        activeProcessor = null;
-        activeTracer = null;
-        return this;
+      } else if (canAdd) {
+        agentsModule.addTraceProcessor(activeProcessor);
+        if (disableNative) {
+          Logger.warn(
+            "Cannot exclusively replace native trace processors in this @openai/agents version.",
+            "Traces may still be sent to OpenAI.",
+          );
+        }
+      } else {
+        const existing = canGet ? agentsModule.getTraceProcessors() : [];
+        agentsModule.setTraceProcessors([...existing, activeProcessor]);
       }
     } catch (error) {
       Logger.warn("Failed to register trace processor with @openai/agents:", error);
@@ -118,14 +142,22 @@ export class NetraOpenAIAgentsInstrumentor {
 
     if (activeProcessor) {
       activeProcessor.shutdown();
-      // The Agents SDK TraceProvider has no API to remove a single processor.
-      // Calling setTraceProcessors([]) would wipe all processors including
-      // those registered by the user or other integrations.
-      // After shutdown() our processor's internal state is cleared, so any
-      // further callbacks from the SDK become safe no-ops.
       activeProcessor = null;
     }
 
+    if (didReplaceProcessors && cachedAgentsModule) {
+      try {
+        if (typeof cachedAgentsModule.setTraceProcessors === "function") {
+          cachedAgentsModule.setTraceProcessors(originalProcessors ?? []);
+          Logger.debug("Restored original OpenAI Agents trace processors");
+        }
+      } catch (error) {
+        Logger.debug("Failed to restore original trace processors:", error);
+      }
+    }
+
+    originalProcessors = null;
+    didReplaceProcessors = false;
     activeTracer = null;
     cachedAgentsModule = null;
     isInstrumented = false;

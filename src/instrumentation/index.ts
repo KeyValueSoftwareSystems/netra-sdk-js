@@ -357,6 +357,9 @@ export function initInstrumentations(
   if (resolved.has(NetraInstruments.ANTHROPIC)) {
     customInstrumentModules.anthropic = true;
   }
+  if (resolved.has(NetraInstruments.OPENAI_AGENTS)) {
+    customInstrumentModules.openAiAgents = true;
+  }
 
   // Apply blockInstruments to Traceloop and Netra custom modules
   if (blockInstruments && blockInstruments.size > 0) {
@@ -367,6 +370,7 @@ export function initInstrumentations(
     if (blockAll || blockInstruments.has(NetraInstruments.LANGGRAPH)) customInstrumentModules.langgraph = false;
     if (blockAll || blockInstruments.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) customInstrumentModules.googleGenAI = false;
     if (blockAll || blockInstruments.has(NetraInstruments.ANTHROPIC)) customInstrumentModules.anthropic = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.OPENAI_AGENTS)) customInstrumentModules.openAiAgents = false;
     if (blockAll || blockInstruments.has(NetraInstruments.VERTEX_AI)) instrumentModules.google_vertexai = false;
     if (blockAll || blockInstruments.has(NetraInstruments.LANGCHAIN)) instrumentModules.langchain = false;
     if (blockAll || blockInstruments.has(NetraInstruments.LLAMA_INDEX)) instrumentModules.llamaIndex = false;
@@ -554,7 +558,7 @@ async function initCustomInstrumentationsAsync(
 
   // Initialize OpenAI Agents SDK instrumentation
   if (
-    customInstrumentModules.openaiAgents &&
+    customInstrumentModules.openAiAgents &&
     !blockInstruments?.has(NetraInstruments.OPENAI_AGENTS)
   ) {
     try {
