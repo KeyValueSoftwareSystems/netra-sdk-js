@@ -13,7 +13,6 @@ import { safeStringify } from "../../utils/serialization";
 import { SpanAttributes } from "../span-attributes";
 import {
   defineHidden,
-  isPromise,
   isTraceContentEnabled,
   modelAsDict,
   shouldSuppressInstrumentation,
@@ -241,6 +240,12 @@ class MessageStreamWrapper {
               return method.call(target.messageStream, event, wrapped);
             };
           }
+          if (prop === "removeAllListeners") {
+            return function (event?: string) {
+              target.listenerMap = new WeakMap();
+              return method.call(target.messageStream, event);
+            };
+          }
           return method.bind(target.messageStream);
         }
 
@@ -400,8 +405,7 @@ function anthropicWrapper(
   return function wrapper<F extends (...args: any[]) => any>(original: F): F {
     return function (this: unknown, ...args: any[]) {
       if (shouldSuppressInstrumentation()) {
-        const result = original.apply(this, args);
-        return isPromise(result) ? result.then((value: any) => value) : result;
+        return original.apply(this, args);
       }
 
       const attributes = (args[0] || {}) as Record<string, unknown>;
@@ -470,12 +474,9 @@ function anthropicWrapper(
                       SpanStatusCode.OK,
                     );
                   } else {
-                    span.setStatus({
-                      code:
-                        status === "ok"
-                          ? SpanStatusCode.OK
-                          : SpanStatusCode.ERROR,
-                    });
+                    if (status === "ok") {
+                      span.setStatus({ code: SpanStatusCode.OK });
+                    }
                     span.end();
                   }
                 },
@@ -640,7 +641,7 @@ function toolRunnerWrapper(
         }
 
         return new Proxy(runner, {
-          get(target: any, prop: string | symbol) {
+          get(target: any, prop: string | symbol, receiver: any) {
             if (prop === Symbol.asyncIterator) {
               return function () {
                 const originalIterator = target[Symbol.asyncIterator]();
@@ -661,12 +662,17 @@ function toolRunnerWrapper(
                     }
                   },
                   async return(value?: any) {
-                    const result = await (originalIterator.return?.(value) ?? {
-                      done: true,
-                      value,
-                    });
-                    endSpanOnce(SpanStatusCode.OK);
-                    return result;
+                    try {
+                      const result = await (originalIterator.return?.(
+                        value,
+                      ) ?? {
+                        done: true,
+                        value,
+                      });
+                      return result;
+                    } finally {
+                      endSpanOnce(SpanStatusCode.OK);
+                    }
                   },
                   async throw(error?: any) {
                     const err =
@@ -719,12 +725,12 @@ function toolRunnerWrapper(
               }
               if (prop === "catch") {
                 return function (onRejected?: Function) {
-                  return target.then(undefined, onRejected);
+                  return receiver.then(undefined, onRejected);
                 };
               }
               if (prop === "finally") {
                 return function (onFinally?: Function) {
-                  return target.then(
+                  return receiver.then(
                     (v: any) => {
                       onFinally?.();
                       return v;

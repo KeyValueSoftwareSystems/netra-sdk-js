@@ -83,14 +83,13 @@ function createFunctionWrapper<T extends AnyFunction>(
     SessionManager.registerSpan(spanName, span);
   };
 
-  const handleError = (span: Span, e: any) => {
+  const recordError = (span: Span, e: any) => {
     span.setAttribute(`${Config.LIBRARY_NAME}.entity.error`, String(e));
     span.setStatus({
       code: SpanStatusCode.ERROR,
       message: e instanceof Error ? e.message : String(e),
     });
     span.recordException(e);
-    throw e;
   };
 
   const cleanup = (span: Span) => {
@@ -126,8 +125,9 @@ function createFunctionWrapper<T extends AnyFunction>(
               finalize: () => cleanup(span),
             });
           } catch (e: any) {
+            recordError(span, e);
             cleanup(span);
-            handleError(span, e);
+            throw e;
           }
         });
       }
@@ -157,8 +157,9 @@ function createFunctionWrapper<T extends AnyFunction>(
               finalize: () => cleanup(span),
             });
           } catch (e: any) {
+            recordError(span, e);
             cleanup(span);
-            handleError(span, e);
+            throw e;
           }
         });
       };
