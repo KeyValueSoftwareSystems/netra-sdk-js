@@ -6,10 +6,11 @@ import { SPAN_NAMES, InstrumentorOptions } from "./types";
 import { __version__ } from "./version";
 import {
   batchesWrapper,
+  betaStreamWrapper,
   betaWrapper,
+  betaToolRunnerWrapper,
+  chatStreamWrapper,
   chatWrapper,
-  streamWrapper,
-  toolRunnerWrapper,
 } from "./wrappers";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.anthropic";
@@ -29,7 +30,9 @@ async function resolveAnthropic(): Promise<any[]> {
   try {
     // @ts-ignore - @anthropic-ai/sdk is an optional peer dependency
     const anthropicModule = await import("@anthropic-ai/sdk");
-    anthropicClasses.push(anthropicModule.Anthropic || anthropicModule.default || anthropicModule);
+    anthropicClasses.push(
+      anthropicModule.Anthropic || anthropicModule.default || anthropicModule,
+    );
   } catch {
     Logger.warn("Failed to resolve Anthropic ESM module");
   }
@@ -74,7 +77,7 @@ export class NetraAnthropicInstrumentor {
       if (this.tracerProvider) {
         this.tracer = this.tracerProvider.getTracer(
           INSTRUMENTATION_NAME,
-          __version__
+          __version__,
         );
       } else {
         this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
@@ -142,7 +145,7 @@ export class NetraAnthropicInstrumentor {
         shimmer.wrap(
           MessagesClass.prototype,
           "stream",
-          streamWrapper(this.tracer, SPAN_NAMES.STREAM, "chat", originalCreate),
+          chatStreamWrapper(this.tracer, originalCreate),
         );
       }
     } catch (error) {
@@ -178,12 +181,7 @@ export class NetraAnthropicInstrumentor {
         shimmer.wrap(
           BetaMessagesClass.prototype,
           "stream",
-          streamWrapper(
-            this.tracer,
-            SPAN_NAMES.BETA_STREAM,
-            "beta",
-            originalCreate,
-          ),
+          betaStreamWrapper(this.tracer, originalCreate),
         );
       }
 
@@ -191,7 +189,7 @@ export class NetraAnthropicInstrumentor {
         shimmer.wrap(
           BetaMessagesClass.prototype,
           "toolRunner",
-          toolRunnerWrapper(this.tracer),
+          betaToolRunnerWrapper(this.tracer),
         );
       }
     } catch (error) {
@@ -262,8 +260,3 @@ export class NetraAnthropicInstrumentor {
 }
 
 export const anthropicInstrumentor = new NetraAnthropicInstrumentor();
-
-export { chatWrapper } from "./wrappers";
-export { setRequestAttributes, setResponseAttributes } from "./utils";
-export { __version__ } from "./version";
-export type { InstrumentorOptions } from "./types";

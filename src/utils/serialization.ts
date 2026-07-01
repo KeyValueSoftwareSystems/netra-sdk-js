@@ -1,3 +1,11 @@
+const ELLIPSIS = "...";
+
+function truncate(s: string, maxLength: number): string {
+  if (s.length <= maxLength) return s;
+  if (maxLength <= ELLIPSIS.length) return s.slice(0, maxLength);
+  return s.slice(0, maxLength - ELLIPSIS.length) + ELLIPSIS;
+}
+
 /**
  * Circular-reference-safe JSON.stringify with optional length truncation.
  *
@@ -13,7 +21,7 @@ export function safeStringify(
 ): string {
   if (typeof value === "string") {
     if (maxLength && value.length > maxLength) {
-      return value.slice(0, maxLength) + "...";
+      return truncate(value, maxLength);
     }
     return value;
   }
@@ -49,7 +57,7 @@ export function safeStringify(
   }
 
   if (maxLength && result.length > maxLength) {
-    return result.slice(0, maxLength) + "...";
+    return truncate(result, maxLength);
   }
   return result;
 }
@@ -66,7 +74,7 @@ export function serializeValue(
   const t = typeof value;
   if (t === "string" || t === "number" || t === "boolean") {
     const s = String(value);
-    if (maxLength && s.length > maxLength) return s.slice(0, maxLength) + "...";
+    if (maxLength && s.length > maxLength) return truncate(s, maxLength);
     return s;
   }
   return safeStringify(value, maxLength);

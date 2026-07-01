@@ -4,11 +4,11 @@ export type AnthropicRequestType = "chat" | "beta" | "batches";
 
 export const SPAN_NAMES = {
   CHAT: "anthropic.chat",
-  BETA: "anthropic.beta",
-  BATCHES: "anthropic.batches",
   STREAM: "anthropic.stream",
+  BATCHES: "anthropic.batches",
+  BETA: "anthropic.beta",
   BETA_STREAM: "anthropic.beta.stream",
-  TOOL_RUNNER: "anthropic.toolRunner",
+  BETA_TOOL_RUNNER: "anthropic.beta.tool.runner",
 } as const;
 
 export interface InstrumentorOptions {

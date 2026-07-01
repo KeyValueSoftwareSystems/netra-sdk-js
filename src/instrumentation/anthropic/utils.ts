@@ -1,94 +1,9 @@
-import {
-  Context,
-  Span,
-  SpanKind,
-  SpanStatusCode,
-  Tracer,
-  context,
-  trace,
-} from "@opentelemetry/api";
+import { Span, SpanStatusCode } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { safeStringify } from "../../utils/serialization";
-import { SpanAttributes } from "../span-attributes";
 import {
-  isTraceContentEnabled,
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
 } from "../utils";
-
-const MAX_TOOL_ATTR_LENGTH = 4096;
-
-/**
- * Wrap each tool's `run()` method so every invocation produces a TOOL span.
- * Preserves the tool's prototype chain — only `run` is replaced.
- * User tool errors are recorded on the span and re-thrown.
- */
-export function wrapRunnableTools(
-  tools: any[],
-  tracer: Tracer,
-  parentContext: Context,
-): any[] {
-  return tools.map((tool) => {
-    if (typeof tool.run !== "function") return tool;
-
-    const originalRun = tool.run;
-    const toolName = tool.name ?? "unknown_tool";
-
-    const wrappedRun = async function (
-      this: any,
-      input: any,
-      runContext?: any,
-    ) {
-      const toolUseId = runContext?.toolUse?.id ?? runContext?.toolUseBlock?.id;
-      const traceContent = isTraceContentEnabled();
-      const attrs: Record<string, string> = {
-        "netra.span.type": "TOOL",
-        [SpanAttributes.LLM_REQUEST_TOOL_NAME]: toolName,
-      };
-      if (toolUseId) attrs[SpanAttributes.LLM_REQUEST_TOOL_ID] = toolUseId;
-      if (traceContent) {
-        attrs.input = safeStringify(input, MAX_TOOL_ATTR_LENGTH);
-      }
-
-      const span = tracer.startSpan(
-        toolName,
-        { kind: SpanKind.INTERNAL, attributes: attrs },
-        parentContext,
-      );
-
-      const spanCtx = trace.setSpan(parentContext, span);
-      try {
-        const result = await context.with(spanCtx, () =>
-          originalRun.call(this, input, runContext),
-        );
-        if (traceContent) {
-          span.setAttribute(
-            "output",
-            safeStringify(result, MAX_TOOL_ATTR_LENGTH),
-          );
-        }
-        span.setStatus({ code: SpanStatusCode.OK });
-        return result;
-      } catch (error) {
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        span.recordException(error as Error);
-        throw error;
-      } finally {
-        span.end();
-      }
-    };
-
-    const wrapped = Object.create(
-      Object.getPrototypeOf(tool),
-      Object.getOwnPropertyDescriptors(tool),
-    );
-    wrapped.run = wrappedRun;
-    return wrapped;
-  });
-}
 
 /**
  * Accumulate a single Anthropic SSE chunk into `completeResponse`.
@@ -259,7 +174,7 @@ export function setRequestAttributes(
 
 export function setResponseAttributes(
   span: Span,
-  response: Record<string, unknown>
+  response: Record<string, unknown>,
 ): void {
   try {
     if (!span.isRecording()) {

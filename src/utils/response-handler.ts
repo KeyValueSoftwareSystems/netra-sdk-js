@@ -74,11 +74,19 @@ export function wrapAsyncIterable<T>(
     },
     async return(value?: any) {
       try {
-        return await callbacks.withContext(
+        const result = await callbacks.withContext(
           () => iterator.return?.(value) ?? { done: true as const, value },
         );
-      } finally {
         safeFinalize("ok");
+        return result;
+      } catch (e: any) {
+        try {
+          callbacks.onError(e);
+        } catch {
+          Logger.error("netra: onError callback error", e);
+        }
+        safeFinalize("error");
+        throw e;
       }
     },
     async throw(e?: any) {

@@ -108,12 +108,26 @@ function createFunctionWrapper<T extends AnyFunction>(
             initSpan(span);
             addInputAttributes(span, args, entityType);
             const result = await (func as AsyncFunction).call(this, ...args);
-            addOutputAttributes(span, result);
-            return result;
+            const spanCtx = trace.setSpan(context.active(), span);
+            return wrapResponse(result, {
+              withContext: (fn) => context.with(spanCtx, fn),
+              onError: (e) => {
+                span.setAttribute(
+                  `${Config.LIBRARY_NAME}.entity.error`,
+                  String(e),
+                );
+                span.setStatus({
+                  code: SpanStatusCode.ERROR,
+                  message: e instanceof Error ? e.message : String(e),
+                });
+                span.recordException(e as Error);
+              },
+              onSuccess: (value) => addOutputAttributes(span, value),
+              finalize: () => cleanup(span),
+            });
           } catch (e: any) {
-            handleError(span, e);
-          } finally {
             cleanup(span);
+            handleError(span, e);
           }
         });
       }
