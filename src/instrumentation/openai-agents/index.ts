@@ -4,7 +4,8 @@ import { NetraAgentsTracingProcessor } from "./processor";
 import { DEFAULT_LLM_SYSTEM, INSTRUMENTATION_NAME } from "./constants";
 import { __version__ } from "./version";
 import { Logger } from "../../logger";
-import { parseBooleanEnv } from "./utils";
+import { parseNativeTracingEnv } from "../utils";
+import type { NativeTracingMode } from "../utils";
 import type { InstrumentorOptions, TracingProcessor } from "./types";
 
 let cachedAgentsModule: any = null;
@@ -85,43 +86,60 @@ export class NetraOpenAIAgentsInstrumentor {
     const systemName = options.systemName ?? DEFAULT_LLM_SYSTEM;
     activeProcessor = new NetraAgentsTracingProcessor(activeTracer!, systemName);
 
-    const disableNative = options.disableNativeTracing
-      ?? parseBooleanEnv("DISABLE_NATIVE_TRACING")
-      ?? true;
+    const mode: NativeTracingMode = options.nativeTracing
+      ?? parseNativeTracingEnv("NATIVE_TRACING_MODE")
+      ?? "netra-strict";
 
-    const canSet = typeof agentsModule.setTraceProcessors === "function";
-    const canAdd = typeof agentsModule.addTraceProcessor === "function";
-    const canGet = typeof agentsModule.getTraceProcessors === "function";
+    const canReplace =
+      typeof agentsModule.setTraceProcessors === "function" &&
+      typeof agentsModule.getTraceProcessors === "function";
 
-    if (!canSet && !canAdd) {
-      Logger.warn(
-        "OpenAI Agents SDK does not expose addTraceProcessor or setTraceProcessors.",
-        "Tracing integration may not work.",
-      );
-      activeProcessor = null;
-      activeTracer = null;
-      return this;
+    let strategy: "replace" | "append" | "skip";
+    if (mode === "both" || (mode === "netra" && !canReplace)) {
+      strategy = "append";
+    } else if (canReplace) {
+      strategy = "replace";
+    } else {
+      strategy = "skip";
     }
 
     try {
-      if (disableNative && canSet && canGet) {
-        originalProcessors = agentsModule.getTraceProcessors();
-        agentsModule.setTraceProcessors([activeProcessor]);
-        didReplaceProcessors = true;
-        Logger.debug(
-          "OpenAI Agents native tracing disabled — traces will only be sent to Netra.",
-        );
-      } else if (canAdd) {
-        agentsModule.addTraceProcessor(activeProcessor);
-        if (disableNative) {
+      switch (strategy) {
+        case "replace":
+          originalProcessors = agentsModule.getTraceProcessors();
+          agentsModule.setTraceProcessors([activeProcessor]);
+          didReplaceProcessors = true;
+          Logger.debug("OpenAI Agents native tracing disabled — traces will only be sent to Netra.");
+          break;
+
+        case "append":
+          if (typeof agentsModule.addTraceProcessor === "function") {
+            agentsModule.addTraceProcessor(activeProcessor);
+          } else if (canReplace) {
+            const existing = agentsModule.getTraceProcessors();
+            agentsModule.setTraceProcessors([...existing, activeProcessor]);
+          } else {
+            Logger.warn("OpenAI Agents SDK does not expose a safe way to append a trace processor.");
+            activeProcessor = null;
+            activeTracer = null;
+            return this;
+          }
+          if (mode === "netra") {
+            Logger.warn(
+              "Cannot exclusively replace native trace processors in this @openai/agents version.",
+              "Traces may still be sent to OpenAI.",
+            );
+          }
+          break;
+
+        case "skip":
           Logger.warn(
-            "Cannot exclusively replace native trace processors in this @openai/agents version.",
-            "Traces may still be sent to OpenAI.",
+            "nativeTracing is \"netra-strict\" but the installed @openai/agents version",
+            "does not support processor replacement. Skipping instrumentation.",
           );
-        }
-      } else {
-        const existing = canGet ? agentsModule.getTraceProcessors() : [];
-        agentsModule.setTraceProcessors([...existing, activeProcessor]);
+          activeProcessor = null;
+          activeTracer = null;
+          return this;
       }
     } catch (error) {
       Logger.warn("Failed to register trace processor with @openai/agents:", error);
@@ -167,4 +185,4 @@ export class NetraOpenAIAgentsInstrumentor {
 export const openaiAgentsInstrumentor = new NetraOpenAIAgentsInstrumentor();
 
 export { NetraAgentsTracingProcessor } from "./processor";
-export type { AgentSpan, AgentTrace, InstrumentorOptions, TracingProcessor } from "./types";
+export type { AgentSpan, AgentTrace, InstrumentorOptions, NativeTracingMode, TracingProcessor } from "./types";
