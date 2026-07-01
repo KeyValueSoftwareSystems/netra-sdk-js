@@ -549,7 +549,7 @@ async function initCustomInstrumentationsAsync(
 
   if (customInstrumentModules.anthropic) {
     try {
-      await anthropicInstrumentor.instrumentAsync({ tracerProvider });
+      await anthropicInstrumentor.instrument({ tracerProvider });
       Logger.debug("Custom Anthropic instrumentation enabled");
     } catch (e) {
       Logger.debug("Failed to initialize custom Anthropic instrumentation:", e);

@@ -1,27 +1,29 @@
 import { createRequire } from "module";
-import { context, SpanKind, SpanStatusCode, trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
+import shimmer from "shimmer";
 import { Logger } from "../../logger";
-import { setRequestAttributes, wrapRunnableTools } from "./utils";
+import { SPAN_NAMES, InstrumentorOptions } from "./types";
 import { __version__ } from "./version";
-import { batchesWrapper, betaWrapper, chatWrapper, MessageStreamWrapper } from "./wrappers";
+import {
+  batchesWrapper,
+  betaWrapper,
+  chatWrapper,
+  streamWrapper,
+  toolRunnerWrapper,
+} from "./wrappers";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.anthropic";
 const INSTRUMENTS = ["anthropic >= 0.71.2"];
 
-const originalMethods: Map<string, Function> = new Map();
 let isInstrumented = false;
 let anthropicClasses: any[] = [];
 
-export interface InstrumentorOptions {
-  tracerProvider?: TracerProvider;
-}
-
 /**
  * Resolve the Anthropic module from the application's context.
- * Tries ESM dynamic import first, then falls back to CJS require so the
- * instrumentor works in both ESM and CommonJS projects.
+ * Tries ESM dynamic import first, then falls back to CJS require.
+ * Returns cached classes on subsequent calls.
  */
-async function resolveAnthropicAsync(): Promise<any[]> {
+async function resolveAnthropic(): Promise<any[]> {
   if (anthropicClasses.length > 0) return anthropicClasses;
 
   try {
@@ -46,10 +48,6 @@ async function resolveAnthropicAsync(): Promise<any[]> {
   return anthropicClasses;
 }
 
-function resolveAnthropic(): any[] {
-  return anthropicClasses;
-}
-
 export class NetraAnthropicInstrumentor {
   private tracer: Tracer | null = null;
   private tracerProvider?: TracerProvider;
@@ -60,16 +58,16 @@ export class NetraAnthropicInstrumentor {
     return INSTRUMENTS;
   }
 
-  async instrumentAsync(options: InstrumentorOptions = {}): Promise<NetraAnthropicInstrumentor> {
+  async instrument(
+    options: InstrumentorOptions = {},
+  ): Promise<NetraAnthropicInstrumentor> {
     if (isInstrumented) {
       Logger.warn("Anthropic is already instrumented");
       return this;
     }
 
-    const classes = await resolveAnthropicAsync();
-    if (classes.length === 0) {
-      return this;
-    }
+    const classes = await resolveAnthropic();
+    if (classes.length === 0) return this;
 
     try {
       this.tracerProvider = options.tracerProvider;
@@ -86,10 +84,10 @@ export class NetraAnthropicInstrumentor {
       return this;
     }
 
-    classes.forEach((AnthropicSDK, index) => {
-      this._instrumentMessages(AnthropicSDK, index);
-      this._instrumentBetaMessages(AnthropicSDK, index);
-      this._instrumentBatchMessages(AnthropicSDK, index);
+    classes.forEach((AnthropicSDK) => {
+      this._instrumentMessages(AnthropicSDK);
+      this._instrumentBetaMessages(AnthropicSDK);
+      this._instrumentBatchMessages(AnthropicSDK);
     });
 
     isInstrumented = true;
@@ -102,14 +100,12 @@ export class NetraAnthropicInstrumentor {
       return;
     }
 
-    const classes = resolveAnthropic();
-    classes.forEach((AnthropicSDK, index) => {
-      this._uninstrumentMessages(AnthropicSDK, index);
-      this._uninstrumentBetaMessages(AnthropicSDK, index);
-      this._uninstrumentBatchMessages(AnthropicSDK, index);
+    anthropicClasses.forEach((AnthropicSDK) => {
+      this._uninstrumentMessages(AnthropicSDK);
+      this._uninstrumentBetaMessages(AnthropicSDK);
+      this._uninstrumentBatchMessages(AnthropicSDK);
     });
 
-    originalMethods.clear();
     anthropicClasses = [];
     isInstrumented = false;
   }
@@ -118,408 +114,147 @@ export class NetraAnthropicInstrumentor {
     return isInstrumented;
   }
 
-  private _instrumentMessages(AnthropicSDK: any, index: number): void {
+  private _instrumentMessages(AnthropicSDK: any): void {
     if (!this.tracer) {
       Logger.warn("Anthropic instrumentation: No tracer available");
       return;
     }
     try {
       const MessagesClass = AnthropicSDK.Messages;
-      if (!MessagesClass) {
+      if (!MessagesClass?.prototype) {
         Logger.error(
-          "Anthropic instrumentation: Could not find Anthropic Messages class to instrument",
+          "Anthropic instrumentation: Could not find Messages class",
         );
         return;
       }
 
-      if (MessagesClass?.prototype?.stream) {
-        const originalStream = MessagesClass.prototype.stream as Function;
-        originalMethods.set(`messages.stream-${index}`, originalStream);
-        const tracer = this.tracer;
-        MessagesClass.prototype.stream = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalStream.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
+      const originalCreate = MessagesClass.prototype.create;
 
-          const currentContext = context.active();
-
-          const span = tracer.startSpan("anthropic.stream", {
-              kind: SpanKind.CLIENT,
-              attributes: {
-                "llm.request.type": "chat",
-                "llm.streaming": true,
-                "llm.operation": "stream"
-              },
-            }, currentContext);
-
-          const spanContext = trace.setSpan(currentContext, span);
-
-          setRequestAttributes(span, kwargs, "chat");
-          const startTime = Date.now();
-
-          const originalCreate = originalMethods.get(`messages.create-${index}`);
-          if (originalCreate) {
-            (this as any).create = originalCreate;
-          }
-
-          try {
-            const messageStream = context.with(spanContext, () => original(...args));
-            return new MessageStreamWrapper(
-              span,
-              messageStream,
-              startTime,
-              kwargs,
-              spanContext,
-              currentContext,
-            );
-          } catch (error) {
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
-            span.recordException(error as Error);
-            span.end();
-            throw error;
-          } finally {
-            if (originalCreate) {
-              delete (this as any).create;
-            }
-          }
-        } as typeof MessagesClass.prototype.stream;
+      if (typeof MessagesClass.prototype.create === "function") {
+        shimmer.wrap(
+          MessagesClass.prototype,
+          "create",
+          chatWrapper(this.tracer),
+        );
       }
 
-      if (MessagesClass?.prototype?.create) {
-        const originalCreate = MessagesClass.prototype.create as Function;
-        originalMethods.set(`messages.create-${index}`, originalCreate);
-        const tracer = this.tracer;
-        const wrapper = chatWrapper(tracer);
-
-        MessagesClass.prototype.create = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalCreate.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          return wrapper(
-            (...a: unknown[]) => original(...a),
-            this,
-            args,
-            kwargs,
-          );
-        } as typeof MessagesClass.prototype.create;
+      if (typeof MessagesClass.prototype.stream === "function") {
+        shimmer.wrap(
+          MessagesClass.prototype,
+          "stream",
+          streamWrapper(this.tracer, SPAN_NAMES.STREAM, "chat", originalCreate),
+        );
       }
     } catch (error) {
       Logger.error(`Failed to instrument messages: ${error}`);
     }
   }
 
-  private _instrumentBetaMessages(AnthropicSDK: any, index: number): void {
+  private _instrumentBetaMessages(AnthropicSDK: any): void {
     if (!this.tracer) {
       Logger.warn("Anthropic instrumentation: No tracer available");
       return;
     }
     try {
       const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
-      if (!BetaMessagesClass) {
+      if (!BetaMessagesClass?.prototype) {
         Logger.error(
-          "Anthropic instrumentation: Could not find Anthropic Beta Messages class to instrument",
+          "Anthropic instrumentation: Could not find Beta Messages class",
         );
         return;
       }
 
-      if (BetaMessagesClass?.prototype?.stream) {
-        const originalStream = BetaMessagesClass.prototype.stream as Function;
-        originalMethods.set(`beta.messages.stream-${index}`, originalStream);
-        const tracer = this.tracer;
-        BetaMessagesClass.prototype.stream = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalStream.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
+      const originalCreate = BetaMessagesClass.prototype.create;
 
-          const currentContext = context.active();
-
-          const span = tracer.startSpan("anthropic.beta.stream", {
-            kind: SpanKind.CLIENT,
-            attributes: {
-              "llm.request.type": "beta",
-              "llm.streaming": true,
-              "llm.operation": "stream",
-            },
-          }, currentContext);
-
-          const spanContext = trace.setSpan(currentContext, span);
-
-          setRequestAttributes(span, kwargs, "beta");
-
-          const startTime = Date.now();
-          const originalCreate = originalMethods.get(`beta.messages.create-${index}`);
-          if (originalCreate) {
-            (this as any).create = originalCreate;
-          }
-
-          try {
-            const messageStream = context.with(spanContext, () => original(...args));
-            return new MessageStreamWrapper(
-              span,
-              messageStream,
-              startTime,
-              kwargs,
-              spanContext,
-              currentContext,
-            );
-          } catch (error) {
-            span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : String(error) });
-            span.recordException(error as Error);
-            span.end();
-            throw error;
-          } finally {
-            if (originalCreate) {
-              delete (this as any).create;
-            }
-          }
-        } as typeof BetaMessagesClass.prototype.stream;
+      if (typeof BetaMessagesClass.prototype.create === "function") {
+        shimmer.wrap(
+          BetaMessagesClass.prototype,
+          "create",
+          betaWrapper(this.tracer),
+        );
       }
 
-      if (BetaMessagesClass?.prototype?.create) {
-        const originalCreate = BetaMessagesClass.prototype.create as Function;
-        originalMethods.set(`beta.messages.create-${index}`, originalCreate);
-        const tracer = this.tracer;
-        const wrapper = betaWrapper(tracer);
-
-        BetaMessagesClass.prototype.create = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalCreate.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          return wrapper(
-            (...a: unknown[]) => original(...a),
-            this,
-            args,
-            kwargs,
-          );
-        } as typeof BetaMessagesClass.prototype.create;
+      if (typeof BetaMessagesClass.prototype.stream === "function") {
+        shimmer.wrap(
+          BetaMessagesClass.prototype,
+          "stream",
+          streamWrapper(
+            this.tracer,
+            SPAN_NAMES.BETA_STREAM,
+            "beta",
+            originalCreate,
+          ),
+        );
       }
 
-      if (BetaMessagesClass?.prototype?.toolRunner) {
-        const originalToolRunner = BetaMessagesClass.prototype.toolRunner as Function;
-        originalMethods.set(`beta.messages.toolRunner-${index}`, originalToolRunner);
-        const tracer = this.tracer;
-
-        BetaMessagesClass.prototype.toolRunner = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalToolRunner.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-          const currentContext = context.active();
-
-          const span = tracer.startSpan("anthropic.toolRunner", {
-            kind: SpanKind.CLIENT,
-            attributes: {
-              "llm.request.type": "beta",
-              "netra.span.type": "AGENT",
-              "llm.operation": "toolRunner",
-            },
-          }, currentContext);
-
-          let spanEnded = false;
-          const endSpanOnce = (code: SpanStatusCode, error?: Error) => {
-            if (spanEnded) return;
-            spanEnded = true;
-            if (error) {
-              span.setStatus({ code, message: error.message });
-              span.recordException(error);
-            } else {
-              span.setStatus({ code });
-            }
-            span.end();
-          };
-
-          let runner: any;
-          try {
-            setRequestAttributes(span, kwargs, "beta");
-
-            const spanContext = trace.setSpan(currentContext, span);
-
-            const wrappedTools = Array.isArray(kwargs.tools)
-              ? wrapRunnableTools(kwargs.tools as any[], tracer, spanContext)
-              : kwargs.tools;
-
-            const wrappedArgs = [{ ...kwargs, tools: wrappedTools }, ...args.slice(1)];
-
-            runner = context.with(spanContext, () => original(...wrappedArgs));
-
-            if (runner == null) {
-              endSpanOnce(SpanStatusCode.OK);
-              return runner;
-            }
-
-            return new Proxy(runner, {
-              get(target: any, prop: string | symbol, receiver: any) {
-                if (prop === Symbol.asyncIterator) {
-                  return function () {
-                    const originalIterator = target[Symbol.asyncIterator]();
-                    return {
-                      [Symbol.asyncIterator]() { return this; },
-                      async next() {
-                        try {
-                          const result = await context.with(spanContext, () => originalIterator.next());
-                          if (result.done) {
-                            endSpanOnce(SpanStatusCode.OK);
-                          }
-                          return result;
-                        } catch (error) {
-                          endSpanOnce(SpanStatusCode.ERROR, error as Error);
-                          throw error;
-                        }
-                      },
-                      async return(value?: any) {
-                        endSpanOnce(SpanStatusCode.OK);
-                        return originalIterator.return?.(value) ?? { done: true, value };
-                      },
-                      async throw(error?: any) {
-                        endSpanOnce(SpanStatusCode.ERROR, error);
-                        if (originalIterator.throw) return originalIterator.throw(error);
-                        throw error;
-                      },
-                    };
-                  };
-                }
-
-                if (prop === "then") {
-                  const originalThen = target.then;
-                  if (typeof originalThen === "function") {
-                    return function (onFulfilled?: Function, onRejected?: Function) {
-                      return originalThen.call(
-                        target,
-                        (v: any) => { endSpanOnce(SpanStatusCode.OK); return onFulfilled ? onFulfilled(v) : v; },
-                        (e: any) => {
-                          endSpanOnce(SpanStatusCode.ERROR, e instanceof Error ? e : new Error(String(e)));
-                          if (onRejected) return onRejected(e);
-                          throw e;
-                        },
-                      );
-                    };
-                  }
-                }
-
-                const value = target[prop];
-                if (typeof value === "function") {
-                  return value.bind(target);
-                }
-                return value;
-              },
-            });
-          } catch (error) {
-            endSpanOnce(SpanStatusCode.ERROR, error instanceof Error ? error : new Error(String(error)));
-            throw error;
-          }
-        } as typeof BetaMessagesClass.prototype.toolRunner;
+      if (typeof BetaMessagesClass.prototype.toolRunner === "function") {
+        shimmer.wrap(
+          BetaMessagesClass.prototype,
+          "toolRunner",
+          toolRunnerWrapper(this.tracer),
+        );
       }
     } catch (error) {
       Logger.error(`Failed to instrument beta: ${error}`);
     }
   }
 
-  private _instrumentBatchMessages(AnthropicSDK: any, index: number): void {
+  private _instrumentBatchMessages(AnthropicSDK: any): void {
     if (!this.tracer) {
       Logger.warn("Anthropic instrumentation: No tracer available");
       return;
     }
     try {
       const BatchMessageClass = AnthropicSDK.Messages?.Batches;
-      if (!BatchMessageClass) {
-        Logger.error(
-          "Anthropic instrumentation: Could not find Anthropic Batches class to instrument",
-        );
+      if (!BatchMessageClass?.prototype) {
+        Logger.error("Anthropic instrumentation: Could not find Batches class");
         return;
       }
 
-      if (BatchMessageClass?.prototype?.create) {
-        const originalCreate = BatchMessageClass.prototype.create as Function;
-        originalMethods.set(`batch.messages.create-${index}`, originalCreate);
-        const tracer = this.tracer;
-        const wrapper = batchesWrapper(tracer);
-
-        BatchMessageClass.prototype.create = function (
-          this: unknown,
-          ...args: unknown[]
-        ): unknown {
-          const original = originalCreate.bind(this);
-          const kwargs = (args[0] || {}) as Record<string, unknown>;
-
-          return wrapper(
-            (...a: unknown[]) => original(...a),
-            this,
-            args,
-            kwargs,
-          );
-        } as typeof BatchMessageClass.prototype.create;
+      if (typeof BatchMessageClass.prototype.create === "function") {
+        shimmer.wrap(
+          BatchMessageClass.prototype,
+          "create",
+          batchesWrapper(this.tracer),
+        );
       }
     } catch (error) {
       Logger.error(`Failed to instrument batches: ${error}`);
     }
   }
 
-  private _uninstrumentMessages(AnthropicSDK: any, index: number): void {
+  private _uninstrumentMessages(AnthropicSDK: any): void {
     try {
-      const MessagesClass = AnthropicSDK.Messages;
+      const proto = AnthropicSDK.Messages?.prototype;
+      if (!proto) return;
 
-      const originalCreate = originalMethods.get(`messages.create-${index}`);
-      if (originalCreate && MessagesClass?.prototype) {
-        MessagesClass.prototype.create =
-          originalCreate as typeof MessagesClass.prototype.create;
-      }
-
-      const originalStream = originalMethods.get(`messages.stream-${index}`);
-      if (originalStream && MessagesClass?.prototype) {
-        MessagesClass.prototype.stream =
-          originalStream as typeof MessagesClass.prototype.stream;
-      }
+      if (typeof proto.create === "function") shimmer.unwrap(proto, "create");
+      if (typeof proto.stream === "function") shimmer.unwrap(proto, "stream");
     } catch (error) {
       Logger.error(`Failed to uninstrument messages: ${error}`);
     }
   }
 
-  private _uninstrumentBetaMessages(AnthropicSDK: any, index: number): void {
+  private _uninstrumentBetaMessages(AnthropicSDK: any): void {
     try {
-      const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
+      const proto = AnthropicSDK.Beta?.Messages?.prototype;
+      if (!proto) return;
 
-      const originalCreate = originalMethods.get(`beta.messages.create-${index}`);
-      if (originalCreate && BetaMessagesClass?.prototype) {
-        BetaMessagesClass.prototype.create =
-          originalCreate as typeof BetaMessagesClass.prototype.create;
-      }
-
-      const originalStream = originalMethods.get(`beta.messages.stream-${index}`);
-      if (originalStream && BetaMessagesClass?.prototype) {
-        BetaMessagesClass.prototype.stream =
-          originalStream as typeof BetaMessagesClass.prototype.stream;
-      }
-
-      const originalToolRunner = originalMethods.get(`beta.messages.toolRunner-${index}`);
-      if (originalToolRunner && BetaMessagesClass?.prototype) {
-        BetaMessagesClass.prototype.toolRunner =
-          originalToolRunner as typeof BetaMessagesClass.prototype.toolRunner;
-      }
+      if (typeof proto.create === "function") shimmer.unwrap(proto, "create");
+      if (typeof proto.stream === "function") shimmer.unwrap(proto, "stream");
+      if (typeof proto.toolRunner === "function")
+        shimmer.unwrap(proto, "toolRunner");
     } catch (error) {
       Logger.error(`Failed to uninstrument beta: ${error}`);
     }
   }
 
-  private _uninstrumentBatchMessages(AnthropicSDK: any, index: number): void {
+  private _uninstrumentBatchMessages(AnthropicSDK: any): void {
     try {
-      const BatchMessagesClass = AnthropicSDK.Messages?.Batches;
+      const proto = AnthropicSDK.Messages?.Batches?.prototype;
+      if (!proto) return;
 
-      const originalCreate = originalMethods.get(`batch.messages.create-${index}`);
-      if (originalCreate && BatchMessagesClass?.prototype) {
-        BatchMessagesClass.prototype.create =
-          originalCreate as typeof BatchMessagesClass.prototype.create;
-      }
+      if (typeof proto.create === "function") shimmer.unwrap(proto, "create");
     } catch (error) {
       Logger.error(`Failed to uninstrument batches: ${error}`);
     }
@@ -529,7 +264,6 @@ export class NetraAnthropicInstrumentor {
 export const anthropicInstrumentor = new NetraAnthropicInstrumentor();
 
 export { chatWrapper } from "./wrappers";
-
 export { setRequestAttributes, setResponseAttributes } from "./utils";
-
 export { __version__ } from "./version";
+export type { InstrumentorOptions } from "./types";

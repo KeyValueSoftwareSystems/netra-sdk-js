@@ -6,7 +6,9 @@
 import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { safeStringify } from "../utils/serialization";
 import { SpanAttributes } from "./span-attributes";
+
 /**
  * Controls where native traces are sent.
  *
@@ -106,20 +108,6 @@ export function isTraceContentEnabled(): boolean {
   return ["1", "true"].includes(String(raw).toLowerCase());
 }
 
-function safeStringify(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function truncate(value: string, maxLen: number): string {
-  if (!value || value.length <= maxLen) return value;
-  return value.slice(0, maxLen) + "...(truncated)";
-}
-
 /**
  * Returns true if `value` represents meaningful content worth recording.
  * Guards against setting empty-string attributes on spans.
@@ -195,8 +183,9 @@ export function buildInputMessages(
         continue;
       }
 
-      const isToolResult = (b: unknown): b is Record<string, unknown> => isDict(b) && b.type === "tool_result";
-      
+      const isToolResult = (b: unknown): b is Record<string, unknown> =>
+        isDict(b) && b.type === "tool_result";
+
       const userBlocks = msg.content.filter((b) => !isToolResult(b));
 
       if (userBlocks.length) {
@@ -247,10 +236,7 @@ export function buildInputMessages(
     // Embeddings / genericinput
     const input = kwargs.input ?? kwargs.inputs;
     if (hasContent(input)) {
-      const content = truncate(
-        safeStringify(input),
-        Config.CONVERSATION_MAX_LEN,
-      );
+      const content = safeStringify(input, Config.CONVERSATION_MAX_LEN);
       messages.push({ role: "user", content });
     }
   }
@@ -440,7 +426,6 @@ export function writeCompletionAttributes(
   span.setAttribute("output", JSON.stringify(messages));
 }
 
-
 // Request Attributes
 export function setRequestAttributes(
   span: Span,
@@ -483,7 +468,7 @@ export function setRequestAttributes(
     if (kwargs.suffix !== undefined) {
       span.setAttribute(
         "llm.request.suffix",
-        truncate(safeStringify(kwargs.suffix), Config.CONVERSATION_MAX_LEN),
+        safeStringify(kwargs.suffix, Config.CONVERSATION_MAX_LEN),
       );
     }
   }
@@ -525,7 +510,6 @@ export function setResponseAttributes(
 
 // Response Sub-helpers
 function setFinishReason(span: Span, response: Record<string, unknown>): void {
-  // Anthropic: top-level stop_reason
   if (response.stop_reason) {
     span.setAttribute(
       SpanAttributes.LLM_RESPONSE_FINISH_REASON,
@@ -534,7 +518,6 @@ function setFinishReason(span: Span, response: Record<string, unknown>): void {
     span.setAttribute("gen_ai.response.finish_reason", String(response.stop_reason));
   }
 
-  // OpenAI: choices[0].finish_reason
   const choices = response.choices as
     | Array<Record<string, unknown>>
     | undefined;

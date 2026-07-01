@@ -16,6 +16,7 @@ import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
 import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
+import { wrapResponse } from "./utils/response-handler";
 
 export {
   Config,
@@ -124,59 +125,6 @@ export {
   netraExpressMiddleware,
   runWithExtractedContext,
 } from "./utils/context-propagation";
-
-/**
- * Wrap an async iterable so that `SpanWrapper` stays active during
- * iteration and ends only when the iterable completes or throws.
- */
-function wrapAsyncIterableForSpanWrapper(
-  iterable: AsyncIterable<unknown>,
-  spanWrapper: SpanWrapper,
-): any {
-  const iterator = iterable[Symbol.asyncIterator]();
-  let done = false;
-
-  const finalize = () => {
-    if (done) return;
-    done = true;
-    spanWrapper.end();
-  };
-
-  const wrappedIterator: AsyncIterator<unknown> = {
-    async next(value?: any) {
-      try {
-        const result = await spanWrapper.withActive(() => iterator.next(value));
-        if (result.done) finalize();
-        return result;
-      } catch (e: any) {
-        spanWrapper.setError(e instanceof Error ? e.message : String(e));
-        finalize();
-        throw e;
-      }
-    },
-    async return(value?: any) {
-      finalize();
-      return iterator.return?.(value) ?? { done: true as const, value };
-    },
-    async throw(e?: any) {
-      spanWrapper.setError(e instanceof Error ? e.message : String(e));
-      finalize();
-      if (iterator.throw) return iterator.throw(e);
-      throw e;
-    },
-  };
-
-  return new Proxy(iterable, {
-    get(target, prop, receiver) {
-      if (prop === Symbol.asyncIterator) {
-        return () => wrappedIterator;
-      }
-      const value = Reflect.get(target, prop, receiver);
-      if (typeof value === "function") return value.bind(target);
-      return value;
-    },
-  });
-}
 
 export class Netra {
   private static _SDK_NAME = "netra_sdk";
@@ -583,34 +531,12 @@ export class Netra {
         throw e;
       }
 
-      if (
-        result != null &&
-        typeof (result as any)[Symbol.asyncIterator] === "function"
-      ) {
-        return wrapAsyncIterableForSpanWrapper(result as any, spanWrapper) as T;
-      }
-
-      if (result instanceof Promise) {
-        return (result as Promise<unknown>)
-          .then((resolved) => {
-            if (
-              resolved != null &&
-              typeof (resolved as any)[Symbol.asyncIterator] === "function"
-            ) {
-              return wrapAsyncIterableForSpanWrapper(resolved as any, spanWrapper);
-            }
-            spanWrapper.end();
-            return resolved;
-          })
-          .catch((e) => {
-            spanWrapper.setError(e instanceof Error ? e.message : String(e));
-            spanWrapper.end();
-            throw e;
-          }) as T;
-      }
-
-      spanWrapper.end();
-      return result;
+      return wrapResponse(result, {
+        withContext: (fn) => spanWrapper.withActive(fn),
+        onError: (e) =>
+          spanWrapper.setError(e instanceof Error ? e.message : String(e)),
+        finalize: () => spanWrapper.end(),
+      }) as T;
     });
   }
 
