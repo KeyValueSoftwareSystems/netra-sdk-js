@@ -7,6 +7,31 @@ import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
 import { SpanAttributes } from "./span-attributes";
+/**
+ * Controls where native traces are sent.
+ *
+ * - `"netra"` -- Replace the SDK's default processors so traces go
+ *   only to Netra. If the SDK does not expose the required APIs, falls back
+ *   to additive mode (both Netra and native) and logs a warning.
+ * - `"netra-strict"` (default) -- Same replacement as `"netra"`, but if the SDK APIs
+ *   are unavailable the processor is **not** registered at all, ensuring
+ *   traces never reach native even at the cost of no tracing.
+ * - `"both"` -- The Netra processor is added alongside the native defaults;
+ *   traces go to both Netra and native.
+ *
+ * Can also be set via the `NATIVE_TRACING_MODE` environment
+ * variable using the same string values.
+ */
+export type NativeTracingMode = "both" | "netra" | "netra-strict";
+
+const VALID_NATIVE_TRACING_MODES = new Set<string>(["both", "netra", "netra-strict"]);
+
+export function parseNativeTracingEnv(name: string): NativeTracingMode | undefined {
+  const val = process.env[name];
+  if (val === undefined || val === "") return undefined;
+  if (VALID_NATIVE_TRACING_MODES.has(val)) return val as NativeTracingMode;
+  return undefined;
+}
 
 // Suppression
 const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
