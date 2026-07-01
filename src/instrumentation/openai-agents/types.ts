@@ -60,8 +60,13 @@ export interface TracingProcessor {
   shutdown(timeout?: number): Promise<void> | void;
 }
 
+import type { NativeTracingMode } from "../utils";
+export type { NativeTracingMode } from "../utils";
+
 export interface InstrumentorOptions {
   tracerProvider?: { getTracer(name: string, version?: string): any };
   /** Override the `llm.system` attribute value (default: `"openai"`). */
   systemName?: string;
+  /** Controls where traces are sent. See {@link NativeTracingMode}. */
+  nativeTracing?: NativeTracingMode;
 }
