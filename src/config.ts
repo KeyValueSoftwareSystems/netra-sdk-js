@@ -76,6 +76,7 @@ export const DEFAULT_INSTRUMENTS_FOR_ROOT: Set<NetraInstruments> = new Set([
   NetraInstruments.LANGCHAIN,
   NetraInstruments.LANGGRAPH,
   NetraInstruments.LLAMA_INDEX,
+  NetraInstruments.OPENAI_AGENTS,
 ]);
 
 /**

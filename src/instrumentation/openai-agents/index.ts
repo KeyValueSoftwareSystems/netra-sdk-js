@@ -90,14 +90,13 @@ export class NetraOpenAIAgentsInstrumentor {
       ?? parseNativeTracingEnv("NATIVE_TRACING_MODE")
       ?? "netra-strict";
 
-    const canReplace =
-      typeof agentsModule.setTraceProcessors === "function" &&
-      typeof agentsModule.getTraceProcessors === "function";
+    const canSet = typeof agentsModule.setTraceProcessors === "function";
+    const canAdd = typeof agentsModule.addTraceProcessor === "function";
 
     let strategy: "replace" | "append" | "skip";
-    if (mode === "both" || (mode === "netra" && !canReplace)) {
+    if (mode === "both" || (mode === "netra" && !canSet)) {
       strategy = "append";
-    } else if (canReplace) {
+    } else if (canSet) {
       strategy = "replace";
     } else {
       strategy = "skip";
@@ -106,20 +105,19 @@ export class NetraOpenAIAgentsInstrumentor {
     try {
       switch (strategy) {
         case "replace":
-          originalProcessors = agentsModule.getTraceProcessors();
+          if (typeof agentsModule.getTraceProcessors === "function") {
+            originalProcessors = agentsModule.getTraceProcessors();
+          }
           agentsModule.setTraceProcessors([activeProcessor]);
           didReplaceProcessors = true;
           Logger.debug("OpenAI Agents native tracing disabled — traces will only be sent to Netra.");
           break;
 
         case "append":
-          if (typeof agentsModule.addTraceProcessor === "function") {
+          if (canAdd) {
             agentsModule.addTraceProcessor(activeProcessor);
-          } else if (canReplace) {
-            const existing = agentsModule.getTraceProcessors();
-            agentsModule.setTraceProcessors([...existing, activeProcessor]);
           } else {
-            Logger.warn("OpenAI Agents SDK does not expose a safe way to append a trace processor.");
+            Logger.warn("OpenAI Agents SDK does not expose addTraceProcessor or setTraceProcessors.");
             activeProcessor = null;
             activeTracer = null;
             return this;
@@ -165,9 +163,12 @@ export class NetraOpenAIAgentsInstrumentor {
 
     if (didReplaceProcessors && cachedAgentsModule) {
       try {
-        if (typeof cachedAgentsModule.setTraceProcessors === "function") {
-          cachedAgentsModule.setTraceProcessors(originalProcessors ?? []);
+        if (originalProcessors && typeof cachedAgentsModule.setTraceProcessors === "function") {
+          cachedAgentsModule.setTraceProcessors(originalProcessors);
           Logger.debug("Restored original OpenAI Agents trace processors");
+        } else if (typeof cachedAgentsModule.setDefaultOpenAITracingExporter === "function") {
+          cachedAgentsModule.setDefaultOpenAITracingExporter();
+          Logger.debug("Restored default OpenAI Agents tracing exporter");
         }
       } catch (error) {
         Logger.debug("Failed to restore original trace processors:", error);
