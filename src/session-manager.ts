@@ -13,6 +13,7 @@ import { Config } from "./config";
 import { Logger } from "./logger";
 import { RootSpanProcessor } from "./processors/root-span-processor";
 import { ConversationType } from "./types";
+import { serializeValue } from "./utils/serialization";
 
 export { ConversationType };
 
@@ -59,15 +60,6 @@ export function runWithEntityContext<T>(fn: () => T): T {
     spansByName: new Map(),
   };
   return entityStorage.run(ctx, fn);
-}
-
-// Internal serialization
-
-function serializeValue(value: any): string {
-  if (typeof value === "string") {
-    return value.substring(0, Config.ATTRIBUTE_MAX_LEN);
-  }
-  return JSON.stringify(value).substring(0, Config.ATTRIBUTE_MAX_LEN);
 }
 
 // SessionManager
@@ -187,7 +179,10 @@ export class SessionManager {
    */
   static setInput(value: any): void {
     try {
-      SessionManager.setAttributeOnActiveSpan("netra.user.input", serializeValue(value));
+      SessionManager.setAttributeOnActiveSpan(
+        "netra.user.input",
+        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+      );
     } catch (e) {
       Logger.error("setInput failed:", e);
     }
@@ -200,7 +195,10 @@ export class SessionManager {
    */
   static setOutput(value: any): void {
     try {
-      SessionManager.setAttributeOnActiveSpan("netra.user.output", serializeValue(value));
+      SessionManager.setAttributeOnActiveSpan(
+        "netra.user.output",
+        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+      );
     } catch (e) {
       Logger.error("setOutput failed:", e);
     }
@@ -213,7 +211,10 @@ export class SessionManager {
    */
   static setRootInput(value: any): void {
     try {
-      RootSpanProcessor.setAttributeOnRootSpan("netra.user.input", serializeValue(value));
+      RootSpanProcessor.setAttributeOnRootSpan(
+        "netra.user.input",
+        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+      );
     } catch (e) {
       Logger.error("setRootInput failed:", e);
     }
@@ -226,7 +227,10 @@ export class SessionManager {
    */
   static setRootOutput(value: any): void {
     try {
-      RootSpanProcessor.setAttributeOnRootSpan("netra.user.output", serializeValue(value));
+      RootSpanProcessor.setAttributeOnRootSpan(
+        "netra.user.output",
+        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+      );
     } catch (e) {
       Logger.error("setRootOutput failed:", e);
     }
