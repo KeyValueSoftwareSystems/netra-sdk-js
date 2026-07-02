@@ -296,7 +296,16 @@ class MessageStreamWrapper {
           this.finalizeSpanOnce(SpanStatusCode.OK);
         }
       });
-      this.messageStream.on("error", () => {
+      this.messageStream.on("error", (err: any) => {
+        if (err && !this.spanFinalized) {
+          this.span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          this.span.recordException(
+            err instanceof Error ? err : new Error(String(err)),
+          );
+        }
         this.finalizeSpanOnce(SpanStatusCode.ERROR);
       });
     } catch (e) {
@@ -680,7 +689,9 @@ function toolRunnerWrapper(
                     if (originalIterator.throw) {
                       try {
                         const result = await originalIterator.throw(error);
-                        endSpanOnce(SpanStatusCode.ERROR, err);
+                        if (result.done) {
+                          endSpanOnce(SpanStatusCode.ERROR, err);
+                        }
                         return result;
                       } catch (e) {
                         endSpanOnce(

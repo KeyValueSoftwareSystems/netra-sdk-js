@@ -45,7 +45,7 @@ export function shouldSuppressInstrumentation(): boolean {
 
 // Type Utilities
 export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
-  return value instanceof Promise;
+  return value != null && typeof (value as any).then === "function";
 }
 
 /**
@@ -200,11 +200,11 @@ export function buildInputMessages(
 
         messages.push({
           role: "tool",
-          content: JSON.stringify({
+          content: safeStringify({
             tool_use_id: block.tool_use_id,
             content: block.content,
             is_error: block.is_error ?? false,
-          }),
+          }, Config.CONVERSATION_MAX_LEN),
         });
       }
     }
@@ -448,7 +448,7 @@ export function setRequestAttributes(
 
   // Tool definitions
   if (Array.isArray(kwargs.tools)) {
-    span.setAttribute("tools", JSON.stringify(kwargs.tools));
+    span.setAttribute("tools", safeStringify(kwargs.tools, Config.ATTRIBUTE_MAX_LEN));
   }
 
   // Reasoning config

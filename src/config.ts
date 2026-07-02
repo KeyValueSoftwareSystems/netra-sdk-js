@@ -356,8 +356,7 @@ export class Config {
       }
     }
 
-    const encodeAttrValue = (s: string) =>
-      s.replace(/%/g, "%25").replace(/,/g, "%2C").replace(/=/g, "%3D");
+    const encodeAttrValue = (s: string) => encodeURIComponent(s);
 
     process.env.OTEL_RESOURCE_ATTRIBUTES = Object.entries(attrs)
       .map(([k, v]) => `${encodeAttrValue(k)}=${encodeAttrValue(v)}`)

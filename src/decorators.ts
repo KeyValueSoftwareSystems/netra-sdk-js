@@ -110,17 +110,7 @@ function createFunctionWrapper<T extends AnyFunction>(
             const spanCtx = trace.setSpan(context.active(), span);
             return wrapResponse(result, {
               withContext: (fn) => context.with(spanCtx, fn),
-              onError: (e) => {
-                span.setAttribute(
-                  `${Config.LIBRARY_NAME}.entity.error`,
-                  String(e),
-                );
-                span.setStatus({
-                  code: SpanStatusCode.ERROR,
-                  message: e instanceof Error ? e.message : String(e),
-                });
-                span.recordException(e as Error);
-              },
+              onError: (e) => recordError(span, e),
               onSuccess: (value) => addOutputAttributes(span, value),
               finalize: () => cleanup(span),
             });
@@ -142,17 +132,7 @@ function createFunctionWrapper<T extends AnyFunction>(
             const spanCtx = trace.setSpan(context.active(), span);
             return wrapResponse(result, {
               withContext: (fn) => context.with(spanCtx, fn),
-              onError: (e) => {
-                span.setAttribute(
-                  `${Config.LIBRARY_NAME}.entity.error`,
-                  String(e),
-                );
-                span.setStatus({
-                  code: SpanStatusCode.ERROR,
-                  message: e instanceof Error ? e.message : String(e),
-                });
-                span.recordException(e as Error);
-              },
+              onError: (e) => recordError(span, e),
               onSuccess: (value) => addOutputAttributes(span, value),
               finalize: () => cleanup(span),
             });

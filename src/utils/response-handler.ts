@@ -35,87 +35,92 @@ export function wrapAsyncIterable<T>(
   source: AsyncIterable<T>,
   callbacks: ResponseCallbacks<T>,
 ): any {
-  const iterator = source[Symbol.asyncIterator]();
-  let done = false;
+  function createWrappedIterator(): AsyncIterator<T> {
+    const iterator = source[Symbol.asyncIterator]();
+    let done = false;
 
-  const safeFinalize = (status: "ok" | "error") => {
-    if (done) return;
-    done = true;
-    try {
-      callbacks.finalize(status);
-    } catch (e) {
-      Logger.error("netra: finalize callback error", e);
-    }
-  };
-
-  const wrappedIterator: AsyncIterator<T> = {
-    async next(value?: any) {
+    const safeFinalize = (status: "ok" | "error") => {
+      if (done) return;
+      done = true;
       try {
-        const result = await callbacks.withContext(() => iterator.next(value));
-        if (!result.done) {
-          try {
-            callbacks.onChunk?.(result.value);
-          } catch (e) {
-            Logger.error("netra: onChunk callback error", e);
+        callbacks.finalize(status);
+      } catch (e) {
+        Logger.error("netra: finalize callback error", e);
+      }
+    };
+
+    return {
+      async next(value?: any) {
+        try {
+          const result = await callbacks.withContext(() => iterator.next(value));
+          if (!result.done) {
+            try {
+              callbacks.onChunk?.(result.value);
+            } catch (e) {
+              Logger.error("netra: onChunk callback error", e);
+            }
+          } else {
+            safeFinalize("ok");
           }
-        } else {
-          safeFinalize("ok");
-        }
-        return result;
-      } catch (e: any) {
-        try {
-          callbacks.onError(e);
-        } catch {
-          Logger.error("netra: onError callback error", e);
-        }
-        safeFinalize("error");
-        throw e;
-      }
-    },
-    async return(value?: any) {
-      try {
-        const result = await callbacks.withContext(
-          () => iterator.return?.(value) ?? { done: true as const, value },
-        );
-        safeFinalize("ok");
-        return result;
-      } catch (e: any) {
-        try {
-          callbacks.onError(e);
-        } catch {
-          Logger.error("netra: onError callback error", e);
-        }
-        safeFinalize("error");
-        throw e;
-      }
-    },
-    async throw(e?: any) {
-      try {
-        const result = await callbacks.withContext(() => {
-          if (iterator.throw) return iterator.throw(e);
+          return result;
+        } catch (e: any) {
+          try {
+            callbacks.onError(e);
+          } catch {
+            Logger.error("netra: onError callback error", e);
+          }
+          safeFinalize("error");
           throw e;
-        });
-        if (result.done) safeFinalize("ok");
-        return result;
-      } catch (err) {
-        try {
-          callbacks.onError(err);
-        } catch {
-          Logger.error("netra: onError callback error", err);
         }
-        safeFinalize("error");
-        throw err;
-      }
-    },
-  };
+      },
+      async return(value?: any) {
+        try {
+          const result = await callbacks.withContext(
+            () => iterator.return?.(value) ?? { done: true as const, value },
+          );
+          safeFinalize("ok");
+          return result;
+        } catch (e: any) {
+          try {
+            callbacks.onError(e);
+          } catch {
+            Logger.error("netra: onError callback error", e);
+          }
+          safeFinalize("error");
+          throw e;
+        }
+      },
+      async throw(e?: any) {
+        try {
+          const result = await callbacks.withContext(() => {
+            if (iterator.throw) return iterator.throw(e);
+            throw e;
+          });
+          if (result.done) safeFinalize("ok");
+          return result;
+        } catch (err) {
+          try {
+            callbacks.onError(err);
+          } catch {
+            Logger.error("netra: onError callback error", err);
+          }
+          safeFinalize("error");
+          throw err;
+        }
+      },
+    };
+  }
+
+  let directIterator: AsyncIterator<T> | null = null;
 
   return new Proxy(source, {
     get(target, prop) {
       if (prop === Symbol.asyncIterator) {
-        return () => wrappedIterator;
+        return () => createWrappedIterator();
       }
       if (typeof prop === "string" && ITERATOR_METHODS.has(prop)) {
-        return (wrappedIterator as any)[prop].bind(wrappedIterator);
+        if (!directIterator) directIterator = createWrappedIterator();
+        return (directIterator as any)[prop].bind(directIterator);
       }
       const value = (target as any)[prop];
       if (typeof value === "function") return value.bind(target);
