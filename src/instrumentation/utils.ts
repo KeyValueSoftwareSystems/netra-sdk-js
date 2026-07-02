@@ -43,10 +43,8 @@ export function shouldSuppressInstrumentation(): boolean {
   return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
 }
 
-// Type Utilities
-export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
-  return value != null && typeof (value as any).then === "function";
-}
+// Type Utilities — re-export from canonical location to avoid duplication
+export { isPromise } from "../utils/response-handler";
 
 /**
  * Define a non-enumerable, writable, configurable property on `target`.

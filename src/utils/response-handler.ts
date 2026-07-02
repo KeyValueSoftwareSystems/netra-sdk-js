@@ -141,6 +141,17 @@ export function wrapPromise<T>(
   callbacks: ResponseCallbacks,
   options?: { preserveOriginal?: object },
 ): any {
+  let finalized = false;
+  function safeFinalize(status: "ok" | "error") {
+    if (finalized) return;
+    finalized = true;
+    try {
+      callbacks.finalize(status);
+    } catch (e) {
+      Logger.error("netra: finalize callback error", e);
+    }
+  }
+
   const instrumentedPromise = (async () => {
     try {
       const value = await promise;
@@ -164,17 +175,6 @@ export function wrapPromise<T>(
       throw error;
     }
   })();
-
-  let finalized = false;
-  function safeFinalize(status: "ok" | "error") {
-    if (finalized) return;
-    finalized = true;
-    try {
-      callbacks.finalize(status);
-    } catch (e) {
-      Logger.error("netra: finalize callback error", e);
-    }
-  }
 
   if (!options?.preserveOriginal) {
     return instrumentedPromise;

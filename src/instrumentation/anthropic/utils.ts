@@ -55,16 +55,18 @@ export function processStreamChunk(
         ) {
           completeResponse.content = [{ type: "text", text: "" }];
         }
-        const lastBlock =
-          completeResponse.content[completeResponse.content.length - 1];
+        const targetIndex =
+          chunk.index ?? completeResponse.content.length - 1;
+        const targetBlock = completeResponse.content[targetIndex];
+        if (!targetBlock) break;
 
         if (
           chunk.delta?.type === "input_json_delta" &&
-          lastBlock?.type === "tool_use"
+          targetBlock.type === "tool_use"
         ) {
-          lastBlock.input += chunk.delta.partial_json ?? "";
-        } else if (lastBlock && chunk.delta?.text) {
-          lastBlock.text += chunk.delta.text;
+          targetBlock.input += chunk.delta.partial_json ?? "";
+        } else if (chunk.delta?.text) {
+          targetBlock.text += chunk.delta.text;
         }
         break;
       }
@@ -105,15 +107,20 @@ export function processStreamChunk(
 
       case "message_stop": {
         if (chunk.usage) {
-          completeResponse.usage = chunk.usage;
+          completeResponse.usage = {
+            ...(completeResponse.usage ?? {}),
+            ...chunk.usage,
+          };
         }
         break;
       }
     }
 
-    span.addEvent("llm.content.completion.chunk", {
-      "chunk.type": chunk.type,
-    });
+    if (Logger.isDebugMode()) {
+      span.addEvent("llm.content.completion.chunk", {
+        "chunk.type": chunk.type,
+      });
+    }
   } catch (e) {
     Logger.error(
       "netra.instrumentation.anthropic: processStreamChunk error",

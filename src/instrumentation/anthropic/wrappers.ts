@@ -475,7 +475,12 @@ function anthropicWrapper(
                   );
                 },
                 finalize: (status) => {
-                  if (status === "ok" && completeResponse.content?.length) {
+                  const hasStreamData =
+                    completeResponse.content?.length ||
+                    completeResponse.model ||
+                    completeResponse.usage?.input_tokens !== undefined ||
+                    completeResponse.usage?.output_tokens !== undefined;
+                  if (status === "ok" && hasStreamData) {
                     finalizeStreamSpan(
                       span,
                       completeResponse,
