@@ -3,6 +3,7 @@
  */
 
 import { Logger } from "./logger";
+import { SDK_VERSION } from "./version";
 
 export interface NetraConfig {
   appName?: string;
@@ -101,7 +102,7 @@ export const DEFAULT_INSTRUMENTS: Set<NetraInstruments> = new Set([
 export class Config {
   static readonly SDK_NAME = "netra";
   static readonly LIBRARY_NAME = "netra";
-  static readonly LIBRARY_VERSION = "1.0.0";
+  static readonly LIBRARY_VERSION = SDK_VERSION;
   static readonly TRIAL_BLOCK_DURATION_SECONDS = 900; // 15 minutes
   static readonly ATTRIBUTE_MAX_LEN = parseInt(
     process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000",
@@ -324,5 +325,35 @@ export class Config {
         .join(",");
       process.env.TRACELOOP_HEADERS = headerStr;
     }
+
+    // Set OTEL_RESOURCE_ATTRIBUTES so the TracerProvider Resource carries
+    // service.name and deployment.environment attributes.
+    this._setResourceAttributesEnv();
+  }
+
+  private _setResourceAttributesEnv(): void {
+    const attrs: Record<string, string> = {
+      "deployment.environment": this.environment,
+      "service.name": this.appName,
+    };
+    for (const [k, v] of Object.entries(this.resourceAttributes)) {
+      attrs[k] = String(v);
+    }
+
+    const existing = process.env.OTEL_RESOURCE_ATTRIBUTES;
+    if (existing) {
+      for (const pair of existing.split(",")) {
+        const eqIdx = pair.indexOf("=");
+        if (eqIdx <= 0) continue;
+        const key = pair.slice(0, eqIdx).trim();
+        if (key && !(key in attrs)) {
+          attrs[key] = pair.slice(eqIdx + 1).trim();
+        }
+      }
+    }
+
+    process.env.OTEL_RESOURCE_ATTRIBUTES = Object.entries(attrs)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(",");
   }
 }

@@ -815,7 +815,7 @@ function addCustomSpanProcessors(
     provider.addSpanProcessor(instrumentationProcessor);
 
     // 2. Session Span Processor - adds session context (session_id, user_id, etc.)
-    const sessionProcessor = new SessionSpanProcessor();
+    const sessionProcessor = new SessionSpanProcessor(config.environment);
     provider.addSpanProcessor(sessionProcessor);
 
     // 3. Span I/O Processor - normalises input/output from gen_ai.prompt/completion

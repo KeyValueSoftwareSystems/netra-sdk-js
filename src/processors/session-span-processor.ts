@@ -129,6 +129,12 @@ export function clearSessionBaggage(): void {
 }
 
 export class SessionSpanProcessor implements SpanProcessor {
+  private readonly environment: string;
+
+  constructor(environment: string = "local") {
+    this.environment = environment;
+  }
+
   /**
    * Called when a span starts. Adds session and entity context attributes.
    */
@@ -138,6 +144,7 @@ export class SessionSpanProcessor implements SpanProcessor {
       span.setAttribute("library.name", Config.LIBRARY_NAME);
       span.setAttribute("library.version", Config.LIBRARY_VERSION);
       span.setAttribute("sdk.name", Config.SDK_NAME);
+      span.setAttribute("deployment.environment", this.environment);
 
       // Get baggage from the parent context (or current if not provided)
       const ctxToUse = parentContext || context.active();
