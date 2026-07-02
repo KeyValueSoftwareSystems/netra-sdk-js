@@ -332,28 +332,35 @@ export class Config {
   }
 
   private _setResourceAttributesEnv(): void {
+    // Start with Netra defaults (lowest priority)
     const attrs: Record<string, string> = {
       "deployment.environment": this.environment,
       "service.name": this.appName,
     };
+
+    // Config-level resourceAttributes override defaults
     for (const [k, v] of Object.entries(this.resourceAttributes)) {
       attrs[k] = String(v);
     }
 
+    // Pre-existing OTEL_RESOURCE_ATTRIBUTES win (highest priority)
     const existing = process.env.OTEL_RESOURCE_ATTRIBUTES;
     if (existing) {
       for (const pair of existing.split(",")) {
         const eqIdx = pair.indexOf("=");
         if (eqIdx <= 0) continue;
-        const key = pair.slice(0, eqIdx).trim();
-        if (key && !(key in attrs)) {
-          attrs[key] = pair.slice(eqIdx + 1).trim();
+        const key = decodeURIComponent(pair.slice(0, eqIdx).trim());
+        if (key) {
+          attrs[key] = decodeURIComponent(pair.slice(eqIdx + 1).trim());
         }
       }
     }
 
+    const encodeAttrValue = (s: string) =>
+      s.replace(/%/g, "%25").replace(/,/g, "%2C").replace(/=/g, "%3D");
+
     process.env.OTEL_RESOURCE_ATTRIBUTES = Object.entries(attrs)
-      .map(([k, v]) => `${k}=${v}`)
+      .map(([k, v]) => `${encodeAttrValue(k)}=${encodeAttrValue(v)}`)
       .join(",");
   }
 }
