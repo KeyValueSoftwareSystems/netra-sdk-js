@@ -110,6 +110,9 @@ export class Config {
   static readonly CONVERSATION_MAX_LEN = parseInt(
     process.env.NETRA_CONVERSATION_CONTENT_MAX_LEN || "50000",
   );
+  static readonly SPAN_ATTRIBUTE_MAX_SIZE = parseInt(
+    process.env.NETRA_SPAN_ATTRIBUTE_MAX_SIZE || "30000",
+  );
 
   appName: string;
   otlpEndpoint?: string;

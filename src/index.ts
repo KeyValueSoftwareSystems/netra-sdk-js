@@ -26,6 +26,7 @@ export {
 } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
+  AttributeSizeLimitProcessor,
   InstrumentationSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,

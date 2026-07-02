@@ -5,6 +5,7 @@
  * attribute management, session tracking, and sensitive data scrubbing.
  */
 
+export { AttributeSizeLimitProcessor } from "./attribute-size-limit-processor";
 export { InstrumentationSpanProcessor } from "./instrumentation-span-processor";
 export { LlmTraceIdentifierSpanProcessor } from "./llm-trace-identifier-span-processor";
 export { withBlockedSpansLocal } from "./localfiltering-span-processor";

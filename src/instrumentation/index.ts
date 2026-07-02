@@ -18,6 +18,7 @@ import {
 } from "../config";
 import { Logger } from "../logger";
 import {
+  AttributeSizeLimitProcessor,
   InstrumentationSpanProcessor,
   LlmTraceIdentifierSpanProcessor,
   RootSpanProcessor,
@@ -842,6 +843,14 @@ function addCustomSpanProcessors(
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);
     }
+
+    // 7. Attribute Size Limit Processor - enforces hard size limits on span
+    //    attributes before export to prevent "entity too large" errors.
+    //    MUST be last so it acts as final gate after all other processors.
+    const sizeLimitProcessor = new AttributeSizeLimitProcessor(
+      Config.SPAN_ATTRIBUTE_MAX_SIZE,
+    );
+    provider.addSpanProcessor(sizeLimitProcessor);
 
     Logger.debug("Custom span processors registered successfully");
 
