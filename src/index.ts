@@ -16,6 +16,7 @@ import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
 import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
+import { wrapResponse } from "./utils/response-handler";
 
 export {
   Config,
@@ -25,6 +26,7 @@ export {
 } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
+  AttributeSizeLimitProcessor,
   InstrumentationSpanProcessor,
   ScrubbingSpanProcessor,
   SessionSpanProcessor,
@@ -530,17 +532,12 @@ export class Netra {
         throw e;
       }
 
-      if (result instanceof Promise) {
-        return (result as Promise<unknown>)
-          .catch((e) => {
-            spanWrapper.setError(e instanceof Error ? e.message : String(e));
-            throw e;
-          })
-          .finally(() => spanWrapper.end()) as T;
-      }
-
-      spanWrapper.end();
-      return result;
+      return wrapResponse(result, {
+        withContext: (fn) => spanWrapper.withActive(fn),
+        onError: (e) =>
+          spanWrapper.setError(e instanceof Error ? e.message : String(e)),
+        finalize: () => spanWrapper.end(),
+      }) as T;
     });
   }
 

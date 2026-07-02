@@ -6,7 +6,9 @@
 import { Span, context } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { safeStringify } from "../utils/serialization";
 import { SpanAttributes } from "./span-attributes";
+
 /**
  * Controls where native traces are sent.
  *
@@ -41,10 +43,8 @@ export function shouldSuppressInstrumentation(): boolean {
   return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
 }
 
-// Type Utilities
-export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
-  return value instanceof Promise;
-}
+// Type Utilities — re-export from canonical location to avoid duplication
+export { isPromise } from "../utils/response-handler";
 
 /**
  * Define a non-enumerable, writable, configurable property on `target`.
@@ -98,27 +98,12 @@ export interface TracedMessage {
   content: string;
 }
 
-// Internal Helpers
-function isTraceContentEnabled(): boolean {
+export function isTraceContentEnabled(): boolean {
   const raw =
     process.env.TRACELOOP_TRACE_CONTENT ??
     process.env.NETRA_TRACE_CONTENT ??
     "";
   return ["1", "true"].includes(String(raw).toLowerCase());
-}
-
-function safeStringify(value: unknown): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function truncate(value: string, maxLen: number): string {
-  if (!value || value.length <= maxLen) return value;
-  return value.slice(0, maxLen) + "...(truncated)";
 }
 
 /**
@@ -172,7 +157,7 @@ export function buildInputMessages(
 ): TracedMessage[] {
   const messages: TracedMessage[] = [];
 
-  if (requestType === "chat") {
+  if (requestType === "chat" || requestType === "beta") {
     if (hasContent(kwargs.system)) {
       const systemContent =
         typeof kwargs.system === "string"
@@ -184,11 +169,40 @@ export function buildInputMessages(
     const rawMessages = kwargs.messages;
     if (!Array.isArray(rawMessages)) return messages;
     for (const msg of rawMessages) {
-      if (!isDict(msg)) continue;
-      if (hasContent(msg.role) && hasContent(msg.content)) {
+      if (!isDict(msg) || !hasContent(msg.role) || !hasContent(msg.content)) {
+        continue;
+      }
+
+      if (msg.role !== "user" || !Array.isArray(msg.content)) {
         messages.push({
           role: msg.role,
           content: safeStringify(msg.content),
+        });
+        continue;
+      }
+
+      const isToolResult = (b: unknown): b is Record<string, unknown> =>
+        isDict(b) && b.type === "tool_result";
+
+      const userBlocks = msg.content.filter((b) => !isToolResult(b));
+
+      if (userBlocks.length) {
+        messages.push({
+          role: "user",
+          content: safeStringify(userBlocks),
+        });
+      }
+
+      for (const block of msg.content) {
+        if (!isToolResult(block)) continue;
+
+        messages.push({
+          role: "tool",
+          content: safeStringify({
+            tool_use_id: block.tool_use_id,
+            content: block.content,
+            is_error: block.is_error ?? false,
+          }, Config.CONVERSATION_MAX_LEN),
         });
       }
     }
@@ -220,10 +234,7 @@ export function buildInputMessages(
     // Embeddings / genericinput
     const input = kwargs.input ?? kwargs.inputs;
     if (hasContent(input)) {
-      const content = truncate(
-        safeStringify(input),
-        Config.CONVERSATION_MAX_LEN,
-      );
+      const content = safeStringify(input, Config.CONVERSATION_MAX_LEN);
       messages.push({ role: "user", content });
     }
   }
@@ -324,7 +335,7 @@ export function buildOutputMessages(
       } else if (block.type === "tool_use" && block.name) {
         messages.push({
           role: "tool",
-          content: JSON.stringify({ name: block.name, input: block.input }),
+          content: JSON.stringify({ id: block.id, name: block.name, input: block.input }),
         });
       }
     }
@@ -345,13 +356,14 @@ export function writePromptAttributes(
   if (messages.length === 0) return;
 
   for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     span.setAttribute(
       `${SpanAttributes.LLM_PROMPTS}.${i}.role`,
-      messages[i].role,
+      msg.role,
     );
     span.setAttribute(
       `${SpanAttributes.LLM_PROMPTS}.${i}.content`,
-      messages[i].content,
+      msg.content,
     );
   }
 
@@ -412,7 +424,6 @@ export function writeCompletionAttributes(
   span.setAttribute("output", JSON.stringify(messages));
 }
 
-
 // Request Attributes
 export function setRequestAttributes(
   span: Span,
@@ -433,6 +444,11 @@ export function setRequestAttributes(
   // Standard model parameters
   setModelParams(span, kwargs);
 
+  // Tool definitions
+  if (Array.isArray(kwargs.tools)) {
+    span.setAttribute("tools", safeStringify(kwargs.tools, Config.ATTRIBUTE_MAX_LEN));
+  }
+
   // Reasoning config
   if (kwargs.reasoning !== undefined) {
     span.setAttribute(
@@ -450,7 +466,7 @@ export function setRequestAttributes(
     if (kwargs.suffix !== undefined) {
       span.setAttribute(
         "llm.request.suffix",
-        truncate(safeStringify(kwargs.suffix), Config.CONVERSATION_MAX_LEN),
+        safeStringify(kwargs.suffix, Config.CONVERSATION_MAX_LEN),
       );
     }
   }
@@ -492,15 +508,23 @@ export function setResponseAttributes(
 
 // Response Sub-helpers
 function setFinishReason(span: Span, response: Record<string, unknown>): void {
+  if (response.stop_reason) {
+    span.setAttribute(
+      SpanAttributes.LLM_RESPONSE_FINISH_REASON,
+      String(response.stop_reason),
+    );
+    span.setAttribute("gen_ai.response.finish_reason", String(response.stop_reason));
+  }
+
   const choices = response.choices as
     | Array<Record<string, unknown>>
     | undefined;
-  if (!Array.isArray(choices) || choices.length === 0) return;
-
-  const reason = choices[0].finish_reason ?? choices[0].finishReason;
-  if (reason) {
-    span.setAttribute("gen_ai.response.finish_reason", String(reason));
-    span.setAttribute("llm.response.finish_reason", String(reason));
+  if (Array.isArray(choices) && choices.length > 0) {
+    const reason = choices[0].finish_reason ?? choices[0].finishReason;
+    if (reason) {
+      span.setAttribute(SpanAttributes.LLM_RESPONSE_FINISH_REASON, String(reason));
+      span.setAttribute("gen_ai.response.finish_reason", String(reason));
+    }
   }
 }
 
@@ -537,15 +561,25 @@ function setUsageAttributes(
     );
   }
 
-  const cacheTokens = (
-    (usage.prompt_tokens_details ?? usage.input_tokens_details) as
-      | { cached_tokens?: unknown }
-      | undefined
-  )?.cached_tokens;
-  if (cacheTokens !== undefined) {
+  const cacheReadTokens =
+    usage.cache_read_input_tokens ??
+    (
+      (usage.prompt_tokens_details ?? usage.input_tokens_details) as
+        | { cached_tokens?: unknown }
+        | undefined
+    )?.cached_tokens;
+  if (cacheReadTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS,
-      Number(cacheTokens),
+      Number(cacheReadTokens),
+    );
+  }
+
+  const cacheCreationTokens = usage.cache_creation_input_tokens;
+  if (cacheCreationTokens !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS,
+      Number(cacheCreationTokens),
     );
   }
 

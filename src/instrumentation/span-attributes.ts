@@ -11,12 +11,17 @@ export const SpanAttributes = {
   LLM_REQUEST_TOP_P: "gen_ai.request.top_p",
   LLM_REQUEST_REASONING: "gen_ai.request.reasoning",
   LLM_REQUEST_REASONING_EFFORT: "gen_ai.request.reasoning_effort",
+  LLM_REQUEST_TOOL_NAME: "gen_ai.request.tool.name",
+  LLM_REQUEST_TOOL_ID: "gen_ai.request.tool.id",
 
   LLM_RESPONSE_MODEL: "gen_ai.response.model",
+  LLM_RESPONSE_FINISH_REASON: "llm.response.finish_reason",
 
   LLM_USAGE_PROMPT_TOKENS: "gen_ai.usage.prompt_tokens",
   LLM_USAGE_COMPLETION_TOKENS: "gen_ai.usage.completion_tokens",
   LLM_USAGE_CACHE_READ_INPUT_TOKENS: "gen_ai.usage.cache_read_input_tokens",
+  LLM_USAGE_CACHE_CREATION_INPUT_TOKENS:
+    "gen_ai.usage.cache_creation_input_tokens",
   LLM_USAGE_REASONING_TOKENS: "gen_ai.usage.reasoning_tokens",
   LLM_USAGE_TOTAL_TOKENS: "llm.usage.total_tokens",
 

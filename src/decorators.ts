@@ -2,11 +2,13 @@
  * Decorators for easy instrumentation
  */
 
-import { trace, Span, SpanStatusCode } from "@opentelemetry/api";
+import { context, trace, Span, SpanStatusCode } from "@opentelemetry/api";
 import { Config } from "./config";
 import { Logger } from "./logger";
 import { SessionManager } from "./session-manager";
 import { SpanType, DecoratorOptions } from "./types";
+import { wrapResponse } from "./utils/response-handler";
+import { safeStringify, serializeValue } from "./utils/serialization";
 
 type AnyFunction = (...args: any[]) => any;
 type AsyncFunction = (...args: any[]) => Promise<any>;
@@ -18,40 +20,6 @@ type MethodDecoratorFn = (
   descriptor: PropertyDescriptor,
 ) => void;
 type UnifiedDecorator = ClassDecoratorFn & MethodDecoratorFn;
-
-/**
- * Circular-reference-safe JSON.stringify. Non-serializable values
- * (functions, symbols, cycles, complex class instances) become
- * descriptive placeholders instead of throwing.
- */
-function safeStringify(value: any, maxLen = 1000): string {
-  const seen = new WeakSet<object>();
-  try {
-    return JSON.stringify(value, (_key, val) => {
-      if (typeof val === "function") return `[Function: ${val.name || "anonymous"}]`;
-      if (typeof val === "symbol") return val.toString();
-      if (typeof val === "bigint") return val.toString();
-      if (val !== null && typeof val === "object") {
-        if (seen.has(val)) return "[Circular]";
-        seen.add(val);
-        const name = val.constructor?.name;
-        if (name && name !== "Object" && name !== "Array" && Object.keys(val).length > 20) {
-          return `[${name}]`;
-        }
-      }
-      return val;
-    }).substring(0, maxLen);
-  } catch {
-    return value?.constructor?.name ? `[${value.constructor.name}]` : String(typeof value);
-  }
-}
-
-function serializeValue(value: any): string {
-  if (value === null || value === undefined) return String(value);
-  const t = typeof value;
-  if (t === "string" || t === "number" || t === "boolean") return String(value);
-  return safeStringify(value);
-}
 
 /**
  * Returns true if the span already has a non-empty `output` attribute.
@@ -70,14 +38,10 @@ function spanHasOutput(span: Span): boolean {
   return false;
 }
 
-function addInputAttributes(
-  span: Span,
-  args: any[],
-  entityType: string,
-): void {
+function addInputAttributes(span: Span, args: any[], entityType: string): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
   if (args.length > 0) {
-    span.setAttribute("input", safeStringify(args));
+    span.setAttribute("input", safeStringify(args, Config.ATTRIBUTE_MAX_LEN));
   }
 }
 
@@ -85,7 +49,7 @@ function addOutputAttributes(span: Span, result: any): void {
   // Skip if the user already set output explicitly inside the decorated function
   if (spanHasOutput(span)) return;
   try {
-    span.setAttribute("output", serializeValue(result));
+    span.setAttribute("output", serializeValue(result, Config.ATTRIBUTE_MAX_LEN));
   } catch (e) {
     span.setAttribute("output_error", String(e));
   }
@@ -119,14 +83,13 @@ function createFunctionWrapper<T extends AnyFunction>(
     SessionManager.registerSpan(spanName, span);
   };
 
-  const handleError = (span: Span, e: any) => {
+  const recordError = (span: Span, e: any) => {
     span.setAttribute(`${Config.LIBRARY_NAME}.entity.error`, String(e));
     span.setStatus({
       code: SpanStatusCode.ERROR,
       message: e instanceof Error ? e.message : String(e),
     });
     span.recordException(e);
-    throw e;
   };
 
   const cleanup = (span: Span) => {
@@ -135,65 +98,52 @@ function createFunctionWrapper<T extends AnyFunction>(
     SessionManager.popEntity(entityType);
   };
 
-  if (isAsync) {
-    const wrapper = async function (this: any, ...args: any[]) {
-      SessionManager.pushEntity(entityType, spanName);
-      const tracer = trace.getTracer(moduleName);
-      return tracer.startActiveSpan(spanName, async (span) => {
-        try {
-          initSpan(span);
-          addInputAttributes(span, args, entityType);
-          const result = await (func as AsyncFunction).call(this, ...args);
-          addOutputAttributes(span, result);
-          return result;
-        } catch (e: any) {
-          handleError(span, e);
-        } finally {
-          cleanup(span);
-        }
-      });
-    };
-    return wrapper as T;
-  } else {
-    const wrapper = function (this: any, ...args: any[]) {
-      SessionManager.pushEntity(entityType, spanName);
-      const tracer = trace.getTracer(moduleName);
-      return tracer.startActiveSpan(spanName, (span) => {
-        // Track whether the function returned a promise so the finally block
-        // can skip its cleanup — the promise chain owns span lifecycle in that case.
-        let returnedPromise = false;
-        try {
-          initSpan(span);
-          addInputAttributes(span, args, entityType);
-          const result = (func as AnyFunction).call(this, ...args);
-
-          // Detect promise-returning non-async functions (e.g. `function foo() { return fetch(...) }`)
-          // Without this check, addOutputAttributes would capture the raw Promise object and
-          // cleanup() would end the span before the async work completes.
-          if (result != null && typeof (result as any).then === "function") {
-            returnedPromise = true;
-            return (result as Promise<any>)
-              .then((resolved: any) => {
-                addOutputAttributes(span, resolved);
-                return resolved;
-              })
-              .catch((e: any) => handleError(span, e))
-              .finally(() => cleanup(span));
-          }
-
-          addOutputAttributes(span, result);
-          return result;
-        } catch (e: any) {
-          handleError(span, e);
-        } finally {
-          if (!returnedPromise) {
+  const wrapperFn = isAsync
+    ? async function (this: any, ...args: any[]) {
+        SessionManager.pushEntity(entityType, spanName);
+        const tracer = trace.getTracer(moduleName);
+        return tracer.startActiveSpan(spanName, async (span) => {
+          try {
+            initSpan(span);
+            addInputAttributes(span, args, entityType);
+            const result = await (func as AsyncFunction).call(this, ...args);
+            const spanCtx = trace.setSpan(context.active(), span);
+            return wrapResponse(result, {
+              withContext: (fn) => context.with(spanCtx, fn),
+              onError: (e) => recordError(span, e),
+              onSuccess: (value) => addOutputAttributes(span, value),
+              finalize: () => cleanup(span),
+            });
+          } catch (e: any) {
+            recordError(span, e);
             cleanup(span);
+            throw e;
           }
-        }
-      });
-    };
-    return wrapper as T;
-  }
+        });
+      }
+    : function (this: any, ...args: any[]) {
+        SessionManager.pushEntity(entityType, spanName);
+        const tracer = trace.getTracer(moduleName);
+        return tracer.startActiveSpan(spanName, (span) => {
+          try {
+            initSpan(span);
+            addInputAttributes(span, args, entityType);
+            const result = (func as AnyFunction).call(this, ...args);
+            const spanCtx = trace.setSpan(context.active(), span);
+            return wrapResponse(result, {
+              withContext: (fn) => context.with(spanCtx, fn),
+              onError: (e) => recordError(span, e),
+              onSuccess: (value) => addOutputAttributes(span, value),
+              finalize: () => cleanup(span),
+            });
+          } catch (e: any) {
+            recordError(span, e);
+            cleanup(span);
+            throw e;
+          }
+        });
+      };
+  return wrapperFn as T;
 }
 
 const SKIP_STATIC_PROPS = new Set([

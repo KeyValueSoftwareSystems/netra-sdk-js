@@ -18,6 +18,7 @@ import {
 } from "../config";
 import { Logger } from "../logger";
 import {
+  AttributeSizeLimitProcessor,
   InstrumentationSpanProcessor,
   LlmTraceIdentifierSpanProcessor,
   RootSpanProcessor,
@@ -549,7 +550,7 @@ async function initCustomInstrumentationsAsync(
 
   if (customInstrumentModules.anthropic) {
     try {
-      await anthropicInstrumentor.instrumentAsync({ tracerProvider });
+      await anthropicInstrumentor.instrument({ tracerProvider });
       Logger.debug("Custom Anthropic instrumentation enabled");
     } catch (e) {
       Logger.debug("Failed to initialize custom Anthropic instrumentation:", e);
@@ -815,7 +816,7 @@ function addCustomSpanProcessors(
     provider.addSpanProcessor(instrumentationProcessor);
 
     // 2. Session Span Processor - adds session context (session_id, user_id, etc.)
-    const sessionProcessor = new SessionSpanProcessor();
+    const sessionProcessor = new SessionSpanProcessor(config.environment);
     provider.addSpanProcessor(sessionProcessor);
 
     // 3. Span I/O Processor - normalises input/output from gen_ai.prompt/completion
@@ -842,6 +843,14 @@ function addCustomSpanProcessors(
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);
     }
+
+    // 7. Attribute Size Limit Processor - enforces hard size limits on span
+    //    attributes before export to prevent "entity too large" errors.
+    //    MUST be last so it acts as final gate after all other processors.
+    const sizeLimitProcessor = new AttributeSizeLimitProcessor(
+      Config.SPAN_ATTRIBUTE_MAX_SIZE,
+    );
+    provider.addSpanProcessor(sizeLimitProcessor);
 
     Logger.debug("Custom span processors registered successfully");
 

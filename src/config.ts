@@ -3,6 +3,7 @@
  */
 
 import { Logger } from "./logger";
+import { SDK_VERSION } from "./version";
 
 export interface NetraConfig {
   appName?: string;
@@ -101,13 +102,16 @@ export const DEFAULT_INSTRUMENTS: Set<NetraInstruments> = new Set([
 export class Config {
   static readonly SDK_NAME = "netra";
   static readonly LIBRARY_NAME = "netra";
-  static readonly LIBRARY_VERSION = "1.0.0";
+  static readonly LIBRARY_VERSION = SDK_VERSION;
   static readonly TRIAL_BLOCK_DURATION_SECONDS = 900; // 15 minutes
   static readonly ATTRIBUTE_MAX_LEN = parseInt(
     process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000",
   );
   static readonly CONVERSATION_MAX_LEN = parseInt(
     process.env.NETRA_CONVERSATION_CONTENT_MAX_LEN || "50000",
+  );
+  static readonly SPAN_ATTRIBUTE_MAX_SIZE = parseInt(
+    process.env.NETRA_SPAN_ATTRIBUTE_MAX_SIZE || "30000",
   );
 
   appName: string;
@@ -324,5 +328,41 @@ export class Config {
         .join(",");
       process.env.TRACELOOP_HEADERS = headerStr;
     }
+
+    // Set OTEL_RESOURCE_ATTRIBUTES so the TracerProvider Resource carries
+    // service.name and deployment.environment attributes.
+    this._setResourceAttributesEnv();
+  }
+
+  private _setResourceAttributesEnv(): void {
+    // Start with Netra defaults (lowest priority)
+    const attrs: Record<string, string> = {
+      "deployment.environment": this.environment,
+      "service.name": this.appName,
+    };
+
+    // Config-level resourceAttributes override defaults
+    for (const [k, v] of Object.entries(this.resourceAttributes)) {
+      attrs[k] = String(v);
+    }
+
+    // Pre-existing OTEL_RESOURCE_ATTRIBUTES win (highest priority)
+    const existing = process.env.OTEL_RESOURCE_ATTRIBUTES;
+    if (existing) {
+      for (const pair of existing.split(",")) {
+        const eqIdx = pair.indexOf("=");
+        if (eqIdx <= 0) continue;
+        const key = decodeURIComponent(pair.slice(0, eqIdx).trim());
+        if (key) {
+          attrs[key] = decodeURIComponent(pair.slice(eqIdx + 1).trim());
+        }
+      }
+    }
+
+    const encodeAttrValue = (s: string) => encodeURIComponent(s);
+
+    process.env.OTEL_RESOURCE_ATTRIBUTES = Object.entries(attrs)
+      .map(([k, v]) => `${encodeAttrValue(k)}=${encodeAttrValue(v)}`)
+      .join(",");
   }
 }

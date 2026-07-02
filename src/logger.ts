@@ -21,6 +21,10 @@ export class Logger {
     );
   }
 
+  static isDebugMode(): boolean {
+    return this.isDebug;
+  }
+
   static debug(...args: any[]): void {
     if (this.isDebug) console.debug(PREFIX, ...args);
   }
