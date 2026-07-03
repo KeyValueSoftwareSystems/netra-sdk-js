@@ -239,6 +239,23 @@ function setUsageAttributes(
       span.setAttribute(SpanAttributes.LLM_USAGE_REASONING_TOKENS, Number(details.reasoning_tokens));
     }
   }
+
+  if (usage.input_tokens_details) {
+    const inputDetails = usage.input_tokens_details;
+    if (inputDetails.cached_tokens !== undefined) {
+      span.setAttribute(SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS, Number(inputDetails.cached_tokens));
+    }
+    if (inputDetails.cache_write_tokens !== undefined) {
+      span.setAttribute(SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS, Number(inputDetails.cache_write_tokens));
+    }
+  }
+
+  if (usage.output_tokens_details) {
+    const outputDetails = usage.output_tokens_details;
+    if (outputDetails.reasoning_tokens !== undefined) {
+      span.setAttribute(SpanAttributes.LLM_USAGE_REASONING_TOKENS, Number(outputDetails.reasoning_tokens));
+    }
+  }
 }
 
 interface ResponseObject {
@@ -252,7 +269,7 @@ interface ResponseObject {
     input_tokens?: number;
     output_tokens?: number;
     total_tokens?: number;
-    input_tokens_details?: { cached_tokens?: number };
+    input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
     output_tokens_details?: { reasoning_tokens?: number };
   };
   output?: Array<{
@@ -313,6 +330,9 @@ function setResponseObjectUsageAttributes(
   }
   if (usage.input_tokens_details?.cached_tokens !== undefined) {
     span.setAttribute(SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS, usage.input_tokens_details.cached_tokens);
+  }
+  if (usage.input_tokens_details?.cache_write_tokens !== undefined) {
+    span.setAttribute(SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS, usage.input_tokens_details.cache_write_tokens);
   }
   if (usage.output_tokens_details?.reasoning_tokens !== undefined) {
     span.setAttribute(SpanAttributes.LLM_USAGE_REASONING_TOKENS, usage.output_tokens_details.reasoning_tokens);

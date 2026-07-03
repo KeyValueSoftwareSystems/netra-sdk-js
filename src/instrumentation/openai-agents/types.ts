@@ -23,7 +23,13 @@ export interface SpanData {
   output?: unknown;
   model?: string;
   model_config?: Record<string, unknown>;
-  usage?: { input_tokens?: number; output_tokens?: number; details?: Record<string, unknown> | null };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    details?: Record<string, unknown> | null;
+    input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+    output_tokens_details?: { reasoning_tokens?: number } | null;
+  };
   // HandoffSpanData
   to_agent?: string;
   from_agent?: string;
