@@ -13,15 +13,15 @@ import {
 } from "../utils";
 import { extractModelName, setRequestAttributes, setResponseAttributes } from "./utils";
 
-type GoogleGenAIRequestType = "chat" | "embedding";
+type GoogleGenerativeAIRequestType = "chat" | "embedding";
 
-const CHAT_SPAN_NAME = "google_genai.chat";
-const EMBEDDING_SPAN_NAME = "google_genai.embedding";
+const CHAT_SPAN_NAME = "google_generative_ai.chat";
+const EMBEDDING_SPAN_NAME = "google_generative_ai.embedding";
 
-function googleGenAIWrapper(
+function googleGenerativeAIWrapper(
   tracer: Tracer,
   spanName: string,
-  requestType: GoogleGenAIRequestType,
+  requestType: GoogleGenerativeAIRequestType,
 ) {
   return function wrapper<F extends (...args: any[]) => any>(original: F): F {
     return function (this: unknown, ...args: Parameters<F>): any {
@@ -78,7 +78,7 @@ function googleGenAIWrapper(
                   span.end();
                   return value;
                 } catch (error) {
-                  Logger.error("netra.instrumentation.google-genai:", error);
+                  Logger.error("netra.instrumentation.google-generative-ai:", error);
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
                     message:
@@ -102,7 +102,7 @@ function googleGenAIWrapper(
               return response;
             }
           } catch (error) {
-            Logger.error("netra.instrumentation.google-genai:", error);
+            Logger.error("netra.instrumentation.google-generative-ai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -117,10 +117,10 @@ function googleGenAIWrapper(
   };
 }
 
-function googleGenAIStreamWrapper(
+function googleGenerativeAIStreamWrapper(
   tracer: Tracer,
   spanName: string,
-  requestType: GoogleGenAIRequestType,
+  requestType: GoogleGenerativeAIRequestType,
 ) {
   return function wrapper<F extends (...args: any[]) => any>(original: F): F {
     return function (this: unknown, ...args: Parameters<F>): any {
@@ -170,7 +170,7 @@ function googleGenAIStreamWrapper(
               try {
                 const streamResult: any = await response;
 
-                // Google GenAI stream result typically looks like:
+                // Google Generative AI stream result typically looks like:
                 // { stream: AsyncIterable<Chunk>, response?: Promise<FinalResponse> }
                 // We will wrap streamResult.stream so we can end span at completion.
                 const originalStream: AsyncIterable<any> = streamResult.stream;
@@ -300,7 +300,7 @@ function googleGenAIStreamWrapper(
                   stream: wrappedStream,
                 };
               } catch (error) {
-                Logger.error("netra.instrumentation.google-genai:", error);
+                Logger.error("netra.instrumentation.google-generative-ai:", error);
                 span.setStatus({
                   code: SpanStatusCode.ERROR,
                   message:
@@ -312,7 +312,7 @@ function googleGenAIStreamWrapper(
               }
             })();
           } catch (error) {
-            Logger.error("netra.instrumentation.google-genai:", error);
+            Logger.error("netra.instrumentation.google-generative-ai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -331,9 +331,9 @@ function googleGenAIStreamWrapper(
  * Wraps startChat to instrument the returned ChatSession's sendMessage
  * and sendMessageStream methods with proper tracing.
  */
-function googleGenAIStartChatWrapper(tracer: Tracer, spanName: string, requestType: GoogleGenAIRequestType) {
-  const sendMessageWrapperFn = googleGenAIWrapper(tracer, spanName, requestType);
-  const sendMessageStreamWrapperFn = googleGenAIStreamWrapper(tracer, spanName, requestType);
+function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, requestType: GoogleGenerativeAIRequestType) {
+  const sendMessageWrapperFn = googleGenerativeAIWrapper(tracer, spanName, requestType);
+  const sendMessageStreamWrapperFn = googleGenerativeAIStreamWrapper(tracer, spanName, requestType);
 
   return function wrapper<F extends (...args: any[]) => any>(original: F): F {
     return function (this: unknown, ...args: Parameters<F>): any {
@@ -380,13 +380,13 @@ function googleGenAIStartChatWrapper(tracer: Tracer, spanName: string, requestTy
 
 /* Specific wrappers for different requests */
 export const chatWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, CHAT_SPAN_NAME, "chat");
+  googleGenerativeAIWrapper(tracer, CHAT_SPAN_NAME, "chat");
 
 export const embeddingsWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, EMBEDDING_SPAN_NAME, "embedding");
+  googleGenerativeAIWrapper(tracer, EMBEDDING_SPAN_NAME, "embedding");
 
 export const chatStreamWrapper = (tracer: Tracer) =>
-  googleGenAIStreamWrapper(tracer, CHAT_SPAN_NAME, "chat");
+  googleGenerativeAIStreamWrapper(tracer, CHAT_SPAN_NAME, "chat");
 
 export const startChatWrapper = (tracer: Tracer) =>
-  googleGenAIStartChatWrapper(tracer, CHAT_SPAN_NAME, "chat");
+  googleGenerativeAIStartChatWrapper(tracer, CHAT_SPAN_NAME, "chat");

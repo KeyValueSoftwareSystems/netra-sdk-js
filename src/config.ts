@@ -31,7 +31,7 @@ export enum NetraInstruments {
 
   // LLM Providers
   OPENAI = "openai",
-  GOOGLE_GENERATIVE_AI = "google_genai",
+  GOOGLE_GENERATIVE_AI = "google_generative_ai",
   MISTRAL = "mistral_ai",
   GROQ = "groq",
   VERTEX_AI = "vertexai",

@@ -1,7 +1,7 @@
 /**
- * Utility functions for Google GenAI instrumentation
+ * Utility functions for Google Generative AI instrumentation
  *
- * Google GenAI has a different response format than OpenAI:
+ * Google Generative AI has a different response format than OpenAI:
  * - Response: { response: EnhancedGenerateContentResponse }
  * - EnhancedGenerateContentResponse: { candidates, usageMetadata, promptFeedback }
  * - UsageMetadata: { promptTokenCount, candidatesTokenCount, totalTokenCount, cachedContentTokenCount }
@@ -35,12 +35,12 @@ export function extractModelName(model: string): string {
 }
 
 /**
- * Normalize role values from Google GenAI.
+ * Normalize role values from Google Generative AI.
  *
- * Google GenAI uses "model" to indicate the assistant role.
+ * Google Generative AI uses "model" to indicate the assistant role.
  * This function maps "model" → "assistant" and returns any other role unchanged in lowercase.
  */
-function normalizeGenAIRole(raw: string): string {
+function normalizeGenerativeAIRole(raw: string): string {
   const rawLower = raw.toLowerCase();
   return rawLower === "model" ? "assistant" : rawLower;
 }
@@ -58,7 +58,7 @@ export function setRequestAttributes(
   }
 
   span.setAttribute(SpanAttributes.LLM_REQUEST_TYPE, requestType);
-  span.setAttribute(SpanAttributes.LLM_SYSTEM, "google_genai");
+  span.setAttribute(SpanAttributes.LLM_SYSTEM, "google_generative_ai");
 
   // Model is set on the GenerativeModel instance, not in the request kwargs
   // We need to access it from `this.model` in the wrapper if available
@@ -180,7 +180,7 @@ function isTraceContentEnabled(): boolean {
 }
 
 /**
- * Extract and set prompt content from Google GenAI request
+ * Extract and set prompt content from Google Generative AI request
  */
 function _setPromptAttributes(
   span: Span,
@@ -231,7 +231,7 @@ function _setPromptAttributes(
   // 2. Chat history from startChat (multiturn context)
   if (kwargs.history && Array.isArray(kwargs.history)) {
     for (const turn of kwargs.history as Array<Record<string, unknown>>) {
-      const role = normalizeGenAIRole(String(turn.role ?? "user"));
+      const role = normalizeGenerativeAIRole(String(turn.role ?? "user"));
       const parts = turn.parts as Array<Record<string, unknown>> | undefined;
       if (Array.isArray(parts)) {
         const textContent = parts
@@ -363,7 +363,7 @@ function _setPromptAttributes(
 }
 
 /**
- * Set response attributes for Google GenAI responses
+ * Set response attributes for Google Generative AI responses
  * Handles the specific structure of GenerateContentResult
  */
 export function setResponseAttributes(
@@ -374,7 +374,7 @@ export function setResponseAttributes(
     return;
   }
 
-  // Google GenAI returns { response: EnhancedGenerateContentResponse }
+  // Google Generative AI returns { response: EnhancedGenerateContentResponse }
   // The response object itself is what we need to parse
   const actualResponse =
     (response.response as Record<string, unknown>) ?? response;
@@ -572,7 +572,7 @@ function _setCompletionAttributes(
 
     if (!content) continue;
 
-    const role = normalizeGenAIRole(String(content.role ?? "model"));
+    const role = normalizeGenerativeAIRole(String(content.role ?? "model"));
     const parts = content.parts as Array<Record<string, unknown>> | undefined;
 
     if (!Array.isArray(parts)) continue;
