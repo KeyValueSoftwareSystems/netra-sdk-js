@@ -30,7 +30,7 @@ export const SpanAttributes = {
   LLM_FREQUENCY_PENALTY: "llm.frequency_penalty",
   LLM_PRESENCE_PENALTY: "llm.presence_penalty",
   LLM_CHAT_STOP_SEQUENCES: "llm.chat.stop_sequences",
-  LLM_IS_STREAMING: "llm.streaming",
+  LLM_IS_STREAMING: "llm.is_streaming",
   LLM_COMPLETIONS: "gen_ai.completion",
   LLM_PROMPTS: "gen_ai.prompt",
 } as const;

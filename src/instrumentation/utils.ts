@@ -3,7 +3,7 @@
  * Handles setting OTel span attributes for LLM request/response tracing.
  */
 
-import { Span, context } from "@opentelemetry/api";
+import { Span, context, type Context as OTelContext } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
 import { safeStringify } from "../utils/serialization";
@@ -42,8 +42,6 @@ export function shouldSuppressInstrumentation(): boolean {
   const ctx = context.active();
   return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
 }
-
-import type { Context as OTelContext } from "@opentelemetry/api";
 
 /**
  * Return a new context derived from `ctx` (default: active) with

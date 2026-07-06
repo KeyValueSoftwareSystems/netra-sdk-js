@@ -45,30 +45,6 @@ function extractClasses(mod: any): ResolvedClasses | null {
   if (root.Models) result.Models = root.Models;
   if (root.Chat) result.Chat = root.Chat;
 
-  // Fallback: probe a GoogleGenAI instance to discover classes
-  if (!result.Models && root.GoogleGenAI) {
-    try {
-      const inst = new root.GoogleGenAI({ apiKey: "__probe__" });
-      if (inst.models) {
-        result.Models = Object.getPrototypeOf(inst.models).constructor;
-      }
-      if (inst.chats) {
-        try {
-          const tempChat = inst.chats.create({ model: "__probe__" });
-          if (tempChat) {
-            result.Chat = Object.getPrototypeOf(tempChat).constructor;
-          }
-        } catch {
-          Logger.warn(
-            "Failed to create temporary Chat instance for Google GenAI",
-          );
-        }
-      }
-    } catch {
-      Logger.warn("Failed to extract Google GenAI classes");
-    }
-  }
-
   return result.Models ? (result as ResolvedClasses) : null;
 }
 
@@ -145,9 +121,9 @@ export class NetraGoogleGenAIInstrumentor {
       return this;
     }
 
-    classSets.forEach((GenAIClass) => {
-      this._instrumentModels(GenAIClass.Models);
-      if (GenAIClass.Chat) this._instrumentChat(GenAIClass.Chat);
+    classSets.forEach((classSet) => {
+      this._instrumentModels(classSet.Models);
+      if (classSet.Chat) this._instrumentChat(classSet.Chat);
     });
 
     isInstrumented = true;
@@ -267,7 +243,6 @@ export class NetraGoogleGenAIInstrumentor {
       Logger.error(`Failed to uninstrument Google GenAI Chat: ${error}`);
     }
   }
-
 }
 
 export const googleGenAIInstrumentor = new NetraGoogleGenAIInstrumentor();

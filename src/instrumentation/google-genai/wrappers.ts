@@ -55,9 +55,10 @@ function genericWrapperFactory(
         return original.apply(this, args);
       }
 
-      const params = { ...((args[0] ?? {}) as Record<string, unknown>) };
+      const raw = args[0];
+      const params: Record<string, unknown> =
+        typeof raw === "object" && raw !== null ? { ...raw } : { message: raw };
 
-      // Read model and history from Chat instances (native properties)
       const self = this as Record<string, unknown>;
       if (!params.model && self.model) {
         params.model = self.model;
@@ -89,6 +90,13 @@ function genericWrapperFactory(
                 onSuccess: (value) => {
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
+                  // Preserve getter-based properties that JSON serialization drops
+                  if (typeof (value as any)?.text === "string") {
+                    responseDict.text = (value as any).text;
+                  }
+                  if (Array.isArray((value as any)?.functionCalls)) {
+                    responseDict.functionCalls = (value as any).functionCalls;
+                  }
                   setResponseAttributes(span, responseDict);
                   span.setAttribute(
                     SpanAttributes.LLM_RESPONSE_DURATION,
@@ -147,7 +155,9 @@ function streamWrapperFactory(
         return original.apply(this, args);
       }
 
-      const params = { ...((args[0] ?? {}) as Record<string, unknown>) };
+      const raw = args[0];
+      const params: Record<string, unknown> =
+        typeof raw === "object" && raw !== null ? { ...raw } : { message: raw };
 
       const self = this as Record<string, unknown>;
       if (!params.model && self.model) {

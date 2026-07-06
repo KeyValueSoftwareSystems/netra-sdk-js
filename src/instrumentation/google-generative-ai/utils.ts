@@ -9,9 +9,7 @@
 
 import { Span } from "@opentelemetry/api";
 import { SpanAttributes } from "../span-attributes";
-import * as dotenv from "dotenv";
-
-dotenv.config();
+import { isTraceContentEnabled } from "../utils";
 
 function safeStringify(value: unknown): string {
   try {
@@ -169,14 +167,6 @@ export function setRequestAttributes(
   if (isTraceContentEnabled()) {
     _setPromptAttributes(span, kwargs, args);
   }
-}
-
-function isTraceContentEnabled(): boolean {
-  const raw =
-    process.env.TRACELOOP_TRACE_CONTENT ??
-    process.env.NETRA_TRACE_CONTENT ??
-    "";
-  return ["1", "true"].includes(String(raw).toLowerCase());
 }
 
 /**
