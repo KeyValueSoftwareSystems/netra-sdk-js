@@ -418,7 +418,7 @@ function buildGoogleOutputMessages(
     if (singleEmbed?.values !== undefined) {
       const values = singleEmbed.values as number[];
       messages.push({
-        role: "embedding",
+        role: "assistant",
         content: JSON.stringify({
           dimensions: values.length,
           preview: values.slice(0, 5),
@@ -434,7 +434,7 @@ function buildGoogleOutputMessages(
       for (let i = 0; i < embeddings.length; i++) {
         const values = (embeddings[i]?.values ?? []) as number[];
         messages.push({
-          role: "embedding",
+          role: "assistant",
           content: JSON.stringify({
             index: i,
             dimensions: values.length,
