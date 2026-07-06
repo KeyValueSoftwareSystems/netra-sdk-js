@@ -31,6 +31,7 @@ export enum NetraInstruments {
 
   // LLM Providers
   OPENAI = "openai",
+  GOOGLE_GENAI = "google_genai",
   GOOGLE_GENERATIVE_AI = "google_generative_ai",
   MISTRAL = "mistral_ai",
   GROQ = "groq",
@@ -70,6 +71,7 @@ export const DEFAULT_INSTRUMENTS_FOR_ROOT: Set<NetraInstruments> = new Set([
   NetraInstruments.ANTHROPIC,
   NetraInstruments.GROQ,
   NetraInstruments.MISTRAL,
+  NetraInstruments.GOOGLE_GENAI,
   NetraInstruments.GOOGLE_GENERATIVE_AI,
   NetraInstruments.VERTEX_AI,
   NetraInstruments.TOGETHER,

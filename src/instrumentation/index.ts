@@ -28,6 +28,7 @@ import {
   SpanIOProcessor,
 } from "../processors";
 import { anthropicInstrumentor } from "./anthropic";
+import { googleGenAIInstrumentor } from "./google-genai";
 import { googleGenerativeAIInstrumentor } from "./google-generative-ai";
 import { groqInstrumentor } from "./groq";
 import { langgraphInstrumentor } from "./langgraph";
@@ -298,6 +299,7 @@ export function initInstrumentations(
     groq: false,
     mistral: false,
     langgraph: false,
+    googleGenAI: false,
     googleGenerativeAI: false,
     anthropic: false,
     openAiAgents: false,
@@ -326,6 +328,9 @@ export function initInstrumentations(
   }
   if (resolved.has(NetraInstruments.GROQ)) {
     customInstrumentModules.groq = true;
+  }
+  if (resolved.has(NetraInstruments.GOOGLE_GENAI)) {
+    customInstrumentModules.googleGenAI = true;
   }
   if (resolved.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) {
     customInstrumentModules.googleGenerativeAI = true;
@@ -368,6 +373,7 @@ export function initInstrumentations(
     if (blockAll || blockInstruments.has(NetraInstruments.GROQ)) customInstrumentModules.groq = false;
     if (blockAll || blockInstruments.has(NetraInstruments.MISTRAL)) customInstrumentModules.mistral = false;
     if (blockAll || blockInstruments.has(NetraInstruments.LANGGRAPH)) customInstrumentModules.langgraph = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.GOOGLE_GENAI)) customInstrumentModules.googleGenAI = false;
     if (blockAll || blockInstruments.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) customInstrumentModules.googleGenerativeAI = false;
     if (blockAll || blockInstruments.has(NetraInstruments.ANTHROPIC)) customInstrumentModules.anthropic = false;
     if (blockAll || blockInstruments.has(NetraInstruments.OPENAI_AGENTS)) customInstrumentModules.openAiAgents = false;
@@ -526,6 +532,18 @@ async function initCustomInstrumentationsAsync(
       Logger.debug("Custom Groq instrumentation enabled");
     } catch (e) {
       Logger.debug("Failed to initialize custom Groq instrumentation:", e);
+    }
+  }
+
+  if (customInstrumentModules.googleGenAI) {
+    try {
+      await googleGenAIInstrumentor.instrument({ tracerProvider });
+      Logger.debug("Custom Google GenAI instrumentation enabled");
+    } catch (e) {
+      Logger.debug(
+        "Failed to initialize custom Google GenAI instrumentation:",
+        e,
+      );
     }
   }
 
@@ -903,6 +921,16 @@ export async function uninstrumentAll(): Promise<void> {
     }
   } catch (e) {
     Logger.debug("Failed to uninstrument Anthropic:", e);
+  }
+
+  // Uninstrument custom Google GenAI instrumentation
+  try {
+    if (googleGenAIInstrumentor.isInstrumented()) {
+      googleGenAIInstrumentor.uninstrument();
+      Logger.debug("Custom Google GenAI instrumentation disabled");
+    }
+  } catch (e) {
+    Logger.debug("Failed to uninstrument Google GenAI:", e);
   }
 
   // Uninstrument custom Google Generative AI instrumentation

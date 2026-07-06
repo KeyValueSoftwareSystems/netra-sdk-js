@@ -43,6 +43,18 @@ export function shouldSuppressInstrumentation(): boolean {
   return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
 }
 
+import type { Context as OTelContext } from "@opentelemetry/api";
+
+/**
+ * Return a new context derived from `ctx` (default: active) with
+ * Netra instrumentation suppressed.  Wrappers that call the original
+ * method within this context prevent nested google_genai spans (e.g.
+ * Chat.sendMessage → generateContentInternal).
+ */
+export function createSuppressedContext(ctx?: OTelContext): OTelContext {
+  return (ctx ?? context.active()).setValue(SUPPRESS_INSTRUMENTATION_KEY, true);
+}
+
 // Type Utilities — re-export from canonical location to avoid duplication
 export { isPromise } from "../utils/response-handler";
 
