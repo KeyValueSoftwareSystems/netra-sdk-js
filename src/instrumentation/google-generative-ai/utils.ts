@@ -369,8 +369,13 @@ export function setResponseAttributes(
   const actualResponse =
     (response.response as Record<string, unknown>) ?? response;
 
-  // Set usage metadata
+  // Set usage metadata -- try actualResponse first, fall back to top-level
+  // response for embedding responses where usageMetadata may not survive
+  // the response.response unwrap or modelAsDict serialization
   _setUsageAttributes(span, actualResponse);
+  if (!actualResponse.usageMetadata && response.usageMetadata) {
+    _setUsageAttributes(span, response);
+  }
 
   // Set candidate attributes
   _setCandidateAttributes(span, actualResponse);

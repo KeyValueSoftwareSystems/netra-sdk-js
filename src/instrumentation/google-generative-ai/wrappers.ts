@@ -36,6 +36,12 @@ function googleGenerativeAIWrapper(
         | unknown
         | undefined;
       const history = modelInstance.history as unknown | undefined;
+      const generationConfig = modelInstance.generationConfig as
+        | Record<string, unknown>
+        | undefined;
+      const safetySettings = modelInstance.safetySettings as unknown | undefined;
+      const tools = modelInstance.tools as unknown | undefined;
+      const toolConfig = modelInstance.toolConfig as unknown | undefined;
 
       if(modelName) {
         kwargs.model = extractModelName(modelName);
@@ -45,6 +51,18 @@ function googleGenerativeAIWrapper(
       }
       if (history) {
         kwargs.history = history;
+      }
+      if (generationConfig) {
+        kwargs.generationConfig = generationConfig;
+      }
+      if (safetySettings) {
+        kwargs.safetySettings = safetySettings;
+      }
+      if (tools) {
+        kwargs.tools = tools;
+      }
+      if (toolConfig) {
+        kwargs.toolConfig = toolConfig;
       }
 
       const currentContext = context.active();
@@ -136,10 +154,20 @@ function googleGenerativeAIStreamWrapper(
         | unknown
         | undefined;
       const history = modelInstance.history as unknown | undefined;
+      const generationConfig = modelInstance.generationConfig as
+        | Record<string, unknown>
+        | undefined;
+      const safetySettings = modelInstance.safetySettings as unknown | undefined;
+      const tools = modelInstance.tools as unknown | undefined;
+      const toolConfig = modelInstance.toolConfig as unknown | undefined;
 
       if (modelName) kwargs.model = extractModelName(modelName);
       if (systemInstruction) kwargs.systemInstruction = systemInstruction;
       if (history) kwargs.history = history;
+      if (generationConfig) kwargs.generationConfig = generationConfig;
+      if (safetySettings) kwargs.safetySettings = safetySettings;
+      if (tools) kwargs.tools = tools;
+      if (toolConfig) kwargs.toolConfig = toolConfig;
 
       const currentContext = context.active();
 
@@ -281,14 +309,23 @@ function googleGenerativeAIStreamWrapper(
                           throw error;
                         }
                       },
-                      async return() {
-                        // Called if consumer stops early (break)
+                      async return(value?: any) {
                         const endTime = Date.now();
                         const duration = (endTime - startTime) / 1000;
                         span.setAttribute("llm.response.duration", duration);
                         span.setStatus({ code: SpanStatusCode.OK });
                         span.end();
-                        return { value: undefined, done: true };
+                        return iterator.return?.(value) ?? { value: undefined, done: true as const };
+                      },
+                      async throw(e?: any) {
+                        span.setStatus({
+                          code: SpanStatusCode.ERROR,
+                          message: e instanceof Error ? e.message : String(e),
+                        });
+                        span.recordException(e instanceof Error ? e : new Error(String(e)));
+                        span.end();
+                        if (iterator.throw) return iterator.throw(e);
+                        throw e;
                       },
                     };
                   },
@@ -343,6 +380,12 @@ function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, re
       const modelInstance = this as Record<string, unknown>;
       const modelName = modelInstance.model as string | undefined;
       const systemInstruction = modelInstance.systemInstruction as unknown | undefined;
+      const generationConfig = modelInstance.generationConfig as
+        | Record<string, unknown>
+        | undefined;
+      const safetySettings = modelInstance.safetySettings as unknown | undefined;
+      const tools = modelInstance.tools as unknown | undefined;
+      const toolConfig = modelInstance.toolConfig as unknown | undefined;
       const chatHistory = (args[0] as Record<string, unknown> | undefined)?.history;
 
       if (typeof chatSession.sendMessage === "function" && !chatSession.__netra_patched) {
@@ -354,6 +397,10 @@ function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, re
           if (modelName) ctx.model = modelName;
           if (systemInstruction) ctx.systemInstruction = systemInstruction;
           if (chatHistory) ctx.history = chatHistory;
+          if (generationConfig) ctx.generationConfig = generationConfig;
+          if (safetySettings) ctx.safetySettings = safetySettings;
+          if (tools) ctx.tools = tools;
+          if (toolConfig) ctx.toolConfig = toolConfig;
           return wrappedSendMessage.apply(this, sendArgs);
         };
 
@@ -366,6 +413,10 @@ function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, re
             if (modelName) ctx.model = modelName;
             if (systemInstruction) ctx.systemInstruction = systemInstruction;
             if (chatHistory) ctx.history = chatHistory;
+            if (generationConfig) ctx.generationConfig = generationConfig;
+            if (safetySettings) ctx.safetySettings = safetySettings;
+            if (tools) ctx.tools = tools;
+            if (toolConfig) ctx.toolConfig = toolConfig;
             return wrappedSendStream.apply(this, sendArgs);
           };
         }

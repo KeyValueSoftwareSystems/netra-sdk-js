@@ -67,6 +67,7 @@
     "@langchain/ollama": "^1.2.1",
     "@mistralai/mistralai": ">=1.0.0",
     "@google/generative-ai": "^0.24.1",
+    "@google/genai": ">=1.0.0",
     "@opentelemetry/instrumentation": ">=0.53.0",
     "@opentelemetry/instrumentation-express": "^0.67.0",
     "@opentelemetry/instrumentation-http": "^0.219.0",
@@ -103,6 +104,9 @@
       "optional": true
     },
     "@google/generative-ai": {
+      "optional": true
+    },
+    "@google/genai": {
       "optional": true
     },
     "@anthropic-ai/sdk": {
