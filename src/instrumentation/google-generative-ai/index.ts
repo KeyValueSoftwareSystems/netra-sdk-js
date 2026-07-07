@@ -40,15 +40,26 @@ export class NetraGoogleGenerativeAIInstrumentor extends BaseInstrumentor<any> {
       return false;
     }
 
-    shimmer.wrap(proto, "generateContent", chatWrapper(tracer));
-    shimmer.wrap(proto, "generateContentStream", chatStreamWrapper(tracer));
-    shimmer.wrap(proto, "embedContent", embeddingsWrapper(tracer));
+    let wrapped = false;
 
+    if (typeof proto.generateContent === "function") {
+      shimmer.wrap(proto, "generateContent", chatWrapper(tracer));
+      wrapped = true;
+    }
+    if (typeof proto.generateContentStream === "function") {
+      shimmer.wrap(proto, "generateContentStream", chatStreamWrapper(tracer));
+      wrapped = true;
+    }
+    if (typeof proto.embedContent === "function") {
+      shimmer.wrap(proto, "embedContent", embeddingsWrapper(tracer));
+      wrapped = true;
+    }
     if (typeof proto.startChat === "function") {
       shimmer.wrap(proto, "startChat", startChatWrapper(tracer));
+      wrapped = true;
     }
 
-    return true;
+    return wrapped;
   }
 
   protected removePatches(GenerativeModel: any): void {

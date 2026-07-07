@@ -25,6 +25,7 @@ export abstract class BaseInstrumentor<TClasses> {
   private _isInstrumented = false;
   private _instrumentPromise: Promise<this> | null = null;
   private _resolvedClasses: TClasses[] = [];
+  private _generation = 0;
 
   protected _tracer: Tracer | null = null;
   protected _tracerProvider?: TracerProvider;
@@ -105,6 +106,9 @@ export abstract class BaseInstrumentor<TClasses> {
   }
 
   uninstrument(): void {
+    // Bump generation so any in-flight _doInstrument() will bail out
+    // after its async boundary instead of applying late patches.
+    this._generation++;
     this._instrumentPromise = null;
 
     if (!this._isInstrumented) {
@@ -120,20 +124,27 @@ export abstract class BaseInstrumentor<TClasses> {
       }
     }
 
-    this.onUninstrument();
-
-    this._resolvedClasses = [];
-    this._isInstrumented = false;
+    try {
+      this.onUninstrument();
+    } catch (error) {
+      Logger.error(`${this.displayName}: onUninstrument failed: ${error}`);
+    } finally {
+      this._resolvedClasses = [];
+      this._isInstrumented = false;
+    }
   }
 
   private async _doInstrument(options: InstrumentorOptions): Promise<this> {
+    const gen = this._generation;
+
     const classSets = await this.resolveClasses();
     if (classSets.length === 0) {
       return this;
     }
 
-    // Re-check after the async boundary
-    if (this._isInstrumented) {
+    // Re-check after the async boundary: abort if already instrumented
+    // or if uninstrument() was called while we were resolving.
+    if (this._isInstrumented || this._generation !== gen) {
       return this;
     }
 
@@ -161,6 +172,11 @@ export abstract class BaseInstrumentor<TClasses> {
         }
       } catch (error) {
         Logger.error(`${this.displayName}: patch failed: ${error}`);
+        try {
+          this.removePatches(classes);
+        } catch {
+          Logger.error(`${this.displayName}: failed to remove patches: ${error}`);
+        }
       }
     }
 

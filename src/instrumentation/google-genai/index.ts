@@ -46,30 +46,37 @@ export class NetraGoogleGenAIInstrumentor extends BaseInstrumentor<GoogleGenAICl
       return false;
     }
 
+    let wrapped = false;
+
     // Public methods are instance arrow functions set in the constructor,
     // so shimmer cannot wrap them on the prototype. They delegate to
     // *Internal prototype methods which ARE on the prototype.
     if (typeof modelsProto.generateContentInternal === "function") {
       shimmer.wrap(modelsProto, "generateContentInternal", chatWrapper(tracer));
+      wrapped = true;
     }
     if (typeof modelsProto.generateContentStreamInternal === "function") {
       shimmer.wrap(modelsProto, "generateContentStreamInternal", chatStreamWrapper(tracer));
+      wrapped = true;
     }
     if (typeof modelsProto.embedContentInternal === "function") {
       shimmer.wrap(modelsProto, "embedContentInternal", embeddingsWrapper(tracer));
+      wrapped = true;
     }
 
     const chatProto = classes.Chat?.prototype;
     if (chatProto) {
       if (typeof chatProto.sendMessage === "function") {
         shimmer.wrap(chatProto, "sendMessage", chatWrapper(tracer));
+        wrapped = true;
       }
       if (typeof chatProto.sendMessageStream === "function") {
         shimmer.wrap(chatProto, "sendMessageStream", chatStreamWrapper(tracer));
+        wrapped = true;
       }
     }
 
-    return true;
+    return wrapped;
   }
 
   protected removePatches(classes: GoogleGenAIClasses): void {
