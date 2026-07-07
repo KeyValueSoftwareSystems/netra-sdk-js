@@ -1,318 +1,151 @@
+/**
+ * Shimmer wrapper factories for @google/genai instrumentation.
+ *
+ * Two wrapper types:
+ *   genericWrapper — for generateContent, embedContent, sendMessage
+ *   streamWrapper  — for generateContentStream, sendMessageStream
+ *
+ * All wrappers use the shared wrapResponse() infrastructure to handle
+ * promises and async iterables uniformly.  Netra errors are isolated
+ * from user code; user/API errors are always recorded on the span and
+ * re-thrown.
+ */
+
 import {
   Span,
   SpanKind,
   SpanStatusCode,
   Tracer,
   context,
+  trace,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
+import { wrapResponse } from "../../utils/response-handler";
 import {
-  isPromise,
+  createSuppressedContext,
   modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
-import { extractModelName, setRequestAttributes, setResponseAttributes } from "./utils";
+import { GoogleGenAIRequestType, SPAN_NAMES } from "./types";
+import {
+  buildAccumulatedResponse,
+  processStreamChunk,
+  setRequestAttributes,
+  setResponseAttributes,
+} from "./utils";
+import { SpanAttributes } from "../span-attributes";
 
-type GoogleGenAIRequestType = "chat" | "embedding";
+const LOG_PREFIX = "netra.instrumentation.google_genai";
 
-const CHAT_SPAN_NAME = "google_genai.chat";
-const EMBEDDING_SPAN_NAME = "google_genai.embedding";
+/**
+ * Build a params dict from the first argument and the `this` context
+ * (Models or Chat instance).  Shared by both wrapper factories.
+ */
+function buildParams(args: any[], self: Record<string, unknown>): Record<string, unknown> {
+  const raw = args[0];
+  const params: Record<string, unknown> =
+    typeof raw === "object" && raw !== null ? { ...raw } : { message: raw };
 
-function googleGenAIWrapper(
+  if (!params.model && self.model) {
+    params.model = self.model;
+  }
+  if (!params.config && self.config) {
+    params.config = self.config;
+  }
+
+  // Chat.getHistory(true) returns the internal history array including
+  // the pending user message.  Wrapped in try/catch in case the SDK
+  // changes the method signature or it has unexpected side-effects.
+  try {
+    const history =
+      typeof (self as any).getHistory === "function"
+        ? (self as any).getHistory(true)
+        : self.history;
+    if (Array.isArray(history)) {
+      params._history = history;
+    }
+  } catch {
+    // Fall back silently — history is best-effort for tracing
+  }
+
+  return params;
+}
+
+/**
+ * Wrapper factory for non-streaming SDK methods:
+ *   Models.generateContent, Models.embedContent, Chat.sendMessage
+ *
+ * Creates a CLIENT span, sets request/response attributes, and delegates
+ * return-type dispatch (sync / Promise / AsyncIterable) to wrapResponse().
+ */
+function genericWrapperFactory(
   tracer: Tracer,
   spanName: string,
   requestType: GoogleGenAIRequestType,
 ) {
   return function wrapper<F extends (...args: any[]) => any>(original: F): F {
-    return function (this: unknown, ...args: Parameters<F>): any {
+    return function (this: unknown, ...args: any[]) {
       if (shouldSuppressInstrumentation()) {
         return original.apply(this, args);
       }
-      let kwargs: Record<string, unknown> = {};
 
-      const modelInstance = this as Record<string, unknown>;
-      const modelName = modelInstance.model as string | undefined;
-      const systemInstruction = modelInstance.systemInstruction as
-        | unknown
-        | undefined;
-      const history = modelInstance.history as unknown | undefined;
-
-      if(modelName) {
-        kwargs.model = extractModelName(modelName);
-      }
-      if (systemInstruction) {
-        kwargs.systemInstruction = systemInstruction;
-      }
-      if (history) {
-        kwargs.history = history;
-      }
+      const self = this as Record<string, unknown>;
+      const params = buildParams(args, self);
 
       const currentContext = context.active();
+
       return tracer.startActiveSpan(
         spanName,
-        {
-          kind: SpanKind.CLIENT,
-          attributes: { "llm.request.type": requestType },
-        },
-        currentContext,
+        { kind: SpanKind.CLIENT },
         (span: Span) => {
           try {
-            setRequestAttributes(span, kwargs, requestType, args[0]);
-            const startTime = Date.now();
-            const response = original.apply(this, args);
+            setRequestAttributes(span, params, requestType);
 
-            if (isPromise(response)) {
-              return (async () => {
-                try {
-                  const value = await response;
+            const startTime = Date.now();
+            const spanContext = trace.setSpan(currentContext, span);
+            const suppressedCtx = createSuppressedContext(spanContext);
+            const response = context.with(suppressedCtx, () =>
+              original.apply(this, args),
+            );
+
+            return wrapResponse(
+              response,
+              {
+                withContext: (fn) => context.with(spanContext, fn),
+                onSuccess: (value) => {
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
+                  // Preserve getter-based properties that JSON serialization drops
+                  if (typeof (value as any)?.text === "string") {
+                    responseDict.text = (value as any).text;
+                  }
+                  if (Array.isArray((value as any)?.functionCalls)) {
+                    responseDict.functionCalls = (value as any).functionCalls;
+                  }
                   setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
                   span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
+                    SpanAttributes.LLM_RESPONSE_DURATION,
+                    (endTime - startTime) / 1000,
                   );
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  span.end();
-                  return value;
-                } catch (error) {
-                  Logger.error("netra.instrumentation.google-genai:", error);
+                },
+                onError: (error) => {
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
                     message:
                       error instanceof Error ? error.message : String(error),
                   });
                   span.recordException(error as Error);
+                },
+                finalize: (status) => {
+                  if (status === "ok") {
+                    span.setStatus({ code: SpanStatusCode.OK });
+                  }
                   span.end();
-                  throw error;
-                }
-              })();
-            } else {
-              const endTime = Date.now();
-              const responseDict = modelAsDict(response);
-              setResponseAttributes(span, responseDict);
-              span.setAttribute(
-                "llm.response.duration",
-                (endTime - startTime) / 1000,
-              );
-              span.setStatus({ code: SpanStatusCode.OK });
-              span.end();
-              return response;
-            }
+                },
+              },
+              { preserveOriginal: response },
+            );
           } catch (error) {
-            Logger.error("netra.instrumentation.google-genai:", error);
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: error instanceof Error ? error.message : String(error),
-            });
-            span.recordException(error as Error);
-            span.end();
-            throw error;
-          }
-        },
-      );
-    } as unknown as F;
-  };
-}
-
-function googleGenAIStreamWrapper(
-  tracer: Tracer,
-  spanName: string,
-  requestType: GoogleGenAIRequestType,
-) {
-  return function wrapper<F extends (...args: any[]) => any>(original: F): F {
-    return function (this: unknown, ...args: Parameters<F>): any {
-      if (shouldSuppressInstrumentation()) {
-        return original.apply(this, args);
-      }
-
-      let kwargs: Record<string, unknown> = {};
-
-      const modelInstance = this as Record<string, unknown>;
-      const modelName = modelInstance.model as string | undefined;
-      const systemInstruction = modelInstance.systemInstruction as
-        | unknown
-        | undefined;
-      const history = modelInstance.history as unknown | undefined;
-
-      if (modelName) kwargs.model = extractModelName(modelName);
-      if (systemInstruction) kwargs.systemInstruction = systemInstruction;
-      if (history) kwargs.history = history;
-
-      const currentContext = context.active();
-
-      return tracer.startActiveSpan(
-        spanName,
-        {
-          kind: SpanKind.CLIENT,
-          attributes: { "llm.request.type": requestType },
-        },
-        currentContext,
-        (span: Span) => {
-          const startTime = Date.now();
-
-          try {
-            setRequestAttributes(span, kwargs, requestType, args[0]);
-
-            const response = original.apply(this, args);
-
-            // generateContentStream() is async -> Promise<StreamResult>
-            if (!isPromise(response)) {
-              // If SDK changes to sync stream, still handle it safely
-              span.setStatus({ code: SpanStatusCode.OK });
-              span.end();
-              return response;
-            }
-
-            return (async () => {
-              try {
-                const streamResult: any = await response;
-
-                // Google GenAI stream result typically looks like:
-                // { stream: AsyncIterable<Chunk>, response?: Promise<FinalResponse> }
-                // We will wrap streamResult.stream so we can end span at completion.
-                const originalStream: AsyncIterable<any> = streamResult.stream;
-
-                if (
-                  !originalStream ||
-                  typeof originalStream[Symbol.asyncIterator] !== "function"
-                ) {
-                  // Not a real stream, treat like non-stream
-                  const endTime = Date.now();
-                  const responseDict = modelAsDict(streamResult);
-                  setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
-                  span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
-                  );
-                  span.setStatus({ code: SpanStatusCode.OK });
-                  span.end();
-                  return streamResult;
-                }
-
-                let chunkIndex = 0;
-                let finalText = "";
-                let firstTokenRecorded = false;
-
-                const wrappedStream: AsyncIterable<any> = {
-                  [Symbol.asyncIterator]() {
-                    const iterator = originalStream[Symbol.asyncIterator]();
-                    return {
-                      async next() {
-                        try {
-                          const res = await iterator.next();
-
-                          // res = { value, done }
-                          if (res?.done) {
-                            const endTime = Date.now();
-
-                            // Await the response promise if available to get full metadata (token counts, etc.)
-                            if (
-                              streamResult.response &&
-                              isPromise(streamResult.response)
-                            ) {
-                              try {
-                                const finalResponse =
-                                  await streamResult.response;
-                                const responseDict = modelAsDict(finalResponse);
-                                setResponseAttributes(span, responseDict);
-                              } catch {
-                                // If response promise fails, still set what we have from stream
-                                const responseDict = modelAsDict(streamResult);
-                                setResponseAttributes(span, responseDict);
-                              }
-                            } else {
-                              // Fallback: set attributes from streamResult
-                              const responseDict = modelAsDict(streamResult);
-                              setResponseAttributes(span, responseDict);
-                            }
-
-                            const duration = (endTime - startTime) / 1000;
-                            span.setAttribute(
-                              "llm.response.duration",
-                              duration,
-                            );
-                            span.setStatus({ code: SpanStatusCode.OK });
-                            span.end();
-                            return res;
-                          }
-
-                          const chunk = res.value;
-
-                          // Optional: store chunk-by-chunk attributes if you want
-                          // span.setAttribute(`llm.stream.chunk.${chunkIndex}`, ...)
-                          // Best-effort: accumulate chunk.text() if available
-                          try {
-                            const t =
-                              typeof chunk?.text === "function"
-                                ? chunk.text()
-                                : chunk?.text;
-                            if (typeof t === "string") {
-                              if (t && !firstTokenRecorded) {
-                                span.setAttribute(
-                                  "gen_ai.performance.time_to_first_token",
-                                  (Date.now() - startTime) / 1000,
-                                );
-                                firstTokenRecorded = true;
-                              }
-                              finalText += t;
-                            }
-                          } catch {
-                            // ignore chunk parsing issues
-                          }
-
-                          chunkIndex += 1;
-                          return res;
-                        } catch (error) {
-                          // End span on streaming error
-                          span.setStatus({
-                            code: SpanStatusCode.ERROR,
-                            message:
-                              error instanceof Error
-                                ? error.message
-                                : String(error),
-                          });
-                          span.recordException(error as Error);
-                          span.end();
-                          throw error;
-                        }
-                      },
-                      async return() {
-                        // Called if consumer stops early (break)
-                        const endTime = Date.now();
-                        const duration = (endTime - startTime) / 1000;
-                        span.setAttribute("llm.response.duration", duration);
-                        span.setStatus({ code: SpanStatusCode.OK });
-                        span.end();
-                        return { value: undefined, done: true };
-                      },
-                    };
-                  },
-                };
-
-                // Return same object but with wrapped stream
-                return {
-                  ...streamResult,
-                  stream: wrappedStream,
-                };
-              } catch (error) {
-                Logger.error("netra.instrumentation.google-genai:", error);
-                span.setStatus({
-                  code: SpanStatusCode.ERROR,
-                  message:
-                    error instanceof Error ? error.message : String(error),
-                });
-                span.recordException(error as Error);
-                span.end();
-                throw error;
-              }
-            })();
-          } catch (error) {
-            Logger.error("netra.instrumentation.google-genai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -328,65 +161,105 @@ function googleGenAIStreamWrapper(
 }
 
 /**
- * Wraps startChat to instrument the returned ChatSession's sendMessage
- * and sendMessageStream methods with proper tracing.
+ * Wrapper factory for streaming SDK methods:
+ *   Models.generateContentStream, Chat.sendMessageStream
+ *
+ * The SDK returns Promise<AsyncGenerator<GenerateContentResponse>>.
+ * wrapResponse handles the Promise -> AsyncIterable dispatch; onChunk
+ * accumulates each GenerateContentResponse chunk, and finalize writes
+ * the combined result to the span.
  */
-function googleGenAIStartChatWrapper(tracer: Tracer, spanName: string, requestType: GoogleGenAIRequestType) {
-  const sendMessageWrapperFn = googleGenAIWrapper(tracer, spanName, requestType);
-  const sendMessageStreamWrapperFn = googleGenAIStreamWrapper(tracer, spanName, requestType);
-
+function streamWrapperFactory(
+  tracer: Tracer,
+  spanName: string,
+  requestType: GoogleGenAIRequestType,
+) {
   return function wrapper<F extends (...args: any[]) => any>(original: F): F {
-    return function (this: unknown, ...args: Parameters<F>): any {
-      const chatSession = original.apply(this, args);
-      if (!chatSession) return chatSession;
-
-      const modelInstance = this as Record<string, unknown>;
-      const modelName = modelInstance.model as string | undefined;
-      const systemInstruction = modelInstance.systemInstruction as unknown | undefined;
-      const chatHistory = (args[0] as Record<string, unknown> | undefined)?.history;
-
-      if (typeof chatSession.sendMessage === "function" && !chatSession.__netra_patched) {
-        const originalSendMessage = chatSession.sendMessage.bind(chatSession);
-        const wrappedSendMessage = sendMessageWrapperFn(originalSendMessage);
-
-        chatSession.sendMessage = function (this: unknown, ...sendArgs: any[]) {
-          const ctx = this as Record<string, unknown>;
-          if (modelName) ctx.model = modelName;
-          if (systemInstruction) ctx.systemInstruction = systemInstruction;
-          if (chatHistory) ctx.history = chatHistory;
-          return wrappedSendMessage.apply(this, sendArgs);
-        };
-
-        if (typeof chatSession.sendMessageStream === "function") {
-          const originalSendStream = chatSession.sendMessageStream.bind(chatSession);
-          const wrappedSendStream = sendMessageStreamWrapperFn(originalSendStream);
-
-          chatSession.sendMessageStream = function (this: unknown, ...sendArgs: any[]) {
-            const ctx = this as Record<string, unknown>;
-            if (modelName) ctx.model = modelName;
-            if (systemInstruction) ctx.systemInstruction = systemInstruction;
-            if (chatHistory) ctx.history = chatHistory;
-            return wrappedSendStream.apply(this, sendArgs);
-          };
-        }
-
-        chatSession.__netra_patched = true;
+    return function (this: unknown, ...args: any[]) {
+      if (shouldSuppressInstrumentation()) {
+        return original.apply(this, args);
       }
 
-      return chatSession;
+      const self = this as Record<string, unknown>;
+      const params = buildParams(args, self);
+
+      const currentContext = context.active();
+
+      return tracer.startActiveSpan(
+        spanName,
+        {
+          kind: SpanKind.CLIENT,
+          attributes: { [SpanAttributes.LLM_IS_STREAMING]: true },
+        },
+        (span: Span) => {
+          const startTime = Date.now();
+          const accumulated: Record<string, any> = {};
+
+          try {
+            setRequestAttributes(span, params, requestType);
+
+            const spanContext = trace.setSpan(currentContext, span);
+            const suppressedCtx = createSuppressedContext(spanContext);
+            const response = context.with(suppressedCtx, () =>
+              original.apply(this, args),
+            );
+
+            return wrapResponse(
+              response,
+              {
+                withContext: (fn) => context.with(spanContext, fn),
+                onChunk: (chunk) => {
+                  processStreamChunk(accumulated, chunk, span, startTime);
+                },
+                onError: (error) => {
+                  span.setStatus({
+                    code: SpanStatusCode.ERROR,
+                    message:
+                      error instanceof Error ? error.message : String(error),
+                  });
+                  span.recordException(error as Error);
+                },
+                finalize: (status) => {
+                  try {
+                    const endTime = Date.now();
+                    const syntheticResponse =
+                      buildAccumulatedResponse(accumulated);
+                    setResponseAttributes(span, syntheticResponse);
+                    span.setAttribute(
+                      SpanAttributes.LLM_RESPONSE_DURATION,
+                      (endTime - startTime) / 1000,
+                    );
+                  } catch (e) {
+                    Logger.error(`${LOG_PREFIX}: stream finalize error`, e);
+                  }
+                  if (status === "ok") {
+                    span.setStatus({ code: SpanStatusCode.OK });
+                  }
+                  span.end();
+                },
+              },
+              { preserveOriginal: response },
+            );
+          } catch (error) {
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            span.recordException(error as Error);
+            span.end();
+            throw error;
+          }
+        },
+      );
     } as unknown as F;
   };
 }
 
-/* Specific wrappers for different requests */
 export const chatWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, CHAT_SPAN_NAME, "chat");
-
-export const embeddingsWrapper = (tracer: Tracer) =>
-  googleGenAIWrapper(tracer, EMBEDDING_SPAN_NAME, "embedding");
+  genericWrapperFactory(tracer, SPAN_NAMES.CHAT, "chat");
 
 export const chatStreamWrapper = (tracer: Tracer) =>
-  googleGenAIStreamWrapper(tracer, CHAT_SPAN_NAME, "chat");
+  streamWrapperFactory(tracer, SPAN_NAMES.CHAT, "chat");
 
-export const startChatWrapper = (tracer: Tracer) =>
-  googleGenAIStartChatWrapper(tracer, CHAT_SPAN_NAME, "chat");
+export const embeddingsWrapper = (tracer: Tracer) =>
+  genericWrapperFactory(tracer, SPAN_NAMES.EMBEDDING, "embedding");
