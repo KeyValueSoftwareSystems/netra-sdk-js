@@ -2,7 +2,8 @@
  * Google Generative AI (@google/generative-ai) instrumentor for Netra SDK.
  *
  * Patches GenerativeModel.prototype methods (generateContent,
- * generateContentStream, embedContent, startChat) to produce OTel spans.
+ * generateContentStream, embedContent) and ChatSession.prototype
+ * methods (sendMessage, sendMessageStream) to produce OTel spans.
  */
 
 import { Tracer } from "@opentelemetry/api";
@@ -14,27 +15,33 @@ import {
   chatStreamWrapper,
   chatWrapper,
   embeddingsWrapper,
-  startChatWrapper,
-  unpatchChatSessions,
 } from "./wrappers";
 
-export class NetraGoogleGenerativeAIInstrumentor extends BaseInstrumentor<any> {
+interface GoogleGenerativeAIClasses {
+  GenerativeModel: any;
+  ChatSession?: any;
+}
+
+export class NetraGoogleGenerativeAIInstrumentor extends BaseInstrumentor<GoogleGenerativeAIClasses> {
   protected readonly instrumentationName = "netra.instrumentation.google_generative_ai";
   protected readonly instrumentationVersion = __version__;
   protected readonly packageName = "@google/generative-ai";
   protected readonly displayName = "Google Generative AI";
 
-  protected extractClasses(mod: any): any | null {
-    const cls =
-      mod.GenerativeModel ??
-      mod.default?.GenerativeModel ??
-      mod.default ??
-      mod;
-    return cls?.prototype ? cls : null;
+  protected extractClasses(mod: any): GoogleGenerativeAIClasses | null {
+    const root = mod.default ?? mod;
+    const GenerativeModel =
+      root.GenerativeModel ?? root;
+    if (!GenerativeModel?.prototype) return null;
+    return { GenerativeModel, ChatSession: root.ChatSession };
   }
 
-  protected applyPatches(GenerativeModel: any, tracer: Tracer): boolean {
-    const proto = GenerativeModel?.prototype;
+  protected isSameClasses(a: GoogleGenerativeAIClasses, b: GoogleGenerativeAIClasses): boolean {
+    return a.GenerativeModel === b.GenerativeModel;
+  }
+
+  protected applyPatches(classes: GoogleGenerativeAIClasses, tracer: Tracer): boolean {
+    const proto = classes.GenerativeModel?.prototype;
     if (!proto) {
       Logger.error("Google Generative AI: GenerativeModel.prototype not found");
       return false;
@@ -54,30 +61,40 @@ export class NetraGoogleGenerativeAIInstrumentor extends BaseInstrumentor<any> {
       shimmer.wrap(proto, "embedContent", embeddingsWrapper(tracer));
       wrapped = true;
     }
-    if (typeof proto.startChat === "function") {
-      shimmer.wrap(proto, "startChat", startChatWrapper(tracer));
-      wrapped = true;
+
+    const chatProto = classes.ChatSession?.prototype;
+    if (chatProto) {
+      if (typeof chatProto.sendMessage === "function") {
+        shimmer.wrap(chatProto, "sendMessage", chatWrapper(tracer));
+        wrapped = true;
+      }
+      if (typeof chatProto.sendMessageStream === "function") {
+        shimmer.wrap(chatProto, "sendMessageStream", chatStreamWrapper(tracer));
+        wrapped = true;
+      }
     }
 
     return wrapped;
   }
 
-  protected removePatches(GenerativeModel: any): void {
-    const proto = GenerativeModel?.prototype;
-    if (!proto) return;
+  protected removePatches(classes: GoogleGenerativeAIClasses): void {
+    const proto = classes.GenerativeModel?.prototype;
+    if (proto) {
+      if (typeof proto.generateContent === "function")
+        shimmer.unwrap(proto, "generateContent");
+      if (typeof proto.generateContentStream === "function")
+        shimmer.unwrap(proto, "generateContentStream");
+      if (typeof proto.embedContent === "function")
+        shimmer.unwrap(proto, "embedContent");
+    }
 
-    if (typeof proto.generateContent === "function")
-      shimmer.unwrap(proto, "generateContent");
-    if (typeof proto.generateContentStream === "function")
-      shimmer.unwrap(proto, "generateContentStream");
-    if (typeof proto.embedContent === "function")
-      shimmer.unwrap(proto, "embedContent");
-    if (typeof proto.startChat === "function")
-      shimmer.unwrap(proto, "startChat");
-  }
-
-  protected onUninstrument(): void {
-    unpatchChatSessions();
+    const chatProto = classes.ChatSession?.prototype;
+    if (chatProto) {
+      if (typeof chatProto.sendMessage === "function")
+        shimmer.unwrap(chatProto, "sendMessage");
+      if (typeof chatProto.sendMessageStream === "function")
+        shimmer.unwrap(chatProto, "sendMessageStream");
+    }
   }
 
   /**
@@ -94,6 +111,6 @@ export class NetraGoogleGenerativeAIInstrumentor extends BaseInstrumentor<any> {
 export const googleGenerativeAIInstrumentor =
   new NetraGoogleGenerativeAIInstrumentor();
 
-export { chatWrapper, chatStreamWrapper, embeddingsWrapper, startChatWrapper, unpatchChatSessions } from "./wrappers";
+export { chatWrapper, chatStreamWrapper, embeddingsWrapper } from "./wrappers";
 export { setRequestAttributes, setResponseAttributes } from "./utils";
 export { __version__ } from "./version";

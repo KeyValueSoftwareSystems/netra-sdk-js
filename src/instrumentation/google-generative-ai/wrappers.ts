@@ -19,7 +19,45 @@ const LOG_PREFIX = "netra.instrumentation.google_generative_ai";
 const CHAT_SPAN_NAME = "google_generative_ai.chat";
 const EMBEDDING_SPAN_NAME = "google_generative_ai.embedding";
 
-const patchedSessions = new Set<any>();
+/**
+ * Build kwargs from the calling context (`this`).
+ *
+ * `this` is either a GenerativeModel (for generateContent/embedContent)
+ * or a ChatSession (for sendMessage/sendMessageStream).
+ *
+ * GenerativeModel stores config directly: this.generationConfig, this.tools, ...
+ * ChatSession stores config inside this.params: this.params.generationConfig, ...
+ * Both have this.model.
+ */
+function buildKwargs(instance: Record<string, unknown>): Record<string, unknown> {
+  const kwargs: Record<string, unknown> = {};
+  const params = instance.params as Record<string, unknown> | undefined;
+
+  const modelName = instance.model as string | undefined;
+  if (modelName) {
+    kwargs.model = extractModelName(modelName);
+  }
+
+  const systemInstruction = instance.systemInstruction ?? params?.systemInstruction;
+  if (systemInstruction) kwargs.systemInstruction = systemInstruction;
+
+  const history = (instance as any)._history ?? instance.history;
+  if (history) kwargs.history = history;
+
+  const generationConfig = instance.generationConfig ?? params?.generationConfig;
+  if (generationConfig) kwargs.generationConfig = generationConfig;
+
+  const safetySettings = instance.safetySettings ?? params?.safetySettings;
+  if (safetySettings) kwargs.safetySettings = safetySettings;
+
+  const tools = instance.tools ?? params?.tools;
+  if (tools) kwargs.tools = tools;
+
+  const toolConfig = instance.toolConfig ?? params?.toolConfig;
+  if (toolConfig) kwargs.toolConfig = toolConfig;
+
+  return kwargs;
+}
 
 function googleGenerativeAIWrapper(
   tracer: Tracer,
@@ -31,42 +69,9 @@ function googleGenerativeAIWrapper(
       if (shouldSuppressInstrumentation()) {
         return original.apply(this, args);
       }
-      let kwargs: Record<string, unknown> = {};
 
       const modelInstance = this as Record<string, unknown>;
-      const modelName = modelInstance.model as string | undefined;
-      const systemInstruction = modelInstance.systemInstruction as
-        | unknown
-        | undefined;
-      const history = modelInstance.history as unknown | undefined;
-      const generationConfig = modelInstance.generationConfig as
-        | Record<string, unknown>
-        | undefined;
-      const safetySettings = modelInstance.safetySettings as unknown | undefined;
-      const tools = modelInstance.tools as unknown | undefined;
-      const toolConfig = modelInstance.toolConfig as unknown | undefined;
-
-      if(modelName) {
-        kwargs.model = extractModelName(modelName);
-      }
-      if (systemInstruction) {
-        kwargs.systemInstruction = systemInstruction;
-      }
-      if (history) {
-        kwargs.history = history;
-      }
-      if (generationConfig) {
-        kwargs.generationConfig = generationConfig;
-      }
-      if (safetySettings) {
-        kwargs.safetySettings = safetySettings;
-      }
-      if (tools) {
-        kwargs.tools = tools;
-      }
-      if (toolConfig) {
-        kwargs.toolConfig = toolConfig;
-      }
+      const kwargs = buildKwargs(modelInstance);
 
       const currentContext = context.active();
       return tracer.startActiveSpan(
@@ -161,28 +166,8 @@ function googleGenerativeAIStreamWrapper(
         return original.apply(this, args);
       }
 
-      let kwargs: Record<string, unknown> = {};
-
       const modelInstance = this as Record<string, unknown>;
-      const modelName = modelInstance.model as string | undefined;
-      const systemInstruction = modelInstance.systemInstruction as
-        | unknown
-        | undefined;
-      const history = modelInstance.history as unknown | undefined;
-      const generationConfig = modelInstance.generationConfig as
-        | Record<string, unknown>
-        | undefined;
-      const safetySettings = modelInstance.safetySettings as unknown | undefined;
-      const tools = modelInstance.tools as unknown | undefined;
-      const toolConfig = modelInstance.toolConfig as unknown | undefined;
-
-      if (modelName) kwargs.model = extractModelName(modelName);
-      if (systemInstruction) kwargs.systemInstruction = systemInstruction;
-      if (history) kwargs.history = history;
-      if (generationConfig) kwargs.generationConfig = generationConfig;
-      if (safetySettings) kwargs.safetySettings = safetySettings;
-      if (tools) kwargs.tools = tools;
-      if (toolConfig) kwargs.toolConfig = toolConfig;
+      const kwargs = buildKwargs(modelInstance);
 
       const currentContext = context.active();
 
@@ -205,7 +190,6 @@ function googleGenerativeAIStreamWrapper(
 
             const response = original.apply(this, args);
 
-            // generateContentStream() is async -> Promise<StreamResult>
             if (!isPromise(response)) {
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
@@ -371,75 +355,6 @@ function googleGenerativeAIStreamWrapper(
   };
 }
 
-/**
- * Wraps startChat to instrument the returned ChatSession's sendMessage
- * and sendMessageStream methods with proper tracing.
- */
-function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, requestType: GoogleGenerativeAIRequestType) {
-  const sendMessageWrapperFn = googleGenerativeAIWrapper(tracer, spanName, requestType);
-  const sendMessageStreamWrapperFn = googleGenerativeAIStreamWrapper(tracer, spanName, requestType);
-
-  return function wrapper<F extends (...args: any[]) => any>(original: F): F {
-    return function (this: unknown, ...args: Parameters<F>): any {
-      const chatSession = original.apply(this, args);
-      if (!chatSession) return chatSession;
-
-      const modelInstance = this as Record<string, unknown>;
-      const modelName = modelInstance.model as string | undefined;
-      const systemInstruction = modelInstance.systemInstruction as unknown | undefined;
-      const generationConfig = modelInstance.generationConfig as
-        | Record<string, unknown>
-        | undefined;
-      const safetySettings = modelInstance.safetySettings as unknown | undefined;
-      const tools = modelInstance.tools as unknown | undefined;
-      const toolConfig = modelInstance.toolConfig as unknown | undefined;
-      const chatHistory = (args[0] as Record<string, unknown> | undefined)?.history;
-
-      if (typeof chatSession.sendMessage === "function" && !chatSession.__netra_patched) {
-        const originalSendMessage = chatSession.sendMessage.bind(chatSession);
-        const wrappedSendMessage = sendMessageWrapperFn(originalSendMessage);
-
-        chatSession.__netra_orig_sendMessage = originalSendMessage;
-        chatSession.sendMessage = function (this: unknown, ...sendArgs: any[]) {
-          const ctx = this as Record<string, unknown>;
-          if (modelName) ctx.model = modelName;
-          if (systemInstruction) ctx.systemInstruction = systemInstruction;
-          if (chatHistory) ctx.history = chatHistory;
-          if (generationConfig) ctx.generationConfig = generationConfig;
-          if (safetySettings) ctx.safetySettings = safetySettings;
-          if (tools) ctx.tools = tools;
-          if (toolConfig) ctx.toolConfig = toolConfig;
-          return wrappedSendMessage.apply(this, sendArgs);
-        };
-
-        if (typeof chatSession.sendMessageStream === "function") {
-          const originalSendStream = chatSession.sendMessageStream.bind(chatSession);
-          const wrappedSendStream = sendMessageStreamWrapperFn(originalSendStream);
-
-          chatSession.__netra_orig_sendMessageStream = originalSendStream;
-          chatSession.sendMessageStream = function (this: unknown, ...sendArgs: any[]) {
-            const ctx = this as Record<string, unknown>;
-            if (modelName) ctx.model = modelName;
-            if (systemInstruction) ctx.systemInstruction = systemInstruction;
-            if (chatHistory) ctx.history = chatHistory;
-            if (generationConfig) ctx.generationConfig = generationConfig;
-            if (safetySettings) ctx.safetySettings = safetySettings;
-            if (tools) ctx.tools = tools;
-            if (toolConfig) ctx.toolConfig = toolConfig;
-            return wrappedSendStream.apply(this, sendArgs);
-          };
-        }
-
-        chatSession.__netra_patched = true;
-        patchedSessions.add(chatSession);
-      }
-
-      return chatSession;
-    } as unknown as F;
-  };
-}
-
-/* Specific wrappers for different requests */
 export const chatWrapper = (tracer: Tracer) =>
   googleGenerativeAIWrapper(tracer, CHAT_SPAN_NAME, "chat");
 
@@ -448,22 +363,3 @@ export const embeddingsWrapper = (tracer: Tracer) =>
 
 export const chatStreamWrapper = (tracer: Tracer) =>
   googleGenerativeAIStreamWrapper(tracer, CHAT_SPAN_NAME, "chat");
-
-export const startChatWrapper = (tracer: Tracer) =>
-  googleGenerativeAIStartChatWrapper(tracer, CHAT_SPAN_NAME, "chat");
-
-export function unpatchChatSessions(): void {
-  for (const session of patchedSessions) {
-    if (!session || !session.__netra_patched) continue;
-    if (session.__netra_orig_sendMessage) {
-      session.sendMessage = session.__netra_orig_sendMessage;
-      delete session.__netra_orig_sendMessage;
-    }
-    if (session.__netra_orig_sendMessageStream) {
-      session.sendMessageStream = session.__netra_orig_sendMessageStream;
-      delete session.__netra_orig_sendMessageStream;
-    }
-    delete session.__netra_patched;
-  }
-  patchedSessions.clear();
-}
