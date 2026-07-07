@@ -63,8 +63,15 @@ function genericWrapperFactory(
       if (!params.model && self.model) {
         params.model = self.model;
       }
-      if (Array.isArray(self.history)) {
-        params._history = self.history;
+      if (!params.config && self.config) {
+        params.config = self.config;
+      }
+      const history =
+        typeof (self as any).getHistory === "function"
+          ? (self as any).getHistory(true)
+          : self.history;
+      if (Array.isArray(history)) {
+        params._history = history;
       }
 
       const currentContext = context.active();
@@ -163,8 +170,15 @@ function streamWrapperFactory(
       if (!params.model && self.model) {
         params.model = self.model;
       }
-      if (Array.isArray(self.history)) {
-        params._history = self.history;
+      if (!params.config && self.config) {
+        params.config = self.config;
+      }
+      const history =
+        typeof (self as any).getHistory === "function"
+          ? (self as any).getHistory(true)
+          : self.history;
+      if (Array.isArray(history)) {
+        params._history = history;
       }
 
       const currentContext = context.active();

@@ -332,14 +332,22 @@ function setFinishReason(span: Span, response: Record<string, unknown>): void {
 }
 
 function setEmbeddingMeta(span: Span, response: Record<string, unknown>): void {
-  // Single embedding response: { embedding: { values: [...] } }
+  // Single embedding response
   const singleEmbed = response.embedding as Record<string, unknown> | undefined;
   if (singleEmbed?.values !== undefined) {
     const values = singleEmbed.values as number[];
     span.setAttribute("gen_ai.response.embedding_dimensions", values.length);
+
+    const stats = singleEmbed.statistics as Record<string, unknown> | undefined;
+    if (stats?.tokenCount !== undefined) {
+      const tokenCount = Number(stats.tokenCount);
+      span.setAttribute(SpanAttributes.LLM_USAGE_PROMPT_TOKENS, tokenCount);
+      span.setAttribute(SpanAttributes.LLM_USAGE_TOTAL_TOKENS, tokenCount);
+    }
+    return;
   }
 
-  // Batch embedding response: { embeddings: [ { values: [...] }, ... ] }
+  // Batch embedding response
   const embeddings = response.embeddings as
     | Array<Record<string, unknown>>
     | undefined;
@@ -351,6 +359,21 @@ function setEmbeddingMeta(span: Span, response: Record<string, unknown>): void {
   const values = first?.values as number[] | undefined;
   if (Array.isArray(values)) {
     span.setAttribute("gen_ai.response.embedding_dimensions", values.length);
+  }
+
+  // Aggregate token counts across all embeddings in the batch
+  let totalTokens = 0;
+  let hasTokenCount = false;
+  for (const emb of embeddings) {
+    const stats = emb.statistics as Record<string, unknown> | undefined;
+    if (stats?.tokenCount !== undefined) {
+      totalTokens += Number(stats.tokenCount);
+      hasTokenCount = true;
+    }
+  }
+  if (hasTokenCount) {
+    span.setAttribute(SpanAttributes.LLM_USAGE_PROMPT_TOKENS, totalTokens);
+    span.setAttribute(SpanAttributes.LLM_USAGE_TOTAL_TOKENS, totalTokens);
   }
 }
 
@@ -377,7 +400,10 @@ function buildGoogleOutputMessages(
     for (const fc of functionCalls) {
       messages.push({
         role: "tool",
-        content: JSON.stringify({ name: fc.name, arguments: fc.args }),
+        content: safeStringify(
+          { name: fc.name, arguments: fc.args },
+          Config.CONVERSATION_MAX_LEN,
+        ),
       });
     }
   }
@@ -401,7 +427,10 @@ function buildGoogleOutputMessages(
             const fc = part.functionCall as Record<string, unknown>;
             messages.push({
               role: "tool",
-              content: JSON.stringify({ name: fc.name, arguments: fc.args }),
+              content: safeStringify(
+                { name: fc.name, arguments: fc.args },
+                Config.CONVERSATION_MAX_LEN,
+              ),
             });
           }
         }
@@ -419,7 +448,7 @@ function buildGoogleOutputMessages(
       const values = singleEmbed.values as number[];
       messages.push({
         role: "assistant",
-        content: JSON.stringify({
+        content: safeStringify({
           dimensions: values.length,
           preview: values.slice(0, 5),
         }),
@@ -435,7 +464,7 @@ function buildGoogleOutputMessages(
         const values = (embeddings[i]?.values ?? []) as number[];
         messages.push({
           role: "assistant",
-          content: JSON.stringify({
+          content: safeStringify({
             index: i,
             dimensions: values.length,
             preview: values.slice(0, 5),

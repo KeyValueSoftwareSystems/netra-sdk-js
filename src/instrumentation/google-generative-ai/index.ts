@@ -1,258 +1,88 @@
 /**
- * Custom Google Generative AI instrumentor for Netra SDK
+ * Google Generative AI (@google/generative-ai) instrumentor for Netra SDK.
+ *
+ * Patches GenerativeModel.prototype methods (generateContent,
+ * generateContentStream, embedContent, startChat) to produce OTel spans.
  */
-import { createRequire } from "module";
-import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
-import { Logger } from "../../logger";
-import { __version__ } from "./version";
-import { chatStreamWrapper, chatWrapper, embeddingsWrapper, startChatWrapper } from "./wrappers";
 
+import { Tracer } from "@opentelemetry/api";
 import shimmer from "shimmer";
+import { Logger } from "../../logger";
+import { BaseInstrumentor } from "../base-instrumentor";
+import { __version__ } from "./version";
+import {
+  chatStreamWrapper,
+  chatWrapper,
+  embeddingsWrapper,
+  startChatWrapper,
+  unpatchChatSessions,
+} from "./wrappers";
 
-const INSTRUMENTATION_NAME = "netra.instrumentation.google_generative_ai";
-const INSTRUMENTS = ["@google/generative-ai <= 0.24.1"];
+export class NetraGoogleGenerativeAIInstrumentor extends BaseInstrumentor<any> {
+  protected readonly instrumentationName = "netra.instrumentation.google_generative_ai";
+  protected readonly instrumentationVersion = __version__;
+  protected readonly packageName = "@google/generative-ai";
+  protected readonly displayName = "Google Generative AI";
 
-// Track instrumentation state
-let isInstrumented = false;
-let generativeModelClasses: any[] = [];
-
-export interface InstrumentorOptions {
-  tracerProvider?: TracerProvider;
-}
-
-/**
- * Resolve the Google Generative AI module from the application's context.
- * Tries ESM dynamic import first, then falls back to CJS require so the
- * instrumentor works in both ESM and CommonJS projects.
- */
-async function resolveGoogleGenerativeAIAsync(): Promise<any[]> {
-  if (generativeModelClasses.length > 0) return generativeModelClasses;
-
-  try {
-    // @ts-ignore - @google/generative-ai is an optional peer dependency
-    const googleGenerativeAIModule = await import("@google/generative-ai");
-    const esmClass =
-      googleGenerativeAIModule.GenerativeModel ||
-      googleGenerativeAIModule.default?.GenerativeModel ||
-      googleGenerativeAIModule.default ||
-      googleGenerativeAIModule;
-    generativeModelClasses.push(esmClass);
-  } catch {
-    Logger.warn("Failed to resolve Google Generative AI ESM module");
-  }
-
-  try {
-    const req = createRequire(import.meta.url);
-    const mod = req("@google/generative-ai");
-    const cjsClass =
-      mod.GenerativeModel ||
-      mod.default?.GenerativeModel ||
-      mod.default ||
+  protected extractClasses(mod: any): any | null {
+    const cls =
+      mod.GenerativeModel ??
+      mod.default?.GenerativeModel ??
+      mod.default ??
       mod;
-    if (!generativeModelClasses.includes(cjsClass)) {
-      generativeModelClasses.push(cjsClass);
+    return cls?.prototype ? cls : null;
+  }
+
+  protected applyPatches(GenerativeModel: any, tracer: Tracer): boolean {
+    const proto = GenerativeModel?.prototype;
+    if (!proto) {
+      Logger.error("Google Generative AI: GenerativeModel.prototype not found");
+      return false;
     }
-  } catch {
-    Logger.warn("Failed to resolve Google Generative AI CJS module");
+
+    shimmer.wrap(proto, "generateContent", chatWrapper(tracer));
+    shimmer.wrap(proto, "generateContentStream", chatStreamWrapper(tracer));
+    shimmer.wrap(proto, "embedContent", embeddingsWrapper(tracer));
+
+    if (typeof proto.startChat === "function") {
+      shimmer.wrap(proto, "startChat", startChatWrapper(tracer));
+    }
+
+    return true;
   }
 
-  return generativeModelClasses;
-}
+  protected removePatches(GenerativeModel: any): void {
+    const proto = GenerativeModel?.prototype;
+    if (!proto) return;
 
-/**
- * Synchronous version that returns cached classes.
- * Must call resolveGoogleGenerativeAIAsync() first to populate cache.
- */
-function resolveGoogleGenerativeAI(): any[] {
-  return generativeModelClasses;
-}
-
-/**
- * Custom Google Generative AI instrumentor for Netra SDK
- */
-export class NetraGoogleGenerativeAIInstrumentor {
-  private tracer: Tracer | null = null;
-  private tracerProvider?: TracerProvider;
-
-  constructor() {
-    // Tracer is initialized lazily during instrument()
+    if (typeof proto.generateContent === "function")
+      shimmer.unwrap(proto, "generateContent");
+    if (typeof proto.generateContentStream === "function")
+      shimmer.unwrap(proto, "generateContentStream");
+    if (typeof proto.embedContent === "function")
+      shimmer.unwrap(proto, "embedContent");
+    if (typeof proto.startChat === "function")
+      shimmer.unwrap(proto, "startChat");
   }
 
-  /**
-   * Returns the list of instrumentation dependencies
-   */
-  instrumentationDependencies(): string[] {
-    return [...INSTRUMENTS];
+  protected onUninstrument(): void {
+    unpatchChatSessions();
   }
 
   /**
-   * Instrument Google Generative AI client methods (async version)
-   * Tries both ESM and CJS resolution to cover dual-package setups.
+   * @deprecated Use instrument() instead. Kept for backward compatibility
+   * with orchestrator call sites that haven't been updated yet.
    */
   async instrumentAsync(
-    options: InstrumentorOptions = {},
-  ): Promise<NetraGoogleGenerativeAIInstrumentor> {
-    if (isInstrumented) {
-      Logger.warn("Google Generative AI is already instrumented");
-      return this;
-    }
-
-    const classes = await resolveGoogleGenerativeAIAsync();
-    if (classes.length === 0) {
-      return this;
-    }
-
-    try {
-      this.tracerProvider = options.tracerProvider;
-      this.tracer = this.tracerProvider
-        ? this.tracerProvider.getTracer(INSTRUMENTATION_NAME, __version__)
-        : trace.getTracer(INSTRUMENTATION_NAME, __version__);
-    } catch (error) {
-      Logger.error(`Failed to initialize tracer: ${error}`);
-      return this;
-    }
-
-    classes.forEach((model) => this._instrumentGenerativeModel(model));
-
-    isInstrumented = true;
-    return this;
-  }
-
-  /**
-   * Instrument Google Generative AI client methods (sync version)
-   */
-  instrument(
-    options: InstrumentorOptions = {},
-  ): NetraGoogleGenerativeAIInstrumentor {
-    if (isInstrumented) {
-      Logger.warn("Google Generative AI is already instrumented");
-      return this;
-    }
-
-    const classes = resolveGoogleGenerativeAI();
-    if (classes.length === 0) {
-      this.instrumentAsync(options).catch((e) => {
-        Logger.error("Failed to instrument Google Generative AI:", e);
-      });
-      return this;
-    }
-
-    try {
-      this.tracerProvider = options.tracerProvider;
-      this.tracer = this.tracerProvider
-        ? this.tracerProvider.getTracer(INSTRUMENTATION_NAME, __version__)
-        : trace.getTracer(INSTRUMENTATION_NAME, __version__);
-    } catch (error) {
-      Logger.error(`Failed to initialize tracer: ${error}`);
-      return this;
-    }
-
-    classes.forEach((model) => this._instrumentGenerativeModel(model));
-
-    isInstrumented = true;
-    return this;
-  }
-
-  /**
-   * Uninstrument Google Generative AI client methods
-   */
-  uninstrument(): void {
-    if (!isInstrumented) {
-      Logger.warn("Google Generative AI is not instrumented");
-      return;
-    }
-
-    const classes = resolveGoogleGenerativeAI();
-    classes.forEach((model) => this._uninstrumentGenerativeModel(model));
-
-    generativeModelClasses = [];
-    isInstrumented = false;
-  }
-
-  /**
-   * Check if Google Generative AI is currently instrumented
-   */
-  isInstrumented(): boolean {
-    return isInstrumented;
-  }
-
-  private _instrumentGenerativeModel(GenerativeModel: any): void {
-    if (!this.tracer) return;
-
-    try {
-      if (!GenerativeModel?.prototype) {
-        Logger.error(
-          "Failed to find Google Generative AI GenerativeModel to instrument",
-        );
-        return;
-      }
-
-      const tracer = this.tracer;
-
-      shimmer.wrap(
-        GenerativeModel.prototype,
-        "generateContent",
-        chatWrapper(tracer),
-      );
-
-      shimmer.wrap(
-        GenerativeModel.prototype,
-        "generateContentStream",
-        chatStreamWrapper(tracer),
-      );
-
-      shimmer.wrap(
-        GenerativeModel.prototype,
-        "embedContent",
-        embeddingsWrapper(tracer),
-      );
-
-      if (typeof GenerativeModel.prototype.startChat === "function") {
-        shimmer.wrap(
-          GenerativeModel.prototype,
-          "startChat",
-          startChatWrapper(tracer),
-        );
-      }
-    } catch (error) {
-      Logger.debug(
-        `Google Generative AI instrumentation: failed to instrument: ${error}`,
-      );
-    }
-  }
-
-  private _uninstrumentGenerativeModel(GenerativeModel: any): void {
-    try {
-      if (!GenerativeModel?.prototype) return;
-
-      if (typeof GenerativeModel.prototype.generateContent === "function") {
-        shimmer.unwrap(GenerativeModel.prototype, "generateContent");
-      }
-      if (
-        typeof GenerativeModel.prototype.generateContentStream === "function"
-      ) {
-        shimmer.unwrap(GenerativeModel.prototype, "generateContentStream");
-      }
-      if (typeof GenerativeModel.prototype.embedContent === "function") {
-        shimmer.unwrap(GenerativeModel.prototype, "embedContent");
-      }
-      if (typeof GenerativeModel.prototype.startChat === "function") {
-        shimmer.unwrap(GenerativeModel.prototype, "startChat");
-      }
-    } catch (error) {
-      Logger.debug(`Failed to uninstrument Google Generative AI: ${error}`);
-    }
+    options: { tracerProvider?: any } = {},
+  ): Promise<this> {
+    return this.instrument(options);
   }
 }
 
-// Export singleton instance for convenience
 export const googleGenerativeAIInstrumentor =
   new NetraGoogleGenerativeAIInstrumentor();
 
-// Re-export wrappers for advanced usage
-export { chatWrapper, chatStreamWrapper, embeddingsWrapper, startChatWrapper } from "./wrappers";
-
-// Re-export utilities
+export { chatWrapper, chatStreamWrapper, embeddingsWrapper, startChatWrapper, unpatchChatSessions } from "./wrappers";
 export { setRequestAttributes, setResponseAttributes } from "./utils";
-
 export { __version__ } from "./version";

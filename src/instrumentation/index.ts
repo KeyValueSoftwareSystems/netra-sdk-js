@@ -549,7 +549,7 @@ async function initCustomInstrumentationsAsync(
 
   if (customInstrumentModules.googleGenerativeAI) {
     try {
-      await googleGenerativeAIInstrumentor.instrumentAsync({ tracerProvider });
+      await googleGenerativeAIInstrumentor.instrument({ tracerProvider });
       Logger.debug("Custom Google Generative AI instrumentation enabled");
     } catch (e) {
       Logger.debug("Failed to initialize custom Google Generative AI instrumentation:", e);

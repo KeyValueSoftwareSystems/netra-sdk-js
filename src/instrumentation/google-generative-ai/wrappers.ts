@@ -18,6 +18,8 @@ type GoogleGenerativeAIRequestType = "chat" | "embedding";
 const CHAT_SPAN_NAME = "google_generative_ai.chat";
 const EMBEDDING_SPAN_NAME = "google_generative_ai.embedding";
 
+const patchedSessions = new Set<any>();
+
 function googleGenerativeAIWrapper(
   tracer: Tracer,
   spanName: string,
@@ -75,7 +77,11 @@ function googleGenerativeAIWrapper(
         currentContext,
         (span: Span) => {
           try {
-            setRequestAttributes(span, kwargs, requestType, args[0]);
+            try {
+              setRequestAttributes(span, kwargs, requestType, args[0]);
+            } catch (e) {
+              Logger.error("netra.instrumentation.google-generative-ai:", e);
+            }
             const startTime = Date.now();
             const response = original.apply(this, args);
 
@@ -83,20 +89,25 @@ function googleGenerativeAIWrapper(
               return (async () => {
                 try {
                   const value = await response;
-                  const endTime = Date.now();
-                  const responseDict = modelAsDict(value);
-                  setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
-                  span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
-                  );
+                  try {
+                    const endTime = Date.now();
+                    const responseDict = modelAsDict(value);
+                    setResponseAttributes(span, responseDict);
+                    const duration = (endTime - startTime) / 1000;
+                    span.setAttribute("llm.response.duration", duration);
+                    if (requestType !== "embedding") {
+                      span.setAttribute(
+                        "gen_ai.performance.time_to_first_token",
+                        duration,
+                      );
+                    }
+                  } catch (e) {
+                    Logger.error("netra.instrumentation.google-generative-ai:", e);
+                  }
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
                 } catch (error) {
-                  Logger.error("netra.instrumentation.google-generative-ai:", error);
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
                     message:
@@ -108,19 +119,22 @@ function googleGenerativeAIWrapper(
                 }
               })();
             } else {
-              const endTime = Date.now();
-              const responseDict = modelAsDict(response);
-              setResponseAttributes(span, responseDict);
-              span.setAttribute(
-                "llm.response.duration",
-                (endTime - startTime) / 1000,
-              );
+              try {
+                const endTime = Date.now();
+                const responseDict = modelAsDict(response);
+                setResponseAttributes(span, responseDict);
+                span.setAttribute(
+                  "llm.response.duration",
+                  (endTime - startTime) / 1000,
+                );
+              } catch (e) {
+                Logger.error("netra.instrumentation.google-generative-ai:", e);
+              }
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
             }
           } catch (error) {
-            Logger.error("netra.instrumentation.google-generative-ai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -182,13 +196,16 @@ function googleGenerativeAIStreamWrapper(
           const startTime = Date.now();
 
           try {
-            setRequestAttributes(span, kwargs, requestType, args[0]);
+            try {
+              setRequestAttributes(span, kwargs, requestType, args[0]);
+            } catch (e) {
+              Logger.error("netra.instrumentation.google-generative-ai:", e);
+            }
 
             const response = original.apply(this, args);
 
             // generateContentStream() is async -> Promise<StreamResult>
             if (!isPromise(response)) {
-              // If SDK changes to sync stream, still handle it safely
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -198,32 +215,30 @@ function googleGenerativeAIStreamWrapper(
               try {
                 const streamResult: any = await response;
 
-                // Google Generative AI stream result typically looks like:
-                // { stream: AsyncIterable<Chunk>, response?: Promise<FinalResponse> }
-                // We will wrap streamResult.stream so we can end span at completion.
                 const originalStream: AsyncIterable<any> = streamResult.stream;
 
                 if (
                   !originalStream ||
                   typeof originalStream[Symbol.asyncIterator] !== "function"
                 ) {
-                  // Not a real stream, treat like non-stream
-                  const endTime = Date.now();
-                  const responseDict = modelAsDict(streamResult);
-                  setResponseAttributes(span, responseDict);
-                  const duration = (endTime - startTime) / 1000;
-                  span.setAttribute("llm.response.duration", duration);
-                  span.setAttribute(
-                    "gen_ai.performance.time_to_first_token",
-                    duration,
-                  );
+                  try {
+                    const endTime = Date.now();
+                    const responseDict = modelAsDict(streamResult);
+                    setResponseAttributes(span, responseDict);
+                    const duration = (endTime - startTime) / 1000;
+                    span.setAttribute("llm.response.duration", duration);
+                    span.setAttribute(
+                      "gen_ai.performance.time_to_first_token",
+                      duration,
+                    );
+                  } catch (e) {
+                    Logger.error("netra.instrumentation.google-generative-ai:", e);
+                  }
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return streamResult;
                 }
 
-                let chunkIndex = 0;
-                let finalText = "";
                 let firstTokenRecorded = false;
 
                 const wrappedStream: AsyncIterable<any> = {
@@ -234,36 +249,36 @@ function googleGenerativeAIStreamWrapper(
                         try {
                           const res = await iterator.next();
 
-                          // res = { value, done }
                           if (res?.done) {
-                            const endTime = Date.now();
+                            try {
+                              const endTime = Date.now();
 
-                            // Await the response promise if available to get full metadata (token counts, etc.)
-                            if (
-                              streamResult.response &&
-                              isPromise(streamResult.response)
-                            ) {
-                              try {
-                                const finalResponse =
-                                  await streamResult.response;
-                                const responseDict = modelAsDict(finalResponse);
-                                setResponseAttributes(span, responseDict);
-                              } catch {
-                                // If response promise fails, still set what we have from stream
+                              if (
+                                streamResult.response &&
+                                isPromise(streamResult.response)
+                              ) {
+                                try {
+                                  const finalResponse =
+                                    await streamResult.response;
+                                  const responseDict = modelAsDict(finalResponse);
+                                  setResponseAttributes(span, responseDict);
+                                } catch {
+                                  const responseDict = modelAsDict(streamResult);
+                                  setResponseAttributes(span, responseDict);
+                                }
+                              } else {
                                 const responseDict = modelAsDict(streamResult);
                                 setResponseAttributes(span, responseDict);
                               }
-                            } else {
-                              // Fallback: set attributes from streamResult
-                              const responseDict = modelAsDict(streamResult);
-                              setResponseAttributes(span, responseDict);
-                            }
 
-                            const duration = (endTime - startTime) / 1000;
-                            span.setAttribute(
-                              "llm.response.duration",
-                              duration,
-                            );
+                              const duration = (endTime - startTime) / 1000;
+                              span.setAttribute(
+                                "llm.response.duration",
+                                duration,
+                              );
+                            } catch (e) {
+                              Logger.error("netra.instrumentation.google-generative-ai:", e);
+                            }
                             span.setStatus({ code: SpanStatusCode.OK });
                             span.end();
                             return res;
@@ -271,9 +286,6 @@ function googleGenerativeAIStreamWrapper(
 
                           const chunk = res.value;
 
-                          // Optional: store chunk-by-chunk attributes if you want
-                          // span.setAttribute(`llm.stream.chunk.${chunkIndex}`, ...)
-                          // Best-effort: accumulate chunk.text() if available
                           try {
                             const t =
                               typeof chunk?.text === "function"
@@ -287,16 +299,13 @@ function googleGenerativeAIStreamWrapper(
                                 );
                                 firstTokenRecorded = true;
                               }
-                              finalText += t;
                             }
                           } catch {
                             // ignore chunk parsing issues
                           }
 
-                          chunkIndex += 1;
                           return res;
                         } catch (error) {
-                          // End span on streaming error
                           span.setStatus({
                             code: SpanStatusCode.ERROR,
                             message:
@@ -331,13 +340,11 @@ function googleGenerativeAIStreamWrapper(
                   },
                 };
 
-                // Return same object but with wrapped stream
                 return {
                   ...streamResult,
                   stream: wrappedStream,
                 };
               } catch (error) {
-                Logger.error("netra.instrumentation.google-generative-ai:", error);
                 span.setStatus({
                   code: SpanStatusCode.ERROR,
                   message:
@@ -349,7 +356,6 @@ function googleGenerativeAIStreamWrapper(
               }
             })();
           } catch (error) {
-            Logger.error("netra.instrumentation.google-generative-ai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -392,6 +398,7 @@ function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, re
         const originalSendMessage = chatSession.sendMessage.bind(chatSession);
         const wrappedSendMessage = sendMessageWrapperFn(originalSendMessage);
 
+        chatSession.__netra_orig_sendMessage = originalSendMessage;
         chatSession.sendMessage = function (this: unknown, ...sendArgs: any[]) {
           const ctx = this as Record<string, unknown>;
           if (modelName) ctx.model = modelName;
@@ -408,6 +415,7 @@ function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, re
           const originalSendStream = chatSession.sendMessageStream.bind(chatSession);
           const wrappedSendStream = sendMessageStreamWrapperFn(originalSendStream);
 
+          chatSession.__netra_orig_sendMessageStream = originalSendStream;
           chatSession.sendMessageStream = function (this: unknown, ...sendArgs: any[]) {
             const ctx = this as Record<string, unknown>;
             if (modelName) ctx.model = modelName;
@@ -422,6 +430,7 @@ function googleGenerativeAIStartChatWrapper(tracer: Tracer, spanName: string, re
         }
 
         chatSession.__netra_patched = true;
+        patchedSessions.add(chatSession);
       }
 
       return chatSession;
@@ -441,3 +450,19 @@ export const chatStreamWrapper = (tracer: Tracer) =>
 
 export const startChatWrapper = (tracer: Tracer) =>
   googleGenerativeAIStartChatWrapper(tracer, CHAT_SPAN_NAME, "chat");
+
+export function unpatchChatSessions(): void {
+  for (const session of patchedSessions) {
+    if (!session || !session.__netra_patched) continue;
+    if (session.__netra_orig_sendMessage) {
+      session.sendMessage = session.__netra_orig_sendMessage;
+      delete session.__netra_orig_sendMessage;
+    }
+    if (session.__netra_orig_sendMessageStream) {
+      session.sendMessageStream = session.__netra_orig_sendMessageStream;
+      delete session.__netra_orig_sendMessageStream;
+    }
+    delete session.__netra_patched;
+  }
+  patchedSessions.clear();
+}

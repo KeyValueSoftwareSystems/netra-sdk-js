@@ -202,7 +202,7 @@ function _setPromptAttributes(
     } else if (systemInstruction.text) {
       systemContent = String(systemInstruction.text);
     } else {
-      systemContent = JSON.stringify(systemInstruction);
+      systemContent = safeStringify(systemInstruction);
     }
 
     if (systemContent) {
@@ -289,7 +289,7 @@ function _setPromptAttributes(
   const contents = args.contents as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(contents)) {
     for (const content of contents) {
-      const role = String(content.role ?? "user");
+      const role = normalizeGenerativeAIRole(String(content.role ?? "user"));
       const parts = content.parts as Array<Record<string, unknown>> | undefined;
 
       if (Array.isArray(parts)) {
@@ -298,27 +298,33 @@ function _setPromptAttributes(
           .map((p) => String(p.text))
           .join("");
 
-        if (textParts) {
+        const inlineDataParts = parts.filter((p) => p.inlineData !== undefined);
+
+        // Reserve a prompt slot for this content block regardless of whether
+        // it has text, so inline-data metadata always references a valid index.
+        const slotIndex = promptIndex;
+
+        if (textParts || inlineDataParts.length > 0) {
           span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
+            `${SpanAttributes.LLM_PROMPTS}.${slotIndex}.role`,
             role,
           );
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-            textParts,
-          );
+          if (textParts) {
+            span.setAttribute(
+              `${SpanAttributes.LLM_PROMPTS}.${slotIndex}.content`,
+              textParts,
+            );
+          }
           promptIndex++;
         }
 
-        // Track non-text parts
-        const inlineDataParts = parts.filter((p) => p.inlineData !== undefined);
         if (inlineDataParts.length > 0) {
           span.setAttribute(
-            `gen_ai.prompt.${promptIndex - 1}.has_inline_data`,
+            `gen_ai.prompt.${slotIndex}.has_inline_data`,
             true,
           );
           span.setAttribute(
-            `gen_ai.prompt.${promptIndex - 1}.inline_data_count`,
+            `gen_ai.prompt.${slotIndex}.inline_data_count`,
             inlineDataParts.length,
           );
         }
