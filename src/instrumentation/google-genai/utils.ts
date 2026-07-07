@@ -1,640 +1,568 @@
 /**
- * Utility functions for Google GenAI instrumentation
+ * Provider-specific utilities for @google/genai instrumentation.
  *
- * Google GenAI has a different response format than OpenAI:
- * - Response: { response: EnhancedGenerateContentResponse }
- * - EnhancedGenerateContentResponse: { candidates, usageMetadata, promptFeedback }
- * - UsageMetadata: { promptTokenCount, candidatesTokenCount, totalTokenCount, cachedContentTokenCount }
+ * The @google/genai SDK uses a different request/response shape from OpenAI:
+ *   Request:  { model, contents, config: { temperature, topP, ... } }
+ *   Response: GenerateContentResponse with usageMetadata, candidates[], text accessor
+ *   Embed:    EmbedContentResponse with embeddings[]
+ *
+ * Because these shapes differ from OpenAI's flat kwargs and usage.prompt_tokens
+ * convention, we do custom mapping here rather than delegating fully to the
+ * shared setBaseRequestAttributes / setBaseResponseAttributes.
  */
 
 import { Span } from "@opentelemetry/api";
+import { Config } from "../../config";
+import { Logger } from "../../logger";
+import { safeStringify } from "../../utils/serialization";
 import { SpanAttributes } from "../span-attributes";
-import * as dotenv from "dotenv";
+import {
+  TracedMessage,
+  hasContent,
+  isDict,
+  isTraceContentEnabled,
+  writeCompletionAttributes,
+  writePromptAttributes,
+} from "../utils";
 
-dotenv.config();
+const LOG_PREFIX = "netra.instrumentation.google_genai";
 
-function safeStringify(value: unknown): string {
+/**
+ * Flatten @google/genai params into the kwargs shape expected by the shared
+ * PARAM_ATTRIBUTE_MAP, then set provider-specific extras.
+ *
+ * @param params - The raw GenerateContentParameters / EmbedContentParameters
+ *                 object the user passed to the SDK method.
+ */
+export function setRequestAttributes(
+  span: Span,
+  params: Record<string, unknown>,
+  requestType: string,
+): void {
   try {
-    if (typeof value === "string") return value;
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
+    if (!span.isRecording()) return;
+
+    span.setAttribute(SpanAttributes.LLM_REQUEST_TYPE, requestType);
+    span.setAttribute(SpanAttributes.LLM_SYSTEM, "google_genai");
+
+    if (params.model) {
+      span.setAttribute(
+        SpanAttributes.LLM_REQUEST_MODEL,
+        extractModelName(String(params.model)),
+      );
+    }
+
+    const cfg = (params.config ?? {}) as Record<string, unknown>;
+
+    if (cfg.temperature !== undefined) {
+      span.setAttribute(
+        SpanAttributes.LLM_REQUEST_TEMPERATURE,
+        Number(cfg.temperature),
+      );
+    }
+    if (cfg.topP !== undefined) {
+      span.setAttribute(SpanAttributes.LLM_REQUEST_TOP_P, Number(cfg.topP));
+    }
+    if (cfg.topK !== undefined) {
+      span.setAttribute(SpanAttributes.LLM_REQUEST_TOP_K, Number(cfg.topK));
+    }
+    if (cfg.maxOutputTokens !== undefined) {
+      span.setAttribute(
+        SpanAttributes.LLM_REQUEST_MAX_TOKENS,
+        Number(cfg.maxOutputTokens),
+      );
+    }
+    if (cfg.frequencyPenalty !== undefined) {
+      span.setAttribute(
+        SpanAttributes.LLM_FREQUENCY_PENALTY,
+        Number(cfg.frequencyPenalty),
+      );
+    }
+    if (cfg.presencePenalty !== undefined) {
+      span.setAttribute(
+        SpanAttributes.LLM_PRESENCE_PENALTY,
+        Number(cfg.presencePenalty),
+      );
+    }
+    if (cfg.stopSequences !== undefined) {
+      span.setAttribute(
+        SpanAttributes.LLM_CHAT_STOP_SEQUENCES,
+        safeStringify(cfg.stopSequences),
+      );
+    }
+
+    if (isTraceContentEnabled()) {
+      const messages = buildGoogleInputMessages(params, cfg);
+      writePromptAttributes(span, messages);
+    }
+  } catch (e) {
+    Logger.error(`${LOG_PREFIX}: setRequestAttributes error`, e);
   }
 }
 
 /**
- * Extract the model name from the model string.
- * @param model - The model string.
- * @returns The model name without the "models/" prefix if it exists.
+ * Strips common prefix patterns from Google model identifiers.
+ * "models/gemini-2.0-flash" -> "gemini-2.0-flash"
  */
-export function extractModelName(model: string): string {
-  if (model && model.startsWith("models/")) {
-    return model.replace(/^models\//, "");
+function extractModelName(model: string): string {
+  const MODEL_PREFIX = "models/";
+  const TUNED_MODELS_PREFIX = "tunedModels/";
+  const PUBLISHERS_PREFIX = "publishers/";
+  const PROJECTS_PREFIX = "projects/";
+  const MODELS_SEGMENT = "/models/";
+
+  if (model.startsWith(MODEL_PREFIX)) return model.slice(MODEL_PREFIX.length);
+
+  if (model.startsWith(TUNED_MODELS_PREFIX)) return model;
+
+  const publisherIdx = model.indexOf(PUBLISHERS_PREFIX);
+  if (publisherIdx !== -1) {
+    const modelsIdx = model.indexOf(MODELS_SEGMENT, publisherIdx);
+    if (modelsIdx !== -1) return model.slice(modelsIdx + MODELS_SEGMENT.length);
   }
+
+  const slashIdx = model.indexOf("/");
+  if (slashIdx !== -1 && !model.startsWith(PROJECTS_PREFIX)) {
+    return model.slice(slashIdx + 1);
+  }
+
   return model;
 }
 
 /**
- * Normalize role values from Google GenAI.
+ * Build TracedMessage[] from @google/genai request params.
  *
- * Google GenAI uses "model" to indicate the assistant role.
- * This function maps "model" → "assistant" and returns any other role unchanged in lowercase.
+ * `contents` can be: string, Part, Part[], Content, Content[]
+ * Each Content has { role, parts: Part[] }, each Part has { text? } or other fields.
  */
-function normalizeGenAIRole(raw: string): string {
-  const rawLower = raw.toLowerCase();
-  return rawLower === "model" ? "assistant" : rawLower;
-}
-
-export function setRequestAttributes(
-  span: Span,
-  kwargs: Record<string, unknown>,
-  requestType: string,
-  args: Record<string, unknown>,
-): void {
-  // Use a private property on the span to store kwargs temporarily for setResponseAttributes
-  (span as any)._netra_kwargs = kwargs;
-  if (!span.isRecording()) {
-    return;
-  }
-
-  span.setAttribute(SpanAttributes.LLM_REQUEST_TYPE, requestType);
-  span.setAttribute(SpanAttributes.LLM_SYSTEM, "google_genai");
-
-  // Model is set on the GenerativeModel instance, not in the request kwargs
-  // We need to access it from `this.model` in the wrapper if available
-  // For now, set from kwargs if provided
-  if (kwargs.model !== undefined) {
-    span.setAttribute(SpanAttributes.LLM_REQUEST_MODEL, String(kwargs.model));
-  }
-
-  // Generation config parameters (from generationConfig object or direct kwargs)
-  const generationConfig =
-    (kwargs.generationConfig as Record<string, unknown>) ?? kwargs;
-
-  if (generationConfig.temperature !== undefined) {
-    span.setAttribute(
-      SpanAttributes.LLM_REQUEST_TEMPERATURE,
-      Number(generationConfig.temperature),
-    );
-  }
-
-  if (generationConfig.topP !== undefined) {
-    span.setAttribute(
-      SpanAttributes.LLM_REQUEST_TOP_P,
-      Number(generationConfig.topP),
-    );
-  }
-
-  if (generationConfig.topK !== undefined) {
-    span.setAttribute("gen_ai.request.top_k", Number(generationConfig.topK));
-  }
-
-  if (generationConfig.maxOutputTokens !== undefined) {
-    span.setAttribute(
-      SpanAttributes.LLM_REQUEST_MAX_TOKENS,
-      Number(generationConfig.maxOutputTokens),
-    );
-  }
-
-  if (generationConfig.stopSequences !== undefined) {
-    span.setAttribute(
-      SpanAttributes.LLM_CHAT_STOP_SEQUENCES,
-      safeStringify(generationConfig.stopSequences),
-    );
-  }
-
-  // Candidate count
-  if (generationConfig.candidateCount !== undefined) {
-    span.setAttribute(
-      "gen_ai.request.candidate_count",
-      Number(generationConfig.candidateCount),
-    );
-  }
-
-  // Presence/frequency penalty
-  if (generationConfig.presencePenalty !== undefined) {
-    span.setAttribute(
-      SpanAttributes.LLM_PRESENCE_PENALTY,
-      Number(generationConfig.presencePenalty),
-    );
-  }
-  if (generationConfig.frequencyPenalty !== undefined) {
-    span.setAttribute(
-      SpanAttributes.LLM_FREQUENCY_PENALTY,
-      Number(generationConfig.frequencyPenalty),
-    );
-  }
-
-  // Embedding dimensions
-  if (kwargs.dimensions !== undefined) {
-    span.setAttribute("gen_ai.request.dimensions", Number(kwargs.dimensions));
-  }
-
-  // Tools
-  if (Array.isArray(kwargs.tools) && kwargs.tools.length > 0) {
-    span.setAttribute("gen_ai.request.tools_count", kwargs.tools.length);
-  }
-
-  // Tool config
-  if (kwargs.toolConfig !== undefined) {
-    span.setAttribute(
-      "gen_ai.request.tool_config",
-      safeStringify(kwargs.toolConfig),
-    );
-  }
-
-  // Safety settings
-  if (
-    Array.isArray(kwargs.safetySettings) &&
-    kwargs.safetySettings.length > 0
-  ) {
-    span.setAttribute(
-      "gen_ai.request.safety_settings_count",
-      kwargs.safetySettings.length,
-    );
-  }
+function buildGoogleInputMessages(
+  params: Record<string, unknown>,
+  cfg: Record<string, unknown>,
+): TracedMessage[] {
+  const messages: TracedMessage[] = [];
 
   // System instruction
-  if (kwargs.systemInstruction !== undefined) {
-    if (isTraceContentEnabled()) {
-      span.setAttribute(
-        "gen_ai.request.system_instruction",
-        safeStringify(kwargs.systemInstruction),
-      );
-    }
-    span.setAttribute("gen_ai.request.has_system_instruction", true);
+  if (hasContent(cfg.systemInstruction)) {
+    const sysContent =
+      typeof cfg.systemInstruction === "string"
+        ? cfg.systemInstruction
+        : safeStringify(cfg.systemInstruction, Config.CONVERSATION_MAX_LEN);
+    messages.push({ role: "system", content: sysContent });
   }
 
-  // Content tracing - prompts
-  if (isTraceContentEnabled()) {
-    _setPromptAttributes(span, kwargs, args);
-  }
-}
-
-function isTraceContentEnabled(): boolean {
-  const raw =
-    process.env.TRACELOOP_TRACE_CONTENT ??
-    process.env.NETRA_TRACE_CONTENT ??
-    "";
-  return ["1", "true"].includes(String(raw).toLowerCase());
-}
-
-/**
- * Extract and set prompt content from Google GenAI request
- */
-function _setPromptAttributes(
-  span: Span,
-  kwargs: Record<string, unknown>,
-  args: any,
-): void {
-  // For generateContent, the prompt can be:
-  // 1. A string (simple prompt)
-  // 2. An array of Parts (Array<string | Part>)
-  // 3. A GenerateContentRequest object with contents array
-
-  let promptIndex = 0;
-
-  // 1. Add system instruction if present (from getGenerativeModel)
-  if (kwargs.systemInstruction !== undefined) {
-    const systemInstruction = kwargs.systemInstruction as any;
-    let systemContent = "";
-
-    if (typeof systemInstruction === "string") {
-      systemContent = systemInstruction;
-    } else if (
-      systemInstruction.parts &&
-      Array.isArray(systemInstruction.parts)
-    ) {
-      systemContent = systemInstruction.parts
-        .filter((p: any) => p.text !== undefined)
-        .map((p: any) => String(p.text))
-        .join("");
-    } else if (systemInstruction.text) {
-      systemContent = String(systemInstruction.text);
-    } else {
-      systemContent = JSON.stringify(systemInstruction);
-    }
-
-    if (systemContent) {
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
-        "system",
-      );
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-        systemContent,
-      );
-      promptIndex++;
-    }
-  }
-
-  // 2. Chat history from startChat (multiturn context)
-  if (kwargs.history && Array.isArray(kwargs.history)) {
-    for (const turn of kwargs.history as Array<Record<string, unknown>>) {
-      const role = normalizeGenAIRole(String(turn.role ?? "user"));
-      const parts = turn.parts as Array<Record<string, unknown>> | undefined;
+  // Multi-turn chat history (injected by the wrapper from Chat instance)
+  const history = params._history as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(history)) {
+    for (const turn of history) {
+      const role = normalizeRole(String(turn.role ?? "user"));
+      const parts = turn.parts as unknown[] | undefined;
       if (Array.isArray(parts)) {
-        const textContent = parts
-          .filter((p) => p.text !== undefined)
-          .map((p) => String(p.text))
-          .join("");
-        if (textContent) {
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
-            role,
-          );
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-            textContent,
-          );
-          promptIndex++;
-        }
+        const text = extractTextFromParts(parts);
+        if (text) messages.push({ role, content: text });
       }
     }
   }
 
-  // 3. Add prompts from args (generateContent/embedContent call)
-  if (!args) return;
+  const contents = params.contents ?? params.message;
+  if (!hasContent(contents)) return messages;
 
-  // Handle string prompt
-  if (typeof args === "string") {
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
-      "user",
-    );
-    span.setAttribute(
-      `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-      args,
-    );
-    promptIndex++;
-    return;
+  if (typeof contents === "string") {
+    messages.push({ role: "user", content: contents });
+    return messages;
   }
 
-  // Handle Array<string | Part>
-  if (Array.isArray(args)) {
-    const textParts = args
-      .map((p: any) => {
-        if (typeof p === "string") return p;
-        if (p && typeof p.text === "string") return p.text;
-        return "";
-      })
-      .filter(Boolean)
-      .join(" ");
-
-    if (textParts) {
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
-        "user",
-      );
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-        textParts,
-      );
-      promptIndex++;
-    }
-    return;
-  }
-
-  // Handle GenerateContentRequest object { contents: [...] }
-  const contents = args.contents as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(contents)) {
-    for (const content of contents) {
-      const role = String(content.role ?? "user");
-      const parts = content.parts as Array<Record<string, unknown>> | undefined;
-
-      if (Array.isArray(parts)) {
-        const textParts = parts
-          .filter((p) => p.text !== undefined)
-          .map((p) => String(p.text))
-          .join("");
-
-        if (textParts) {
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.role`,
-            role,
-          );
-          span.setAttribute(
-            `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-            textParts,
-          );
-          promptIndex++;
-        }
-
-        // Track non-text parts
-        const inlineDataParts = parts.filter((p) => p.inlineData !== undefined);
-        if (inlineDataParts.length > 0) {
-          span.setAttribute(
-            `gen_ai.prompt.${promptIndex - 1}.has_inline_data`,
-            true,
-          );
-          span.setAttribute(
-            `gen_ai.prompt.${promptIndex - 1}.inline_data_count`,
-            inlineDataParts.length,
-          );
-        }
+    for (const item of contents) {
+      if (typeof item === "string") {
+        messages.push({ role: "user", content: item });
+      } else if (isDict(item) && item.role && Array.isArray(item.parts)) {
+        // Content object: { role, parts }
+        const role = normalizeRole(String(item.role));
+        const text = extractTextFromParts(item.parts as unknown[]);
+        if (text) messages.push({ role, content: text });
+      } else if (isDict(item) && item.text !== undefined) {
+        // Bare Part with text
+        messages.push({ role: "user", content: String(item.text) });
+      } else {
+        messages.push({
+          role: "user",
+          content: safeStringify(item, Config.CONVERSATION_MAX_LEN),
+        });
       }
     }
+  } else if (isDict(contents) && Array.isArray((contents as any).parts)) {
+    // Single Content object
+    const role = normalizeRole(String((contents as any).role ?? "user"));
+    const text = extractTextFromParts((contents as any).parts as unknown[]);
+    if (text) messages.push({ role, content: text });
+  } else if (isDict(contents) && (contents as any).text !== undefined) {
+    // Single Part object with text
+    messages.push({ role: "user", content: String((contents as any).text) });
+  } else {
+    messages.push({
+      role: "user",
+      content: safeStringify(contents, Config.CONVERSATION_MAX_LEN),
+    });
   }
 
-  // For embedContent, handle content object { parts: [...] } or string
-  if (args.content !== undefined) {
-    const content = args.content as Record<string, unknown> | string;
-    if (typeof content === "string") {
-      span.setAttribute(
-        `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-        content,
+  return messages;
+}
+
+function normalizeRole(role: string): string {
+  if (role === "model") return "assistant";
+  return role;
+}
+
+function extractTextFromParts(parts: unknown[]): string {
+  const texts: string[] = [];
+  for (const part of parts) {
+    if (!isDict(part)) continue;
+    if (typeof part.text === "string") {
+      texts.push(part.text);
+    } else if (part.functionCall) {
+      texts.push(safeStringify(part.functionCall, Config.CONVERSATION_MAX_LEN));
+    } else if (part.functionResponse) {
+      texts.push(
+        safeStringify(part.functionResponse, Config.CONVERSATION_MAX_LEN),
       );
-      promptIndex++;
-    } else if (content.parts !== undefined) {
-      const parts = content.parts as Array<Record<string, unknown>>;
-      const textContent = parts
-        .filter((p) => p.text !== undefined)
-        .map((p) => String(p.text))
-        .join("");
-      if (textContent) {
-        span.setAttribute(
-          `${SpanAttributes.LLM_PROMPTS}.${promptIndex}.content`,
-          textContent,
-        );
-        promptIndex++;
-      }
     }
   }
+  return texts.join("");
 }
 
 /**
- * Set response attributes for Google GenAI responses
- * Handles the specific structure of GenerateContentResult
+ * Extract and set span attributes from a GenerateContentResponse or
+ * EmbedContentResponse.
+ *
+ * GenerateContentResponse:
+ *   { responseId, modelVersion, candidates, usageMetadata, text, functionCalls }
+ *
+ * EmbedContentResponse:
+ *   { embeddings: ContentEmbedding[] }
  */
 export function setResponseAttributes(
   span: Span,
   response: Record<string, unknown>,
 ): void {
-  if (!span.isRecording()) {
-    return;
+  try {
+    if (!span.isRecording()) return;
+
+    if (response.responseId) {
+      span.setAttribute("llm.response.id", String(response.responseId));
+    }
+    if (response.modelVersion) {
+      span.setAttribute(
+        SpanAttributes.LLM_RESPONSE_MODEL,
+        String(response.modelVersion),
+      );
+    }
+
+    setUsageAttributes(span, response);
+    setFinishReason(span, response);
+    setEmbeddingMeta(span, response);
+
+    if (isTraceContentEnabled()) {
+      const messages = buildGoogleOutputMessages(response);
+      writeCompletionAttributes(span, messages);
+    }
+  } catch (e) {
+    Logger.error(`${LOG_PREFIX}: setResponseAttributes error`, e);
   }
-
-  // Google GenAI returns { response: EnhancedGenerateContentResponse }
-  // The response object itself is what we need to parse
-  const actualResponse =
-    (response.response as Record<string, unknown>) ?? response;
-
-  // Set usage metadata
-  _setUsageAttributes(span, actualResponse);
-
-  // Set candidate attributes
-  _setCandidateAttributes(span, actualResponse);
-
-  // Set prompt feedback if present (content filtering)
-  _setPromptFeedbackAttributes(span, actualResponse);
-
-  // Set completion content if tracing is enabled
-  if (isTraceContentEnabled()) {
-    _setCompletionAttributes(span, actualResponse);
-  }
-
-  // Handle embedding response
-  _setEmbeddingResponseAttributes(span, actualResponse);
 }
 
 /**
- * Extract and set token usage from usageMetadata
+ * Map @google/genai usageMetadata to OTel GenAI token attributes.
+ *
+ * UsageMetadata fields: promptTokenCount, candidatesTokenCount,
+ * totalTokenCount, cachedContentTokenCount, thoughtsTokenCount
  */
-function _setUsageAttributes(
+function setUsageAttributes(
   span: Span,
   response: Record<string, unknown>,
 ): void {
-  const usageMetadata = response.usageMetadata as
-    | Record<string, unknown>
-    | undefined;
-  if (!usageMetadata) return;
+  const usage = response.usageMetadata as Record<string, unknown> | undefined;
+  if (!usage) return;
 
-  // Prompt tokens
-  if (usageMetadata.promptTokenCount !== undefined) {
+  if (usage.promptTokenCount !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_PROMPT_TOKENS,
-      Number(usageMetadata.promptTokenCount),
+      Number(usage.promptTokenCount),
     );
   }
-
-  // Completion/candidates tokens
-  if (usageMetadata.candidatesTokenCount !== undefined) {
+  if (usage.candidatesTokenCount !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_COMPLETION_TOKENS,
-      Number(usageMetadata.candidatesTokenCount),
+      Number(usage.candidatesTokenCount),
     );
   }
-
-  // Total tokens
-  if (usageMetadata.totalTokenCount !== undefined) {
+  if (usage.totalTokenCount !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
-      Number(usageMetadata.totalTokenCount),
+      Number(usage.totalTokenCount),
     );
   }
-
-  // Cached content tokens
-  if (usageMetadata.cachedContentTokenCount !== undefined) {
+  if (usage.cachedContentTokenCount !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS,
-      Number(usageMetadata.cachedContentTokenCount),
+      Number(usage.cachedContentTokenCount),
+    );
+  }
+  if (usage.thoughtsTokenCount !== undefined) {
+    span.setAttribute(
+      SpanAttributes.LLM_USAGE_REASONING_TOKENS,
+      Number(usage.thoughtsTokenCount),
     );
   }
 }
 
-/**
- * Extract and set attributes from candidates
- */
-function _setCandidateAttributes(
-  span: Span,
-  response: Record<string, unknown>,
-): void {
+function setFinishReason(span: Span, response: Record<string, unknown>): void {
   const candidates = response.candidates as
     | Array<Record<string, unknown>>
     | undefined;
   if (!Array.isArray(candidates) || candidates.length === 0) return;
 
-  span.setAttribute("gen_ai.response.candidate_count", candidates.length);
-
-  const firstCandidate = candidates[0];
-
-  // Finish reason
-  if (firstCandidate.finishReason !== undefined) {
+  const reason = candidates[0].finishReason;
+  if (reason) {
     span.setAttribute(
-      "gen_ai.response.finish_reason",
-      String(firstCandidate.finishReason),
+      SpanAttributes.LLM_RESPONSE_FINISH_REASON,
+      String(reason),
     );
-  }
-
-  // Average log probs (if present)
-  if (firstCandidate.avgLogprobs !== undefined) {
-    span.setAttribute(
-      "gen_ai.response.avg_logprobs",
-      Number(firstCandidate.avgLogprobs),
-    );
-  }
-
-  // Safety ratings
-  const safetyRatings = firstCandidate.safetyRatings as
-    | Array<Record<string, unknown>>
-    | undefined;
-  if (Array.isArray(safetyRatings) && safetyRatings.length > 0) {
-    span.setAttribute(
-      "gen_ai.response.safety_ratings_count",
-      safetyRatings.length,
-    );
-
-    // Set individual safety ratings
-    for (let i = 0; i < safetyRatings.length; i++) {
-      const rating = safetyRatings[i];
-      if (rating.category !== undefined) {
-        span.setAttribute(
-          `gen_ai.response.safety_rating.${i}.category`,
-          String(rating.category),
-        );
-      }
-      if (rating.probability !== undefined) {
-        span.setAttribute(
-          `gen_ai.response.safety_rating.${i}.probability`,
-          String(rating.probability),
-        );
-      }
-    }
-  }
-
-  // Citation metadata
-  const citationMetadata = firstCandidate.citationMetadata as
-    | Record<string, unknown>
-    | undefined;
-  if (citationMetadata?.citationSources !== undefined) {
-    const sources = citationMetadata.citationSources as Array<unknown>;
-    span.setAttribute("gen_ai.response.citation_count", sources.length);
-  }
-
-  // Grounding metadata
-  if (firstCandidate.groundingMetadata !== undefined) {
-    span.setAttribute("gen_ai.response.has_grounding", true);
+    span.setAttribute("gen_ai.response.finish_reason", String(reason));
   }
 }
 
-/**
- * Set prompt feedback attributes (content filtering info)
- */
-function _setPromptFeedbackAttributes(
-  span: Span,
-  response: Record<string, unknown>,
-): void {
-  const promptFeedback = response.promptFeedback as
-    | Record<string, unknown>
-    | undefined;
-  if (!promptFeedback) return;
-
-  if (promptFeedback.blockReason !== undefined) {
-    span.setAttribute(
-      "gen_ai.response.prompt_block_reason",
-      String(promptFeedback.blockReason),
-    );
-  }
-
-  if (promptFeedback.blockReasonMessage !== undefined) {
-    span.setAttribute(
-      "gen_ai.response.prompt_block_message",
-      String(promptFeedback.blockReasonMessage),
-    );
-  }
-
-  const safetyRatings = promptFeedback.safetyRatings as
-    | Array<Record<string, unknown>>
-    | undefined;
-  if (Array.isArray(safetyRatings)) {
-    span.setAttribute(
-      "gen_ai.response.prompt_safety_ratings_count",
-      safetyRatings.length,
-    );
-  }
-}
-
-/**
- * Extract and set completion content from candidates
- */
-function _setCompletionAttributes(
-  span: Span,
-  response: Record<string, unknown>,
-): void {
-  const candidates = response.candidates as
-    | Array<Record<string, unknown>>
-    | undefined;
-  if (!Array.isArray(candidates)) return;
-
-  for (let i = 0; i < candidates.length; i++) {
-    const candidate = candidates[i];
-    const content = candidate.content as Record<string, unknown> | undefined;
-
-    if (!content) continue;
-
-    const role = normalizeGenAIRole(String(content.role ?? "model"));
-    const parts = content.parts as Array<Record<string, unknown>> | undefined;
-
-    if (!Array.isArray(parts)) continue;
-
-    // Extract text from parts
-    const textContent = parts
-      .filter((p) => p.text !== undefined)
-      .map((p) => String(p.text))
-      .join("");
-
-    if (textContent) {
-      span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.${i}.role`, role);
-      span.setAttribute(
-        `${SpanAttributes.LLM_COMPLETIONS}.${i}.content`,
-        textContent,
-      );
-    }
-
-    // Track function calls
-    const functionCalls = parts.filter((p) => p.functionCall !== undefined);
-    if (functionCalls.length > 0) {
-      span.setAttribute(
-        `gen_ai.completion.${i}.function_call_count`,
-        functionCalls.length,
-      );
-
-      for (let j = 0; j < functionCalls.length; j++) {
-        const fc = functionCalls[j].functionCall as Record<string, unknown>;
-        if (fc.name !== undefined) {
-          span.setAttribute(
-            `gen_ai.completion.${i}.function_call.${j}.name`,
-            String(fc.name),
-          );
-        }
-      }
-    }
-  }
-}
-
-/**
- * Set attributes for embedding responses
- */
-function _setEmbeddingResponseAttributes(
-  span: Span,
-  response: Record<string, unknown>,
-): void {
+function setEmbeddingMeta(span: Span, response: Record<string, unknown>): void {
   // Single embedding response
-  const embedding = response.embedding as Record<string, unknown> | undefined;
-  if (embedding?.values !== undefined) {
-    const values = embedding.values as number[];
+  const singleEmbed = response.embedding as Record<string, unknown> | undefined;
+  if (singleEmbed?.values !== undefined) {
+    const values = singleEmbed.values as number[];
     span.setAttribute("gen_ai.response.embedding_dimensions", values.length);
+
+    const stats = singleEmbed.statistics as Record<string, unknown> | undefined;
+    if (stats?.tokenCount !== undefined) {
+      const tokenCount = Number(stats.tokenCount);
+      span.setAttribute(SpanAttributes.LLM_USAGE_PROMPT_TOKENS, tokenCount);
+      span.setAttribute(SpanAttributes.LLM_USAGE_TOTAL_TOKENS, tokenCount);
+    }
+    return;
   }
 
   // Batch embedding response
   const embeddings = response.embeddings as
     | Array<Record<string, unknown>>
     | undefined;
-  if (Array.isArray(embeddings)) {
-    span.setAttribute("gen_ai.response.embedding_count", embeddings.length);
-    if (embeddings.length > 0 && embeddings[0].values !== undefined) {
-      const values = embeddings[0].values as number[];
-      span.setAttribute("gen_ai.response.embedding_dimensions", values.length);
+  if (!Array.isArray(embeddings) || embeddings.length === 0) return;
+
+  span.setAttribute("gen_ai.response.embedding_count", embeddings.length);
+
+  const first = embeddings[0];
+  const values = first?.values as number[] | undefined;
+  if (Array.isArray(values)) {
+    span.setAttribute("gen_ai.response.embedding_dimensions", values.length);
+  }
+
+  // Aggregate token counts across all embeddings in the batch
+  let totalTokens = 0;
+  let hasTokenCount = false;
+  for (const emb of embeddings) {
+    const stats = emb.statistics as Record<string, unknown> | undefined;
+    if (stats?.tokenCount !== undefined) {
+      totalTokens += Number(stats.tokenCount);
+      hasTokenCount = true;
     }
   }
+  if (hasTokenCount) {
+    span.setAttribute(SpanAttributes.LLM_USAGE_PROMPT_TOKENS, totalTokens);
+    span.setAttribute(SpanAttributes.LLM_USAGE_TOTAL_TOKENS, totalTokens);
+  }
+}
+
+/**
+ * Build TracedMessage[] from @google/genai response.
+ * Handles both text output and function calls.
+ */
+function buildGoogleOutputMessages(
+  response: Record<string, unknown>,
+): TracedMessage[] {
+  const messages: TracedMessage[] = [];
+
+  // text accessor (available on GenerateContentResponse)
+  const text = response.text;
+  if (typeof text === "string" && text.length > 0) {
+    messages.push({ role: "assistant", content: text });
+  }
+
+  // Function calls
+  const functionCalls = response.functionCalls as
+    | Array<Record<string, unknown>>
+    | undefined;
+  if (Array.isArray(functionCalls)) {
+    for (const fc of functionCalls) {
+      messages.push({
+        role: "tool",
+        content: safeStringify(
+          { name: fc.name, arguments: fc.args },
+          Config.CONVERSATION_MAX_LEN,
+        ),
+      });
+    }
+  }
+
+  // If text accessor wasn't available, fall back to candidates
+  if (messages.length === 0) {
+    const candidates = response.candidates as
+      | Array<Record<string, unknown>>
+      | undefined;
+    if (Array.isArray(candidates)) {
+      for (const candidate of candidates) {
+        const content = candidate.content as
+          | Record<string, unknown>
+          | undefined;
+        if (!content || !Array.isArray(content.parts)) continue;
+        for (const part of content.parts as Array<Record<string, unknown>>) {
+          if (typeof part.text === "string" && part.text.length > 0) {
+            messages.push({ role: "assistant", content: part.text });
+          }
+          if (part.functionCall && isDict(part.functionCall)) {
+            const fc = part.functionCall as Record<string, unknown>;
+            messages.push({
+              role: "tool",
+              content: safeStringify(
+                { name: fc.name, arguments: fc.args },
+                Config.CONVERSATION_MAX_LEN,
+              ),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Embedding responses: generate structured output for the Netra output field.
+  if (messages.length === 0) {
+    // Single embedding: { embedding: { values: [...] } }
+    const singleEmbed = response.embedding as
+      | Record<string, unknown>
+      | undefined;
+    if (singleEmbed?.values !== undefined) {
+      const values = singleEmbed.values as number[];
+      messages.push({
+        role: "assistant",
+        content: safeStringify({
+          dimensions: values.length,
+          preview: values.slice(0, 5),
+        }),
+      });
+    }
+
+    // Batch embeddings: { embeddings: [ { values: [...] }, ... ] }
+    const embeddings = response.embeddings as
+      | Array<Record<string, unknown>>
+      | undefined;
+    if (Array.isArray(embeddings) && embeddings.length > 0) {
+      for (let i = 0; i < embeddings.length; i++) {
+        const values = (embeddings[i]?.values ?? []) as number[];
+        messages.push({
+          role: "assistant",
+          content: safeStringify({
+            index: i,
+            dimensions: values.length,
+            preview: values.slice(0, 5),
+          }),
+        });
+      }
+    }
+  }
+
+  return messages;
+}
+
+/**
+ * Accumulate a single streamed GenerateContentResponse chunk into a
+ * synthetic response dict.  Safe against malformed chunks.
+ *
+ * @param accumulated - Mutable dict built up across chunks.
+ * @param chunk       - A single GenerateContentResponse chunk from the stream.
+ * @param span        - The active span (for time-to-first-token recording).
+ * @param startTime   - Request start timestamp in ms.
+ */
+export function processStreamChunk(
+  accumulated: Record<string, any>,
+  chunk: any,
+  span: Span,
+  startTime: number,
+): void {
+  try {
+    if (chunk.modelVersion) {
+      accumulated.modelVersion = chunk.modelVersion;
+    }
+    if (chunk.responseId) {
+      accumulated.responseId = chunk.responseId;
+    }
+
+    // Accumulate text
+    const chunkText = typeof chunk.text === "string" ? chunk.text : undefined;
+    if (chunkText && chunkText.length > 0) {
+      if (!accumulated._text) {
+        accumulated._text = chunkText;
+        span.setAttribute(
+          "gen_ai.performance.time_to_first_token",
+          (Date.now() - startTime) / 1000,
+        );
+      } else {
+        accumulated._text += chunkText;
+      }
+    }
+
+    // Accumulate function calls
+    const fcs = chunk.functionCalls;
+    if (Array.isArray(fcs) && fcs.length > 0) {
+      if (!accumulated._functionCalls) accumulated._functionCalls = [];
+      accumulated._functionCalls.push(...fcs);
+    }
+
+    // Usage metadata -- later chunks overwrite; final chunk has full counts
+    if (chunk.usageMetadata) {
+      accumulated.usageMetadata = chunk.usageMetadata;
+    }
+
+    // Finish reason from candidates
+    if (Array.isArray(chunk.candidates) && chunk.candidates.length > 0) {
+      const reason = chunk.candidates[0]?.finishReason;
+      if (reason) {
+        if (!accumulated.candidates) accumulated.candidates = [{}];
+        accumulated.candidates[0].finishReason = reason;
+      }
+    }
+
+    if (Logger.isDebugMode()) {
+      span.addEvent("llm.content.completion.chunk");
+    }
+  } catch (e) {
+    Logger.error(`${LOG_PREFIX}: processStreamChunk error`, e);
+  }
+}
+
+/**
+ * Convert accumulated stream data into the shape expected by
+ * setResponseAttributes.  Called once when the stream completes.
+ */
+export function buildAccumulatedResponse(
+  accumulated: Record<string, any>,
+): Record<string, unknown> {
+  const response: Record<string, unknown> = {
+    responseId: accumulated.responseId,
+    modelVersion: accumulated.modelVersion,
+    usageMetadata: accumulated.usageMetadata,
+    candidates: accumulated.candidates,
+  };
+
+  if (accumulated._text) {
+    response.text = accumulated._text;
+  }
+  if (accumulated._functionCalls) {
+    response.functionCalls = accumulated._functionCalls;
+  }
+
+  return response;
 }

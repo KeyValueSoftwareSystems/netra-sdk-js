@@ -19,6 +19,7 @@ const ALLOWED_INSTRUMENTATION_NAMES = new Set([
   "mistral_ai",
   "mistralai",
   "google_genai",
+  "google_generative_ai",
   "langchain",
   "llama_index",
   "pinecone",
