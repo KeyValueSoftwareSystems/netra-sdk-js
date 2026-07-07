@@ -15,6 +15,7 @@ import { extractModelName, setRequestAttributes, setResponseAttributes } from ".
 
 type GoogleGenerativeAIRequestType = "chat" | "embedding";
 
+const LOG_PREFIX = "netra.instrumentation.google_generative_ai";
 const CHAT_SPAN_NAME = "google_generative_ai.chat";
 const EMBEDDING_SPAN_NAME = "google_generative_ai.embedding";
 
@@ -80,7 +81,7 @@ function googleGenerativeAIWrapper(
             try {
               setRequestAttributes(span, kwargs, requestType, args[0]);
             } catch (e) {
-              Logger.error("netra.instrumentation.google-generative-ai:", e);
+              Logger.error(`${LOG_PREFIX}:`, e);
             }
             const startTime = Date.now();
             const response = original.apply(this, args);
@@ -102,7 +103,7 @@ function googleGenerativeAIWrapper(
                       );
                     }
                   } catch (e) {
-                    Logger.error("netra.instrumentation.google-generative-ai:", e);
+                    Logger.error(`${LOG_PREFIX}:`, e);
                   }
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
@@ -128,7 +129,7 @@ function googleGenerativeAIWrapper(
                   (endTime - startTime) / 1000,
                 );
               } catch (e) {
-                Logger.error("netra.instrumentation.google-generative-ai:", e);
+                Logger.error(`${LOG_PREFIX}:`, e);
               }
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
@@ -199,7 +200,7 @@ function googleGenerativeAIStreamWrapper(
             try {
               setRequestAttributes(span, kwargs, requestType, args[0]);
             } catch (e) {
-              Logger.error("netra.instrumentation.google-generative-ai:", e);
+              Logger.error(`${LOG_PREFIX}:`, e);
             }
 
             const response = original.apply(this, args);
@@ -232,7 +233,7 @@ function googleGenerativeAIStreamWrapper(
                       duration,
                     );
                   } catch (e) {
-                    Logger.error("netra.instrumentation.google-generative-ai:", e);
+                    Logger.error(`${LOG_PREFIX}:`, e);
                   }
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
@@ -277,7 +278,7 @@ function googleGenerativeAIStreamWrapper(
                                 duration,
                               );
                             } catch (e) {
-                              Logger.error("netra.instrumentation.google-generative-ai:", e);
+                              Logger.error(`${LOG_PREFIX}:`, e);
                             }
                             span.setStatus({ code: SpanStatusCode.OK });
                             span.end();

@@ -38,6 +38,40 @@ import { SpanAttributes } from "../span-attributes";
 const LOG_PREFIX = "netra.instrumentation.google_genai";
 
 /**
+ * Build a params dict from the first argument and the `this` context
+ * (Models or Chat instance).  Shared by both wrapper factories.
+ */
+function buildParams(args: any[], self: Record<string, unknown>): Record<string, unknown> {
+  const raw = args[0];
+  const params: Record<string, unknown> =
+    typeof raw === "object" && raw !== null ? { ...raw } : { message: raw };
+
+  if (!params.model && self.model) {
+    params.model = self.model;
+  }
+  if (!params.config && self.config) {
+    params.config = self.config;
+  }
+
+  // Chat.getHistory(true) returns the internal history array including
+  // the pending user message.  Wrapped in try/catch in case the SDK
+  // changes the method signature or it has unexpected side-effects.
+  try {
+    const history =
+      typeof (self as any).getHistory === "function"
+        ? (self as any).getHistory(true)
+        : self.history;
+    if (Array.isArray(history)) {
+      params._history = history;
+    }
+  } catch {
+    // Fall back silently — history is best-effort for tracing
+  }
+
+  return params;
+}
+
+/**
  * Wrapper factory for non-streaming SDK methods:
  *   Models.generateContent, Models.embedContent, Chat.sendMessage
  *
@@ -55,24 +89,8 @@ function genericWrapperFactory(
         return original.apply(this, args);
       }
 
-      const raw = args[0];
-      const params: Record<string, unknown> =
-        typeof raw === "object" && raw !== null ? { ...raw } : { message: raw };
-
       const self = this as Record<string, unknown>;
-      if (!params.model && self.model) {
-        params.model = self.model;
-      }
-      if (!params.config && self.config) {
-        params.config = self.config;
-      }
-      const history =
-        typeof (self as any).getHistory === "function"
-          ? (self as any).getHistory(true)
-          : self.history;
-      if (Array.isArray(history)) {
-        params._history = history;
-      }
+      const params = buildParams(args, self);
 
       const currentContext = context.active();
 
@@ -162,24 +180,8 @@ function streamWrapperFactory(
         return original.apply(this, args);
       }
 
-      const raw = args[0];
-      const params: Record<string, unknown> =
-        typeof raw === "object" && raw !== null ? { ...raw } : { message: raw };
-
       const self = this as Record<string, unknown>;
-      if (!params.model && self.model) {
-        params.model = self.model;
-      }
-      if (!params.config && self.config) {
-        params.config = self.config;
-      }
-      const history =
-        typeof (self as any).getHistory === "function"
-          ? (self as any).getHistory(true)
-          : self.history;
-      if (Array.isArray(history)) {
-        params._history = history;
-      }
+      const params = buildParams(args, self);
 
       const currentContext = context.active();
 

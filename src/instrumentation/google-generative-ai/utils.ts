@@ -8,17 +8,9 @@
  */
 
 import { Span } from "@opentelemetry/api";
+import { safeStringify } from "../../utils/serialization";
 import { SpanAttributes } from "../span-attributes";
 import { isTraceContentEnabled } from "../utils";
-
-function safeStringify(value: unknown): string {
-  try {
-    if (typeof value === "string") return value;
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
 
 /**
  * Extract the model name from the model string.
