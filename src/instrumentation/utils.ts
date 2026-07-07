@@ -3,7 +3,7 @@
  * Handles setting OTel span attributes for LLM request/response tracing.
  */
 
-import { Span, context } from "@opentelemetry/api";
+import { Span, context, type Context as OTelContext } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
 import { safeStringify } from "../utils/serialization";
@@ -41,6 +41,16 @@ const SUPPRESS_INSTRUMENTATION_KEY = Symbol("netra.suppress_instrumentation");
 export function shouldSuppressInstrumentation(): boolean {
   const ctx = context.active();
   return ctx.getValue(SUPPRESS_INSTRUMENTATION_KEY) === true;
+}
+
+/**
+ * Return a new context derived from `ctx` (default: active) with
+ * Netra instrumentation suppressed.  Wrappers that call the original
+ * method within this context prevent nested google_genai spans (e.g.
+ * Chat.sendMessage → generateContentInternal).
+ */
+export function createSuppressedContext(ctx?: OTelContext): OTelContext {
+  return (ctx ?? context.active()).setValue(SUPPRESS_INSTRUMENTATION_KEY, true);
 }
 
 // Type Utilities — re-export from canonical location to avoid duplication
