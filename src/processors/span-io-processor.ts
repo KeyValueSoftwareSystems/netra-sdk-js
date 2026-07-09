@@ -75,6 +75,9 @@ export class SpanIOProcessor implements SpanProcessor {
       if (!("output" in attrs)) {
         span.setAttribute("output", "");
       }
+      if (!("conversation" in attrs)) {
+        span.setAttribute("conversation", JSON.stringify([]));
+      }
       this._wrapSetAttribute(span);
     } catch (e) {
       Logger.error("SpanIOProcessor.onStart failed:", e);
