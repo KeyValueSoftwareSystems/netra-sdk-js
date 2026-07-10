@@ -10,6 +10,7 @@
 - 🔧 **Multi-Provider Support**: Works with OpenAI, Google GenAI, Mistral, Anthropic, and more
 - 📈 **Session Management**: Track user sessions and custom attributes
 - 🌐 **Automatic Instrumentation**: Zero-code instrumentation for popular frameworks and libraries
+- ⚡ **Opt-in Read Caching**: In-memory TTL caching for read-heavy SDK calls (e.g. prompt fetches)
 
 ## 📦 Installation
 
@@ -184,6 +185,40 @@ async function generateContent(prompt: string) {
 }
 ```
 
+## 📝 Prompts API
+
+Fetch prompt versions from Prompt Studio via `Netra.prompts.getPrompt()`. Caching is **opt-in per call** — omit `useCache` (or set it to `false`) to always hit the API.
+
+Set a global default TTL at init with `cacheTtlSeconds` (default: **60** seconds), or override TTL for a single call with `cacheTtl`.
+
+```typescript
+import { Netra } from "netra-sdk";
+
+await Netra.init({
+  appName: "my-ai-app",
+  cacheTtlSeconds: 60, // optional; env: NETRA_CACHE_TTL_SECONDS
+});
+
+// Always fetches from the API (default)
+const prompt = await Netra.prompts.getPrompt({ name: "my-prompt" });
+
+// Cached for 60s (global default TTL)
+const cached = await Netra.prompts.getPrompt({
+  name: "my-prompt",
+  useCache: true,
+});
+
+// Cached for 30s for this call only
+const shortLived = await Netra.prompts.getPrompt({
+  name: "my-prompt",
+  label: "production", // default label when omitted
+  useCache: true,
+  cacheTtl: 30,
+});
+```
+
+> **Note**: Cached prompts may be stale for up to the TTL after dashboard edits. Use `useCache: false` when you need the latest version immediately. `Netra.shutdown()` clears in-memory caches.
+
 ## 🔧 Environment Variables
 
 You can configure the SDK using environment variables:
@@ -194,6 +229,7 @@ You can configure the SDK using environment variables:
 | `NETRA_APP_NAME` | Name of your application |
 | `NETRA_ENV` | Environment (e.g., prod, dev) |
 | `NETRA_TRACE_CONTENT` | Capture prompt/completion content (default: true) |
+| `NETRA_CACHE_TTL_SECONDS` | Default TTL in seconds for opt-in SDK read caches (default: 60) |
 
 ## 🤝 License
 
