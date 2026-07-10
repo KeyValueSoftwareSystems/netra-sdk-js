@@ -6,7 +6,7 @@
 
 import { context, Span, SpanKind, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
-import { Prompts, Dashboard, Evaluation, Usage } from "./api";
+import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Logger } from "./logger";
@@ -66,6 +66,9 @@ export {
   Usage,
   // Prompts API
   Prompts,
+  // Models API
+  Models,
+  MODEL_PRICING_CACHE_TTL_SECONDS,
 } from "./api";
 
 export type {
@@ -105,6 +108,10 @@ export type {
   TraceSummary,
   GetPromptParams,
   PromptResponse,
+  // Models API
+  GetModelPricingParams,
+  ModelPrice,
+  ModelPricing,
 } from "./api";
 
 // Export simulation types and classes
@@ -141,6 +148,7 @@ export class Netra {
   static dashboard: Dashboard;
   static simulation: Simulation;
   static prompts: Prompts;
+  static models: Models;
 
   static getConfig(): Config {
     if (!this._config) {
@@ -210,6 +218,12 @@ export class Netra {
       this.prompts = new Prompts(cfg);
     } catch (e) {
       Logger.warn("Netra: failed to initialize prompts client:", e);
+    }
+
+    try {
+      this.models = new Models(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize models client:", e);
     }
 
     this._initialized = true;
@@ -344,6 +358,7 @@ export class Netra {
 
     try {
       this.prompts?.clearCache();
+      this.models?.clearCache();
     } catch (e) {
       Logger.error("Error clearing SDK API caches:", e);
     }

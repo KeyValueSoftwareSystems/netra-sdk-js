@@ -68,3 +68,11 @@ export type {
 // Prompts API
 export { Prompts } from "./prompts";
 export type { GetPromptParams, PromptResponse } from "./prompts";
+
+// Models API
+export { Models, MODEL_PRICING_CACHE_TTL_SECONDS } from "./models";
+export type {
+  GetModelPricingParams,
+  ModelPrice,
+  ModelPricing,
+} from "./models";
