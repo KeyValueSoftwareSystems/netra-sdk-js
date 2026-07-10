@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Config } from "../../config";
 import { Prompts } from "./api";
 import { PromptsHttpClient } from "./client";
+import { PROMPT_CACHE_TTL_SECONDS } from "./models";
 
 describe("Prompts.getPrompt caching", () => {
   let prompts: Prompts;
@@ -87,7 +88,7 @@ describe("Prompts.getPrompt caching", () => {
     expect(getPromptVersion).toHaveBeenCalledTimes(2);
   });
 
-  it("expires per-call cacheTtl before the global default TTL", async () => {
+  it("expires per-call cacheTtl before the module default TTL", async () => {
     vi.useFakeTimers();
     getPromptVersion.mockResolvedValue({ data: { template: "v1" } });
 
@@ -105,6 +106,22 @@ describe("Prompts.getPrompt caching", () => {
       useCache: true,
       cacheTtl: 1,
     });
+    expect(getPromptVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires cached prompts after PROMPT_CACHE_TTL_SECONDS when cacheTtl is omitted", async () => {
+    vi.useFakeTimers();
+    getPromptVersion.mockResolvedValue({ data: { template: "v1" } });
+
+    await prompts.getPrompt({ name: "my-prompt", useCache: true });
+    expect(getPromptVersion).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(PROMPT_CACHE_TTL_SECONDS * 1000 - 1);
+    await prompts.getPrompt({ name: "my-prompt", useCache: true });
+    expect(getPromptVersion).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2);
+    await prompts.getPrompt({ name: "my-prompt", useCache: true });
     expect(getPromptVersion).toHaveBeenCalledTimes(2);
   });
 
