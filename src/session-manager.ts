@@ -174,8 +174,8 @@ export class SessionManager {
 
   /**
    * Set input on the currently active span.
-   * Writes to `netra.user.input` so that SpanIOProcessor can promote it
-   * to `input` at span end, giving user-supplied values the highest priority.
+   * Writes to `netra.user.input` which SpanIOProcessor intercepts inline
+   * and writes directly to `input`, taking priority over decorator/instrumentation.
    */
   static setInput(value: any): void {
     try {
@@ -190,8 +190,8 @@ export class SessionManager {
 
   /**
    * Set output on the currently active span.
-   * Writes to `netra.user.output` so that SpanIOProcessor can promote it
-   * to `output` at span end, giving user-supplied values the highest priority.
+   * Writes to `netra.user.output` which SpanIOProcessor intercepts inline
+   * and writes directly to `output`, taking priority over decorator/instrumentation.
    */
   static setOutput(value: any): void {
     try {
@@ -207,12 +207,12 @@ export class SessionManager {
   /**
    * Set input on the root span of the current trace.
    * Delegates to RootSpanProcessor which owns root span bookkeeping.
-   * Writes to `netra.user.input` so SpanIOProcessor promotes it at span end.
+   * Uses `netra.root.input` for highest priority (overrides even setInput).
    */
   static setRootInput(value: any): void {
     try {
       RootSpanProcessor.setAttributeOnRootSpan(
-        "netra.user.input",
+        "netra.root.input",
         serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
       );
     } catch (e) {
@@ -223,12 +223,12 @@ export class SessionManager {
   /**
    * Set output on the root span of the current trace.
    * Delegates to RootSpanProcessor which owns root span bookkeeping.
-   * Writes to `netra.user.output` so SpanIOProcessor promotes it at span end.
+   * Uses `netra.root.output` for highest priority (overrides even setOutput).
    */
   static setRootOutput(value: any): void {
     try {
       RootSpanProcessor.setAttributeOnRootSpan(
-        "netra.user.output",
+        "netra.root.output",
         serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
       );
     } catch (e) {
