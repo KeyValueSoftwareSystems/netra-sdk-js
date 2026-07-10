@@ -13,7 +13,7 @@ import { Config } from "./config";
 import { Logger } from "./logger";
 import { RootSpanProcessor } from "./processors/root-span-processor";
 import { ConversationType } from "./types";
-import { serializeValue } from "./utils/serialization";
+import { safeStringify } from "./utils/serialization";
 
 export { ConversationType };
 
@@ -163,7 +163,7 @@ export class SessionManager {
     try {
       const span = trace.getActiveSpan();
       if (span?.isRecording()) {
-        span.setAttribute(key, typeof value === "string" ? value : JSON.stringify(value));
+        span.setAttribute(key, typeof value === "string" ? value : safeStringify(value));
       } else {
         Logger.warn(`setAttributeOnActiveSpan: no recording span for key '${key}'`);
       }
@@ -181,7 +181,7 @@ export class SessionManager {
     try {
       SessionManager.setAttributeOnActiveSpan(
         "netra.user.input",
-        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+        safeStringify(value),
       );
     } catch (e) {
       Logger.error("setInput failed:", e);
@@ -197,7 +197,7 @@ export class SessionManager {
     try {
       SessionManager.setAttributeOnActiveSpan(
         "netra.user.output",
-        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+        safeStringify(value),
       );
     } catch (e) {
       Logger.error("setOutput failed:", e);
@@ -213,7 +213,7 @@ export class SessionManager {
     try {
       RootSpanProcessor.setAttributeOnRootSpan(
         "netra.root.input",
-        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+        safeStringify(value),
       );
     } catch (e) {
       Logger.error("setRootInput failed:", e);
@@ -229,7 +229,7 @@ export class SessionManager {
     try {
       RootSpanProcessor.setAttributeOnRootSpan(
         "netra.root.output",
-        serializeValue(value, Config.ATTRIBUTE_MAX_LEN),
+        safeStringify(value),
       );
     } catch (e) {
       Logger.error("setRootOutput failed:", e);
@@ -266,8 +266,8 @@ export class SessionManager {
    *
    * Reads and re-serialises the existing JSON array so entries accumulate
    * rather than overwrite — matching the Python SDK's behaviour.
-   * Writes directly to the span's internal attribute store to bypass OTel's
-   * per-attribute length truncation on the final payload.
+   * Uses span.setAttribute so the value flows through the processor pipeline
+   * including the SerializationSpanProcessor for proper truncation.
    */
   static addConversation(
     conversationType: ConversationType,
@@ -286,7 +286,6 @@ export class SessionManager {
         return;
       }
 
-      // Read existing entries from the span's internal attribute store
       let existing: Array<{
         type: string;
         role: string;
@@ -303,9 +302,7 @@ export class SessionManager {
         Logger.warn("addConversation: failed to parse existing conversation, starting fresh:", e);
       }
 
-      const maxLen = Config.CONVERSATION_MAX_LEN;
-      const processedContent =
-        typeof content === "string" ? content.substring(0, maxLen) : content;
+      const processedContent = content;
 
       existing.push({
         type: conversationType,
@@ -315,14 +312,7 @@ export class SessionManager {
       });
 
       const payload = JSON.stringify(existing);
-
-      // Bypass per-attribute truncation by writing to the internal store directly
-      const internalAttrs = (span as any)._attributes;
-      if (internalAttrs && typeof internalAttrs === "object") {
-        internalAttrs["conversation"] = payload;
-      } else {
-        span.setAttribute("conversation", payload);
-      }
+      span.setAttribute("conversation", payload);
     } catch (e) {
       Logger.error("addConversation failed:", e);
     }

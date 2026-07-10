@@ -311,10 +311,7 @@ function _setPromptAttributes(
         }
 
         if (inlineDataParts.length > 0) {
-          span.setAttribute(
-            `gen_ai.prompt.${slotIndex}.has_inline_data`,
-            true,
-          );
+          span.setAttribute(`gen_ai.prompt.${slotIndex}.has_inline_data`, true);
           span.setAttribute(
             `gen_ai.prompt.${slotIndex}.inline_data_count`,
             inlineDataParts.length,

@@ -8,6 +8,7 @@ import {
 } from "@opentelemetry/api";
 import { SpanType } from "../../types";
 import { SpanAttributes } from "../span-attributes";
+import { safeStringify } from "../../utils/serialization";
 import {
   DEFAULT_LLM_SYSTEM,
   NETRA_AGENTS_GROUP_ID,
@@ -17,7 +18,7 @@ import {
   NETRA_SPAN_TYPE_ATTR,
   NETRA_WORKFLOW_NAME,
 } from "./constants";
-import { getNetraSpanType, getSpanName, safeJsonStringify } from "./utils";
+import { getNetraSpanType, getSpanName } from "./utils";
 import { setSpanDataAttributes } from "./attributes";
 import { Logger } from "../../logger";
 import type { AgentSpan, AgentTrace, TracingProcessor } from "./types";
@@ -118,7 +119,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
       span.setAttribute(NETRA_AGENTS_GROUP_ID, agentTrace.groupId);
     }
     if (agentTrace.metadata) {
-      span.setAttribute(NETRA_AGENTS_METADATA, safeJsonStringify(agentTrace.metadata));
+      span.setAttribute(NETRA_AGENTS_METADATA, safeStringify(agentTrace.metadata));
     }
 
     this._rootSpans.set(agentTrace.traceId, span);
@@ -228,7 +229,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
 
     if (agentSpan.error) {
       const errorMsg = agentSpan.error.data
-        ? `${agentSpan.error.message}: ${safeJsonStringify(agentSpan.error.data)}`
+        ? `${agentSpan.error.message}: ${safeStringify(agentSpan.error.data)}`
         : agentSpan.error.message;
       span.setStatus({ code: SpanStatusCode.ERROR, message: errorMsg });
       span.recordException(new Error(agentSpan.error.message));

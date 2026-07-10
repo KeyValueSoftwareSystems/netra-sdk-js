@@ -63,8 +63,6 @@ const TRACKED_STREAM_EVENTS = new Set([
   "finalMessage",
 ]);
 
-const MAX_TOOL_ATTR_LENGTH = 4096;
-
 /**
  * Wrap each tool's `run()` method so every invocation produces a TOOL span.
  * Preserves the tool's prototype chain — only `run` is replaced.
@@ -94,7 +92,7 @@ export function wrapRunnableTools(
       };
       if (toolUseId) attrs[SpanAttributes.LLM_REQUEST_TOOL_ID] = toolUseId;
       if (traceContent) {
-        attrs.input = safeStringify(input, MAX_TOOL_ATTR_LENGTH);
+        attrs.input = safeStringify(input);
       }
 
       const span = tracer.startSpan(
@@ -109,10 +107,7 @@ export function wrapRunnableTools(
           originalRun.call(this, input, runContext),
         );
         if (traceContent) {
-          span.setAttribute(
-            "output",
-            safeStringify(result, MAX_TOOL_ATTR_LENGTH),
-          );
+          span.setAttribute("output", safeStringify(result));
         }
         span.setStatus({ code: SpanStatusCode.OK });
         return result;

@@ -20,8 +20,9 @@ import {
   NETRA_SPAN_NAME,
 } from "./constants";
 import { Logger } from "../../logger";
+import { safeStringify } from "../../utils/serialization";
 import { AgentSpan, SpanData } from "./types";
-import { extractContentString, extractInstructions, safeJsonStringify } from "./utils";
+import { extractContentString, extractInstructions } from "./utils";
 
 export function setSpanDataAttributes(
   otelSpan: OTelSpan,
@@ -123,12 +124,12 @@ function setGenerationAttributes(span: OTelSpan, data: SpanData, systemName: str
       span.setAttribute(SpanAttributes.LLM_PRESENCE_PENALTY, Number(config.presence_penalty));
     }
     if (config.stop !== undefined) {
-      span.setAttribute(SpanAttributes.LLM_CHAT_STOP_SEQUENCES, safeJsonStringify(config.stop));
+      span.setAttribute(SpanAttributes.LLM_CHAT_STOP_SEQUENCES, safeStringify(config.stop));
     }
     if (config.reasoning_effort !== undefined) {
       span.setAttribute(SpanAttributes.LLM_REQUEST_REASONING_EFFORT, String(config.reasoning_effort));
     } else if (config.reasoning !== undefined) {
-      span.setAttribute(SpanAttributes.LLM_REQUEST_REASONING_EFFORT, safeJsonStringify(config.reasoning));
+      span.setAttribute(SpanAttributes.LLM_REQUEST_REASONING_EFFORT, safeStringify(config.reasoning));
     }
   }
 
@@ -202,11 +203,11 @@ function setFunctionAttributes(span: OTelSpan, data: SpanData): void {
   }
   if (data.input !== undefined) {
     span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.role`, "tool");
-    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.content`, safeJsonStringify(data.input));
+    span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.content`, safeStringify(data.input));
   }
   if (data.output !== undefined) {
     span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.0.role`, "tool");
-    span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.0.content`, safeJsonStringify(data.output));
+    span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.0.content`, safeStringify(data.output));
   }
 }
 
@@ -240,7 +241,7 @@ function setCustomAttributes(span: OTelSpan, data: SpanData): void {
     span.setAttribute(NETRA_SPAN_NAME, data.name);
   }
   if (data.data !== undefined) {
-    span.setAttribute(NETRA_CUSTOM_DATA, safeJsonStringify(data.data));
+    span.setAttribute(NETRA_CUSTOM_DATA, safeStringify(data.data));
   }
 }
 
@@ -342,7 +343,7 @@ function setResponseObjectAttributes(span: OTelSpan, response: unknown): void {
     span.setAttribute(SpanAttributes.LLM_PRESENCE_PENALTY, resp.presence_penalty);
   }
   if (resp.reasoning !== undefined) {
-    span.setAttribute(SpanAttributes.LLM_REQUEST_REASONING_EFFORT, safeJsonStringify(resp.reasoning));
+    span.setAttribute(SpanAttributes.LLM_REQUEST_REASONING_EFFORT, safeStringify(resp.reasoning));
   }
 
   if (resp.usage) {
@@ -398,7 +399,7 @@ function setIndexedPromptAttributes(span: OTelSpan, input: unknown, startIndex =
       span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.${index}.role`, "assistant");
       span.setAttribute(
         `${SpanAttributes.LLM_PROMPTS}.${index}.content`,
-        safeJsonStringify({ name: msg.name, arguments: msg.arguments }),
+        safeStringify({ name: msg.name, arguments: msg.arguments }),
       );
     } else if (msgType === "function_call_output" || msgType === "function_call_result") {
       span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.${index}.role`, "tool");
@@ -456,7 +457,7 @@ function setIndexedCompletionAttributes(span: OTelSpan, responseData: unknown): 
         span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.${index}.role`, "assistant");
         span.setAttribute(
           `${SpanAttributes.LLM_COMPLETIONS}.${index}.content`,
-          safeJsonStringify({ name: element.name, arguments: element.arguments }),
+          safeStringify({ name: element.name, arguments: element.arguments }),
         );
         const toolCallId = element.call_id || element.id;
         if (toolCallId) {
@@ -496,7 +497,7 @@ function setIndexedCompletionAttributes(span: OTelSpan, responseData: unknown): 
             span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.${index}.role`, "assistant");
             span.setAttribute(
               `${SpanAttributes.LLM_COMPLETIONS}.${index}.content`,
-              safeJsonStringify({ name: func.name ?? "", arguments: func.arguments ?? "" }),
+              safeStringify({ name: func.name ?? "", arguments: func.arguments ?? "" }),
             );
             if (tc.id) {
               span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.${index}.tool_call_id`, String(tc.id));
