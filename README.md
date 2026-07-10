@@ -189,20 +189,19 @@ async function generateContent(prompt: string) {
 
 Fetch prompt versions from Prompt Studio via `Netra.prompts.getPrompt()`. Caching is **opt-in per call** — omit `useCache` (or set it to `false`) to always hit the API.
 
-Set a global default TTL at init with `cacheTtlSeconds` (default: **60** seconds), or override TTL for a single call with `cacheTtl`.
+Default TTL is **60 seconds** (`PROMPT_CACHE_TTL_SECONDS`). Override TTL for a single call with `cacheTtl`.
 
 ```typescript
 import { Netra } from "netra-sdk";
 
 await Netra.init({
   appName: "my-ai-app",
-  cacheTtlSeconds: 60, // optional; env: NETRA_CACHE_TTL_SECONDS
 });
 
 // Always fetches from the API (default)
 const prompt = await Netra.prompts.getPrompt({ name: "my-prompt" });
 
-// Cached for 60s (global default TTL)
+// Cached for 60s (default TTL)
 const cached = await Netra.prompts.getPrompt({
   name: "my-prompt",
   useCache: true,
@@ -229,7 +228,6 @@ You can configure the SDK using environment variables:
 | `NETRA_APP_NAME` | Name of your application |
 | `NETRA_ENV` | Environment (e.g., prod, dev) |
 | `NETRA_TRACE_CONTENT` | Capture prompt/completion content (default: true) |
-| `NETRA_CACHE_TTL_SECONDS` | Default TTL in seconds for opt-in SDK read caches (default: 60) |
 
 ## 🤝 License
 

@@ -66,6 +66,7 @@ export {
   Usage,
   // Prompts API
   Prompts,
+  PROMPT_CACHE_TTL_SECONDS,
   // Models API
   Models,
   MODEL_PRICING_CACHE_TTL_SECONDS,
@@ -163,8 +164,6 @@ export class Netra {
 
   /**
    * Initialize the Netra SDK.
-   *
-   * @param config.cacheTtlSeconds - Default TTL in seconds for opt-in read caches (default: 60, env: NETRA_CACHE_TTL_SECONDS)
    */
   static async init(config: NetraConfig = {}): Promise<void> {
     if (this._initialized) {

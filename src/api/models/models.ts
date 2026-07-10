@@ -26,8 +26,7 @@ export interface GetModelPricingParams {
   useCache?: boolean;
   /**
    * Per-call TTL in seconds.
-   * When omitted with useCache: true, uses MODEL_PRICING_CACHE_TTL_SECONDS (300),
-   * NOT Config.cacheTtlSeconds.
+   * When omitted with useCache: true, uses MODEL_PRICING_CACHE_TTL_SECONDS (300).
    */
   cacheTtl?: number;
 }

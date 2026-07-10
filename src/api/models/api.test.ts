@@ -26,7 +26,7 @@ describe("Models.getModelPricing caching", () => {
   let getModelPricing: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    const config = new Config({ cacheTtlSeconds: 60 });
+    const config = new Config();
     models = new Models(config);
     getModelPricing = vi.fn();
     (models as unknown as { client: ModelsHttpClient }).client = {

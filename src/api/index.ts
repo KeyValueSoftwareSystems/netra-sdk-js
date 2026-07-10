@@ -66,7 +66,7 @@ export type {
 } from "./dashboard";
 
 // Prompts API
-export { Prompts } from "./prompts";
+export { Prompts, PROMPT_CACHE_TTL_SECONDS } from "./prompts";
 export type { GetPromptParams, PromptResponse } from "./prompts";
 
 // Models API

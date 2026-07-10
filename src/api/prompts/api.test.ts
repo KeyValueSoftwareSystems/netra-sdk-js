@@ -8,7 +8,7 @@ describe("Prompts.getPrompt caching", () => {
   let getPromptVersion: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    const config = new Config({ cacheTtlSeconds: 60 });
+    const config = new Config();
     prompts = new Prompts(config);
     getPromptVersion = vi.fn();
     (prompts as unknown as { client: PromptsHttpClient }).client = {

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
+
 ## [1.1.0-beta.1] - 2026-06-09
 
 ### Fixed
