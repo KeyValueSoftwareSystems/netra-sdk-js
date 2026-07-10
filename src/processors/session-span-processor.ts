@@ -144,10 +144,6 @@ export class SessionSpanProcessor implements SpanProcessor {
       span.setAttribute("library.name", Config.LIBRARY_NAME);
       span.setAttribute("library.version", Config.LIBRARY_VERSION);
       span.setAttribute("sdk.name", Config.SDK_NAME);
-      // Intentional: set per-span in addition to OTEL_RESOURCE_ATTRIBUTES
-      // because this processor may be added to a pre-existing TracerProvider
-      // whose Resource was already frozen without these attributes.
-      span.setAttribute("deployment.environment", this.environment);
 
       // Get baggage from the parent context (or current if not provided)
       const ctxToUse = parentContext || context.active();
