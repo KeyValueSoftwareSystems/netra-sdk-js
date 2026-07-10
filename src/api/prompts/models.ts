@@ -5,6 +5,10 @@
 export interface GetPromptParams {
   name: string;
   label?: string;
+  /** When true, serve from in-memory cache when available (default: false). */
+  useCache?: boolean;
+  /** Per-call TTL in seconds; falls back to init `cacheTtlSeconds` when omitted. */
+  cacheTtl?: number;
 }
 
 /**

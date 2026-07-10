@@ -155,6 +155,11 @@ export class Netra {
     return this._initialized;
   }
 
+  /**
+   * Initialize the Netra SDK.
+   *
+   * @param config.cacheTtlSeconds - Default TTL in seconds for opt-in read caches (default: 60, env: NETRA_CACHE_TTL_SECONDS)
+   */
   static async init(config: NetraConfig = {}): Promise<void> {
     if (this._initialized) {
       Logger.warn("Netra.init() called more than once; ignoring subsequent calls.");
@@ -337,6 +342,12 @@ export class Netra {
       ]);
     } catch (e) {
       Logger.error("Error during Netra trace shutdown:", e);
+    }
+
+    try {
+      this.prompts?.clearCache();
+    } catch (e) {
+      Logger.error("Error clearing SDK API caches:", e);
     }
 
     this._initialized = false;
