@@ -32,6 +32,11 @@ describe("Netra.shutdown cache clearing", () => {
 
     await Netra.shutdown();
 
+    await Netra.init({ cacheTtlSeconds: 60 });
+    (Netra.prompts as unknown as { client: PromptsHttpClient }).client = {
+      getPromptVersion,
+    } as unknown as PromptsHttpClient;
+
     await Netra.prompts.getPrompt({ name: "my-prompt", useCache: true });
     expect(getPromptVersion).toHaveBeenCalledTimes(2);
   });

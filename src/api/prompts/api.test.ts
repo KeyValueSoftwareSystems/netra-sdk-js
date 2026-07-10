@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Config } from "../../config";
 import { Prompts } from "./api";
 import { PromptsHttpClient } from "./client";
@@ -14,6 +14,10 @@ describe("Prompts.getPrompt caching", () => {
     (prompts as unknown as { client: PromptsHttpClient }).client = {
       getPromptVersion,
     } as unknown as PromptsHttpClient;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("calls HTTP on every request when useCache is omitted", async () => {
@@ -80,6 +84,27 @@ describe("Prompts.getPrompt caching", () => {
       cacheTtl: 30,
     });
 
+    expect(getPromptVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires per-call cacheTtl before the global default TTL", async () => {
+    vi.useFakeTimers();
+    getPromptVersion.mockResolvedValue({ data: { template: "v1" } });
+
+    await prompts.getPrompt({
+      name: "my-prompt",
+      useCache: true,
+      cacheTtl: 1,
+    });
+    expect(getPromptVersion).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1001);
+
+    await prompts.getPrompt({
+      name: "my-prompt",
+      useCache: true,
+      cacheTtl: 1,
+    });
     expect(getPromptVersion).toHaveBeenCalledTimes(2);
   });
 
