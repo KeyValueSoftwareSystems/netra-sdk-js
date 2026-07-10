@@ -47,7 +47,7 @@ function addInputAttributes(span: Span, args: any[], entityType: string): void {
 
 function addOutputAttributes(span: Span, result: any): void {
   // Skip if the user already set output explicitly inside the decorated function
-  if (!result || spanHasOutput(span)) return;
+  if (result === undefined || spanHasOutput(span)) return;
   try {
     span.setAttribute("output", serializeValue(result, Config.ATTRIBUTE_MAX_LEN));
   } catch (e) {
