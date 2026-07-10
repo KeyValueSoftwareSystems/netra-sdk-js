@@ -30,6 +30,9 @@ export function safeStringify(
   let result: string;
   try {
     result = JSON.stringify(value, (_key, val) => {
+      if (typeof val === "string" && maxLength && val.length > maxLength) {
+        return truncate(val, maxLength);
+      }
       if (typeof val === "function")
         return `[Function: ${val.name || "anonymous"}]`;
       if (typeof val === "symbol") return val.toString();

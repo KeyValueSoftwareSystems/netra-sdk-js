@@ -16,6 +16,9 @@ const _USAGE_COMPLETION_TOKENS = "gen_ai.usage.completion_tokens";
 const NETRA_USER_INPUT = "netra.user.input";
 const NETRA_USER_OUTPUT = "netra.user.output";
 
+const NETRA_ROOT_INPUT = "netra.root.input";
+const NETRA_ROOT_OUTPUT = "netra.root.output";
+
 const NETRA_ENTITY_INPUT = "netra.entity.input";
 const NETRA_ENTITY_OUTPUT = "netra.entity.output";
 
@@ -72,59 +75,16 @@ export class SpanIOProcessor implements SpanProcessor {
       if (!("output" in attrs)) {
         span.setAttribute("output", "");
       }
+      if (!("conversation" in attrs)) {
+        span.setAttribute("conversation", JSON.stringify([]));
+      }
       this._wrapSetAttribute(span);
     } catch (e) {
       Logger.error("SpanIOProcessor.onStart failed:", e);
     }
   }
 
-  onEnd(span: ReadableSpan): void {
-    try {
-      const attrs =
-        (span as any)._attributes ?? (span as any).attributes;
-      if (!attrs || typeof attrs !== "object") {
-        Logger.debug(
-          "SpanIOProcessor.onEnd: could not access span attributes — OTel SDK internal API may have changed",
-        );
-        return;
-      }
-
-      try {
-        if (NETRA_USER_INPUT in attrs) {
-          const userInput = attrs[NETRA_USER_INPUT];
-          if (!isEmpty(userInput)) {
-            attrs["input"] = userInput;
-          }
-          delete attrs[NETRA_USER_INPUT];
-        }
-      } catch (e) {
-        Logger.warn(
-          "SpanIOProcessor.onEnd: could not promote netra.user.input → input",
-          e,
-        );
-      }
-
-      try {
-        if (NETRA_USER_OUTPUT in attrs) {
-          const userOutput = attrs[NETRA_USER_OUTPUT];
-          if (!isEmpty(userOutput)) {
-            attrs["output"] = userOutput;
-          }
-          delete attrs[NETRA_USER_OUTPUT];
-        }
-      } catch (e) {
-        Logger.warn(
-          "SpanIOProcessor.onEnd: could not promote netra.user.output → output",
-          e,
-        );
-      }
-    } catch (e) {
-      Logger.error(
-        "SpanIOProcessor.onEnd: unexpected error during netra.user promotion",
-        e,
-      );
-    }
-  }
+  onEnd(_span: ReadableSpan): void {}
 
   shutdown(): Promise<void> {
     return Promise.resolve();
@@ -143,6 +103,15 @@ export class SpanIOProcessor implements SpanProcessor {
     let genAiOwnsInput = false;
     let genAiOwnsOutput = false;
 
+    let userOwnsInput = false;
+    let userOwnsOutput = false;
+    let rootOwnsInput = false;
+    let rootOwnsOutput = false;
+
+    const inputLocked = (): boolean => rootOwnsInput || userOwnsInput;
+
+    const outputLocked = (): boolean => rootOwnsOutput || userOwnsOutput;
+
     const inputIsEmpty = (): boolean =>
       isEmpty(((span as any).attributes ?? {})["input"]);
 
@@ -151,6 +120,48 @@ export class SpanIOProcessor implements SpanProcessor {
 
     const patched = (key: string, value: AttributeValue): Span => {
       try {
+        // Priority 1: netra.root.input/output (setRootInput/setRootOutput)
+        if (key === NETRA_ROOT_INPUT) {
+          rootOwnsInput = true;
+          return original("input", value);
+        }
+        if (key === NETRA_ROOT_OUTPUT) {
+          rootOwnsOutput = true;
+          return original("output", value);
+        }
+
+        // Priority 2: netra.user.input/output (setInput/setOutput)
+        if (key === NETRA_USER_INPUT) {
+          if (!rootOwnsInput) {
+            userOwnsInput = true;
+            return original("input", value);
+          }
+          return span;
+        }
+        if (key === NETRA_USER_OUTPUT) {
+          if (!rootOwnsOutput) {
+            userOwnsOutput = true;
+            return original("output", value);
+          }
+          return span;
+        }
+
+        // Priority 3: direct "input"/"output" (decorator auto-capture)
+        if (key === "input") {
+          if (!inputLocked()) {
+            return original("input", value);
+          }
+          return span;
+        }
+        if (key === "output") {
+          if (!outputLocked()) {
+            return original("output", value);
+          }
+          return span;
+        }
+
+        // Priority 4: gen_ai / traceloop instrumentation
+
         // 1. gen_ai.prompt(s).N.{role,content} → accumulate into input
         const promptMatch = _PROMPT_RE.exec(key);
         if (promptMatch) {
@@ -164,7 +175,7 @@ export class SpanIOProcessor implements SpanProcessor {
             prompts.set(idx, entry);
           }
           entry[field] = String(value);
-          if (inputIsEmpty() || genAiOwnsInput) {
+          if (!inputLocked() && (inputIsEmpty() || genAiOwnsInput)) {
             original("input", buildMessages(prompts));
             genAiOwnsInput = true;
           }
@@ -184,7 +195,7 @@ export class SpanIOProcessor implements SpanProcessor {
             completions.set(idx, entry);
           }
           entry[field] = String(value);
-          if (outputIsEmpty() || genAiOwnsOutput) {
+          if (!outputLocked() && (outputIsEmpty() || genAiOwnsOutput)) {
             original("output", buildMessages(completions));
             genAiOwnsOutput = true;
           }
@@ -193,7 +204,7 @@ export class SpanIOProcessor implements SpanProcessor {
 
         // 3. traceloop.entity.input → extract inputs → set input
         if (key === "traceloop.entity.input") {
-          if (inputIsEmpty()) {
+          if (!inputLocked() && inputIsEmpty()) {
             original("input", extractTraceloopInput(value));
           }
           return span;
@@ -201,7 +212,7 @@ export class SpanIOProcessor implements SpanProcessor {
 
         // 4. traceloop.entity.output → extract outputs → set output
         if (key === "traceloop.entity.output") {
-          if (outputIsEmpty()) {
+          if (!outputLocked() && outputIsEmpty()) {
             original("output", extractTraceloopOutput(value));
           }
           return span;
@@ -209,7 +220,7 @@ export class SpanIOProcessor implements SpanProcessor {
 
         // 5. netra.entity.input → extract inputs → set input (LangGraph)
         if (key === NETRA_ENTITY_INPUT) {
-          if (inputIsEmpty()) {
+          if (!inputLocked() && inputIsEmpty()) {
             original("input", extractTraceloopInput(value));
           }
           return span;
@@ -217,7 +228,7 @@ export class SpanIOProcessor implements SpanProcessor {
 
         // 6. netra.entity.output → extract outputs → set output (LangGraph)
         if (key === NETRA_ENTITY_OUTPUT) {
-          if (outputIsEmpty()) {
+          if (!outputLocked() && outputIsEmpty()) {
             original("output", extractTraceloopOutput(value));
           }
           return span;
