@@ -74,6 +74,28 @@ function setAgentAttributes(span: OTelSpan, data: SpanData): void {
   }
 }
 
+/**
+ * The Agents SDK's OpenAIChatCompletionsModel wraps the raw Chat Completions
+ * response in a single-element array: `span.spanData.output = [response]`.
+ * This helper unwraps that specific shape so `setGenerationAttributes` can read
+ * `usage`/`choices` off the response object directly.
+ *
+ * It deliberately leaves other array shapes untouched — notably the AI SDK
+ * (aisdk/Claude) output, which is a multi-element array of output items
+ * (`[{type:"message"...}, {type:"function_call"...}]`). That shape is handled
+ * downstream by `setIndexedCompletionAttributes`.
+ */
+function unwrapGenerationOutput(output: unknown): unknown {
+  const isSingleWrappedResponse =
+    Array.isArray(output)
+    && output.length === 1
+    && output[0]
+    && typeof output[0] === "object"
+    && ("choices" in output[0] || "usage" in output[0]);
+
+  return isSingleWrappedResponse ? (output as unknown[])[0] : output;
+}
+
 function setGenerationAttributes(span: OTelSpan, data: SpanData, systemName: string): void {
   span.setAttribute(SpanAttributes.LLM_SYSTEM, systemName);
   span.setAttribute(SpanAttributes.LLM_REQUEST_TYPE, "chat");
@@ -110,15 +132,24 @@ function setGenerationAttributes(span: OTelSpan, data: SpanData, systemName: str
     }
   }
 
+  // The SDK may provide output as [rawChatCompletionResponse] (array-wrapped).
+  // Unwrap it so we can extract usage and completions from the raw response.
+  const effectiveOutput = unwrapGenerationOutput(data.output);
+
   if (data.usage) {
     setUsageAttributes(span, data.usage);
+  } else if (effectiveOutput && typeof effectiveOutput === "object" && !Array.isArray(effectiveOutput)) {
+    const respUsage = (effectiveOutput as Record<string, unknown>).usage;
+    if (respUsage && typeof respUsage === "object") {
+      setUsageAttributes(span, respUsage as NonNullable<SpanData["usage"]>);
+    }
   }
 
   if (data.input !== undefined) {
     setIndexedPromptAttributes(span, data.input);
   }
-  if (data.output !== undefined) {
-    setIndexedCompletionAttributes(span, data.output);
+  if (effectiveOutput !== undefined) {
+    setIndexedCompletionAttributes(span, effectiveOutput);
   }
 }
 
@@ -217,16 +248,22 @@ function setUsageAttributes(
   span: OTelSpan,
   usage: NonNullable<SpanData["usage"]>,
 ): void {
-  if (usage.input_tokens !== undefined) {
-    span.setAttribute(SpanAttributes.LLM_USAGE_PROMPT_TOKENS, usage.input_tokens);
+  const promptTokens = usage.input_tokens ?? usage.prompt_tokens;
+  const completionTokens = usage.output_tokens ?? usage.completion_tokens;
+  const totalTokens = usage.total_tokens;
+
+  if (promptTokens !== undefined) {
+    span.setAttribute(SpanAttributes.LLM_USAGE_PROMPT_TOKENS, promptTokens);
   }
-  if (usage.output_tokens !== undefined) {
-    span.setAttribute(SpanAttributes.LLM_USAGE_COMPLETION_TOKENS, usage.output_tokens);
+  if (completionTokens !== undefined) {
+    span.setAttribute(SpanAttributes.LLM_USAGE_COMPLETION_TOKENS, completionTokens);
   }
-  if (usage.input_tokens !== undefined && usage.output_tokens !== undefined) {
+  if (totalTokens !== undefined) {
+    span.setAttribute(SpanAttributes.LLM_USAGE_TOTAL_TOKENS, totalTokens);
+  } else if (promptTokens !== undefined && completionTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_TOTAL_TOKENS,
-      usage.input_tokens + usage.output_tokens,
+      promptTokens + completionTokens,
     );
   }
 
@@ -240,8 +277,8 @@ function setUsageAttributes(
     }
   }
 
-  if (usage.input_tokens_details) {
-    const inputDetails = usage.input_tokens_details;
+  const inputDetails = usage.input_tokens_details ?? usage.prompt_tokens_details;
+  if (inputDetails) {
     if (inputDetails.cached_tokens !== undefined) {
       span.setAttribute(SpanAttributes.LLM_USAGE_CACHE_READ_INPUT_TOKENS, Number(inputDetails.cached_tokens));
     }
@@ -250,8 +287,8 @@ function setUsageAttributes(
     }
   }
 
-  if (usage.output_tokens_details) {
-    const outputDetails = usage.output_tokens_details;
+  const outputDetails = usage.output_tokens_details ?? usage.completion_tokens_details;
+  if (outputDetails) {
     if (outputDetails.reasoning_tokens !== undefined) {
       span.setAttribute(SpanAttributes.LLM_USAGE_REASONING_TOKENS, Number(outputDetails.reasoning_tokens));
     }
@@ -381,8 +418,23 @@ function setIndexedPromptAttributes(span: OTelSpan, input: unknown, startIndex =
 }
 
 function setIndexedCompletionAttributes(span: OTelSpan, responseData: unknown): void {
-  if (!responseData || typeof responseData !== "object") return;
-  const resp = responseData as Record<string, unknown>;
+  if (!responseData) return;
+
+  if (typeof responseData === "string") {
+    span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.0.role`, "assistant");
+    span.setAttribute(`${SpanAttributes.LLM_COMPLETIONS}.0.content`, responseData);
+    return;
+  }
+
+  if (typeof responseData !== "object") return;
+
+  // AI SDK (aisdk/Claude) generation spans set spanData.output to a bare array
+  // of output items ([{type:'message',...}, {type:'function_call',...}]) rather
+  // than an object with an `.output` property. Normalize to { output: [...] } so
+  // the existing message/function_call extraction below handles it.
+  const resp = Array.isArray(responseData)
+    ? { output: responseData }
+    : (responseData as Record<string, unknown>);
 
   if (Array.isArray(resp.output)) {
     let index = 0;
