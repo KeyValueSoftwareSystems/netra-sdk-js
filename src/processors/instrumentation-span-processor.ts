@@ -69,14 +69,14 @@ export class InstrumentationSpanProcessor implements SpanProcessor {
                 return base;
               }
             } catch {
-              Logger.warn("InstrumentationSpanProcessor: Error extracting base name:", name);
+              Logger.debug("InstrumentationSpanProcessor: Error extracting base name:", name);
             }
           }
           return name;
         }
       }
     } catch {
-      Logger.warn("InstrumentationSpanProcessor: Error detecting instrumentation name:", span);
+      Logger.debug("InstrumentationSpanProcessor: Error detecting instrumentation name");
     }
     return null;
   }

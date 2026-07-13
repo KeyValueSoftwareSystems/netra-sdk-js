@@ -106,12 +106,6 @@ export class Config {
   static readonly LIBRARY_NAME = "netra";
   static readonly LIBRARY_VERSION = SDK_VERSION;
   static readonly TRIAL_BLOCK_DURATION_SECONDS = 900; // 15 minutes
-  static readonly ATTRIBUTE_MAX_LEN = parseInt(
-    process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000",
-  );
-  static readonly CONVERSATION_MAX_LEN = parseInt(
-    process.env.NETRA_CONVERSATION_CONTENT_MAX_LEN || "50000",
-  );
   static readonly SPAN_ATTRIBUTE_MAX_SIZE = parseInt(
     process.env.NETRA_SPAN_ATTRIBUTE_MAX_SIZE || "30000",
   );

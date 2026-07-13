@@ -8,7 +8,7 @@ const MINIMAL_TRUNCATED_OBJECT = '{"__truncated__":true}';
 const MINIMAL_TRUNCATED_ARRAY = '[{"__truncated__":true}]';
 const MIN_JSON_TRUNCATION_LENGTH = MINIMAL_TRUNCATED_ARRAY.length; // 24
 
-const RETRY_RATIOS = [0.8, 0.6, 0.4, 0.2, 0.1];
+const RETRY_RATIOS = [0.7, 0.5, 0.3];
 
 export interface TruncatingSerializerConfig {
   maxAttributeSize: number;
@@ -51,8 +51,8 @@ function tryRepairAndFit(
     if (result.length <= budget) return result;
   } catch {
     Logger.debug("Failed to repair and fit JSON at cut length", {
-      json,
-      cutLen,
+      length: json.length,
+      cutLength: cutLen,
     });
   }
   return null;
@@ -151,18 +151,19 @@ export function serializeAttribute(
   }
 
   if (Array.isArray(value)) {
-    if (
-      value.every(
-        (v) => v == null || typeof v === "number" || typeof v === "boolean",
-      )
-    ) {
+    if (value.every((v) => v == null || typeof v === "number")) {
       const serializedLen = estimateArraySize(value);
       if (serializedLen <= maxSize) {
         return value as Array<null | undefined | number>;
       }
+    } else if (value.every((v) => v == null || typeof v === "boolean")) {
+      const serializedLen = estimateArraySize(value);
+      if (serializedLen <= maxSize) {
+        return value as Array<null | undefined | boolean>;
+      }
     } else if (value.every((v) => v == null || typeof v === "string")) {
       // `s == null` intentionally matches both `null` and `undefined`.
-      // In arrays, both `null` and`undefined` is serialized as `null`,
+      // In arrays, both `null` and `undefined` are serialized as `null`,
       // so both contribute 4 characters.
       const serializedLen = value.reduce(
         (sum, s) => sum + (s == null ? 4 : (s as string).length + 2),

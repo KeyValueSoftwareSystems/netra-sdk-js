@@ -211,7 +211,7 @@ export function buildInputMessages(
             tool_use_id: block.tool_use_id,
             content: block.content,
             is_error: block.is_error ?? false,
-          })
+          }),
         });
       }
     }

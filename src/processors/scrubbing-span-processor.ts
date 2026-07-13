@@ -6,6 +6,10 @@
  * phone numbers, SSNs, credit cards, passwords, bearer tokens, and other
  * sensitive information.
  *
+ * Handles both pre-serialized string values (the normal path when
+ * SerializationSpanProcessor is active) and raw objects/arrays (defensive
+ * fallback for custom pipelines that skip serialization).
+ *
  * Wraps in onStart to avoid unreliable _attributes mutation in onEnd.
  * MUST be registered BEFORE SerializationSpanProcessor so it forms the
  * innermost layer (closest to OTel storage). Because serialization wraps
@@ -101,26 +105,39 @@ function scrubStringValue(value: string): string {
   return scrubbed;
 }
 
-function scrubValue(key: string, value: AttributeValue): AttributeValue {
-  if (
-    isSensitiveKey(key) &&
-    typeof value !== "object" &&
-    !Array.isArray(value)
-  ) {
+function scrubDict(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    result[k] = scrubAny(k, v);
+  }
+  return result;
+}
+
+function scrubList(arr: unknown[]): unknown[] {
+  return arr.map((item) => {
+    if (typeof item === "string") return scrubStringValue(item);
+    if (Array.isArray(item)) return scrubList(item);
+    if (typeof item === "object" && item !== null) {
+      return scrubDict(item as Record<string, unknown>);
+    }
+    return item;
+  });
+}
+
+function scrubAny(key: string, value: unknown): unknown {
+  if (isSensitiveKey(key) && typeof value !== "object" && !Array.isArray(value)) {
     return SCRUB_REPLACEMENT;
   }
-
-  if (typeof value === "string") {
-    return scrubStringValue(value);
+  if (typeof value === "string") return scrubStringValue(value);
+  if (Array.isArray(value)) return scrubList(value);
+  if (typeof value === "object" && value !== null) {
+    return scrubDict(value as Record<string, unknown>);
   }
-
-  if (Array.isArray(value)) {
-    return value.map((item) =>
-      typeof item === "string" ? scrubStringValue(item) : item,
-    ) as AttributeValue;
-  }
-
   return value;
+}
+
+function scrubValue(key: string, value: AttributeValue): AttributeValue {
+  return scrubAny(key, value) as AttributeValue;
 }
 
 export class ScrubbingSpanProcessor implements SpanProcessor {
