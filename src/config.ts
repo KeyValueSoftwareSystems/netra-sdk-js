@@ -19,8 +19,6 @@ export interface NetraConfig {
   instruments?: Set<NetraInstruments>;
   blockInstruments?: Set<NetraInstruments>;
   rootInstruments?: Set<NetraInstruments>;
-  /** Default TTL in seconds for opt-in SDK read caches (env: NETRA_CACHE_TTL_SECONDS). */
-  cacheTtlSeconds?: number;
 }
 
 export enum NetraInstruments {
@@ -130,7 +128,6 @@ export class Config {
   environment: string;
   resourceAttributes: Record<string, any>;
   blockedSpans?: string[];
-  cacheTtlSeconds: number;
 
   constructor(config: NetraConfig = {}) {
     this.appName = this._getAppName(config.appName);
@@ -167,11 +164,6 @@ export class Config {
       config.resourceAttributes,
     );
     this.blockedSpans = config.blockedSpans;
-    this.cacheTtlSeconds = this._getIntConfig(
-      config.cacheTtlSeconds,
-      "NETRA_CACHE_TTL_SECONDS",
-      60,
-    );
 
     this._validateApiKey();
     this._setupAuthentication();
@@ -249,24 +241,6 @@ export class Config {
     if (!this.headers[authKey]) {
       this.headers[authKey] = authValue;
     }
-  }
-
-  private _getIntConfig(
-    param: number | undefined,
-    envVar: string,
-    defaultValue: number,
-  ): number {
-    if (param !== undefined) {
-      return param;
-    }
-
-    const envValue = process.env[envVar];
-    if (envValue === undefined) {
-      return defaultValue;
-    }
-
-    const parsed = parseInt(envValue, 10);
-    return Number.isNaN(parsed) ? defaultValue : parsed;
   }
 
   private _getBoolConfig(

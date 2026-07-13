@@ -28,7 +28,7 @@ describe("ModelsHttpClient.getModelPricing", () => {
   let logError: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    client = new ModelsHttpClient(new Config({ cacheTtlSeconds: 60 }));
+    client = new ModelsHttpClient(new Config());
     get = vi.spyOn(client, "get");
     isInitialized = vi.spyOn(client, "isInitialized").mockReturnValue(true);
     logError = vi.spyOn(Logger, "error").mockImplementation(() => {});

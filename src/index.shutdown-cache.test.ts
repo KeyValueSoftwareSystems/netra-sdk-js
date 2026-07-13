@@ -18,7 +18,7 @@ describe("Netra.shutdown cache clearing", () => {
   });
 
   it("clears prompts cache on shutdown so the next cached getPrompt hits HTTP", async () => {
-    await Netra.init({ cacheTtlSeconds: 60 });
+    await Netra.init({});
 
     const getPromptVersion = vi
       .fn()
@@ -33,7 +33,7 @@ describe("Netra.shutdown cache clearing", () => {
 
     await Netra.shutdown();
 
-    await Netra.init({ cacheTtlSeconds: 60 });
+    await Netra.init({});
     (Netra.prompts as unknown as { client: PromptsHttpClient }).client = {
       getPromptVersion,
     } as unknown as PromptsHttpClient;
@@ -43,7 +43,7 @@ describe("Netra.shutdown cache clearing", () => {
   });
 
   it("clears models cache on shutdown so the next cached getModelPricing hits HTTP", async () => {
-    await Netra.init({ cacheTtlSeconds: 60 });
+    await Netra.init({});
 
     const pricing = [
       {
@@ -64,7 +64,7 @@ describe("Netra.shutdown cache clearing", () => {
 
     await Netra.shutdown();
 
-    await Netra.init({ cacheTtlSeconds: 60 });
+    await Netra.init({});
     (Netra.models as unknown as { client: ModelsHttpClient }).client = {
       getModelPricing,
     } as unknown as ModelsHttpClient;
