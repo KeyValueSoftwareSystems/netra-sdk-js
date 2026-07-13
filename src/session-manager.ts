@@ -295,7 +295,7 @@ export class SessionManager {
 
       let existing: ConversationEntry[] = [];
       try {
-        const raw = (span as any)._attributes?.["conversation"];
+        const raw = (span as any).attributes?.["conversation"];
         if (typeof raw === "string") {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {

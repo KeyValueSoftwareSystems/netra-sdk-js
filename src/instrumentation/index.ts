@@ -811,13 +811,16 @@ function addCustomSpanProcessors(
     //
     //   External setAttribute call
     //     → SpanIOProcessor (outermost: routes/assembles IO attributes)
-    //       → ScrubbingSpanProcessor (middle: scrubs sensitive data)
-    //         → SerializationSpanProcessor (innermost: truncates values)
+    //       → SerializationSpanProcessor (middle: serializes & truncates values)
+    //         → ScrubbingSpanProcessor (innermost: scrubs sensitive data)
     //           → OTel original setAttribute
     //
-    // When SpanIOProcessor assembles a derived value (e.g. combined `input` JSON)
-    // and writes it via its saved `original` reference, that reference points to
-    // the Scrubbing wrapper — so assembled values still get scrubbed and truncated.
+    // Serialization runs before scrubbing so complex objects are converted to
+    // JSON strings first, allowing the regex-based scrubber to detect sensitive
+    // patterns in the serialized text. When SpanIOProcessor assembles a derived
+    // value (e.g. combined `input` JSON) and writes it via its saved `original`
+    // reference, that reference points to the Serialization wrapper — so
+    // assembled values still get serialized, scrubbed, and stored.
     //
     // Processors that only CALL setAttribute (not wrap) must be registered AFTER
     // all wrapping processors so their writes flow through the full chain.
@@ -834,21 +837,23 @@ function addCustomSpanProcessors(
       provider.addSpanProcessor(rootFilterProcessor);
     }
 
-    // 1. Serialization Span Processor (wraps setAttribute — innermost layer)
-    //    Truncates/serializes every attribute value at write time.
-    const serializationProcessor = new SerializationSpanProcessor();
-    provider.addSpanProcessor(serializationProcessor);
-
-    // 2. Scrubbing Span Processor (wraps setAttribute — middle layer)
-    //    Scrubs sensitive data before it reaches the serialization layer.
+    // 1. Scrubbing Span Processor (wraps setAttribute — innermost layer)
+    //    Scrubs sensitive data from already-serialized string values just
+    //    before they reach OTel storage.
     if (config.enableScrubbing) {
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);
     }
 
+    // 2. Serialization Span Processor (wraps setAttribute — middle layer)
+    //    Serializes objects to JSON strings and truncates values at write time.
+    //    Runs before scrubbing so the scrubber receives string values.
+    const serializationProcessor = new SerializationSpanProcessor();
+    provider.addSpanProcessor(serializationProcessor);
+
     // 3. Span I/O Processor (wraps setAttribute — outermost layer)
     //    Routes IO-related attributes, assembles input/output from gen_ai.*
-    //    and traceloop.* keys. Assembled values flow through scrub → serialize.
+    //    and traceloop.* keys. Assembled values flow through serialize → scrub.
     const spanIOProcessor = new SpanIOProcessor();
     provider.addSpanProcessor(spanIOProcessor);
 

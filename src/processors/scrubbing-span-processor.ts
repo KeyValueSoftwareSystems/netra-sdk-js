@@ -7,8 +7,10 @@
  * sensitive information.
  *
  * Wraps in onStart to avoid unreliable _attributes mutation in onEnd.
- * MUST be registered AFTER SerializationSpanProcessor so scrubbing operates
- * on already-serialized string values.
+ * MUST be registered BEFORE SerializationSpanProcessor so it forms the
+ * innermost layer (closest to OTel storage). Because serialization wraps
+ * outside this layer, values are serialized to strings first, then this
+ * processor scrubs sensitive patterns from the resulting string values.
  */
 
 import { AttributeValue, Context, Span } from "@opentelemetry/api";

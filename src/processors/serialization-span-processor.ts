@@ -7,10 +7,12 @@
  * values and `...[TRUNCATED]` suffix for plain strings, aligned with
  * backend behavior.
  *
- * MUST be registered FIRST among setAttribute-wrapping processors so
- * it forms the innermost layer (closest to OTel original). This ensures
- * all values — including those assembled by SpanIOProcessor — pass
- * through truncation before reaching the underlying span storage.
+ * MUST be registered AFTER ScrubbingSpanProcessor so it wraps outside
+ * the scrubbing layer. In the resulting call chain, serialization runs
+ * before scrubbing — converting objects to JSON strings so the
+ * regex-based scrubber can detect sensitive patterns in string form.
+ * All values, including those assembled by SpanIOProcessor, pass
+ * through serialization → scrubbing before reaching OTel storage.
  */
 
 import { AttributeValue, Context, Span } from "@opentelemetry/api";
