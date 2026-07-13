@@ -31,6 +31,13 @@ interface EntityContext {
   spansByName: Map<string, Span[]>;
 }
 
+type ConversationEntry = {
+  type: string;
+  role: string;
+  content: string | Record<string, any>;
+  format: string;
+};
+
 const entityStorage = new AsyncLocalStorage<EntityContext>();
 
 // Global fallback for single-threaded / non-async entry points
@@ -286,29 +293,29 @@ export class SessionManager {
         return;
       }
 
-      let existing: Array<{
-        type: string;
-        role: string;
-        content: string | Record<string, any>;
-        format: string;
-      }> = [];
+      let existing: ConversationEntry[] = [];
       try {
         const raw = (span as any)._attributes?.["conversation"];
         if (typeof raw === "string") {
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) existing = parsed;
+          if (Array.isArray(parsed)) {
+            // Filter out truncation markers injected by the serialization processor
+            existing = parsed.filter(
+              (entry: any) =>
+                !(entry && typeof entry === "object" && entry.__truncated__ === true &&
+                  Object.keys(entry).length === 1),
+            );
+          }
         }
       } catch (e) {
         Logger.warn("addConversation: failed to parse existing conversation, starting fresh:", e);
       }
 
-      const processedContent = content;
-
       existing.push({
         type: conversationType,
         role,
-        content: processedContent,
-        format: typeof processedContent === "string" ? "text" : "json",
+        content,
+        format: typeof content === "string" ? "text" : "json",
       });
 
       const payload = JSON.stringify(existing);
