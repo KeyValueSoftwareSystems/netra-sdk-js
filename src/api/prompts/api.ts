@@ -2,7 +2,11 @@ import { TTLCache } from "../../cache";
 import { Config } from "../../config";
 import { Logger } from "../../logger";
 import { PromptsHttpClient } from "./client";
-import { GetPromptParams, PromptResponse } from "./models";
+import {
+  GetPromptParams,
+  PROMPT_CACHE_TTL_SECONDS,
+  PromptResponse,
+} from "./models";
 
 export class Prompts {
   private config: Config;
@@ -12,7 +16,7 @@ export class Prompts {
   constructor(config: Config) {
     this.config = config;
     this.client = new PromptsHttpClient(config);
-    this.cache = new TTLCache<PromptResponse>(config.cacheTtlSeconds);
+    this.cache = new TTLCache<PromptResponse>(PROMPT_CACHE_TTL_SECONDS);
   }
 
   /** Clear all cached prompt entries. */
@@ -26,7 +30,7 @@ export class Prompts {
    * @param params.name      - Name of the prompt (required)
    * @param params.label     - Label of the prompt version (default: "production")
    * @param params.useCache  - When true, read/write the in-memory cache (default: false)
-   * @param params.cacheTtl  - Per-call cache TTL in seconds (default: init cacheTtlSeconds)
+   * @param params.cacheTtl  - Per-call cache TTL in seconds (default: PROMPT_CACHE_TTL_SECONDS)
    */
   async getPrompt(params: GetPromptParams): Promise<PromptResponse | null> {
     if (!params || typeof params.name !== "string" || !params.name) {
