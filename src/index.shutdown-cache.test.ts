@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ModelsHttpClient } from "./api/models/client";
 import { PromptsHttpClient } from "./api/prompts/client";
 
 vi.mock("./instrumentation", () => ({
@@ -17,7 +18,7 @@ describe("Netra.shutdown cache clearing", () => {
   });
 
   it("clears prompts cache on shutdown so the next cached getPrompt hits HTTP", async () => {
-    await Netra.init({ cacheTtlSeconds: 60 });
+    await Netra.init({});
 
     const getPromptVersion = vi
       .fn()
@@ -32,12 +33,43 @@ describe("Netra.shutdown cache clearing", () => {
 
     await Netra.shutdown();
 
-    await Netra.init({ cacheTtlSeconds: 60 });
+    await Netra.init({});
     (Netra.prompts as unknown as { client: PromptsHttpClient }).client = {
       getPromptVersion,
     } as unknown as PromptsHttpClient;
 
     await Netra.prompts.getPrompt({ name: "my-prompt", useCache: true });
     expect(getPromptVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears models cache on shutdown so the next cached getModelPricing hits HTTP", async () => {
+    await Netra.init({});
+
+    const pricing = [
+      {
+        name: "gpt-4",
+        projectId: null,
+        matchPattern: "gpt-4*",
+        prices: [],
+      },
+    ];
+    const getModelPricing = vi.fn().mockResolvedValue(pricing);
+    (Netra.models as unknown as { client: ModelsHttpClient }).client = {
+      getModelPricing,
+    } as unknown as ModelsHttpClient;
+
+    await Netra.models.getModelPricing({ useCache: true });
+    await Netra.models.getModelPricing({ useCache: true });
+    expect(getModelPricing).toHaveBeenCalledTimes(1);
+
+    await Netra.shutdown();
+
+    await Netra.init({});
+    (Netra.models as unknown as { client: ModelsHttpClient }).client = {
+      getModelPricing,
+    } as unknown as ModelsHttpClient;
+
+    await Netra.models.getModelPricing({ useCache: true });
+    expect(getModelPricing).toHaveBeenCalledTimes(2);
   });
 });
