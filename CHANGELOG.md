@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
+
 ## [1.5.0] - 2026-07-10
 
 ### Added
