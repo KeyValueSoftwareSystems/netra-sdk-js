@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in prompt caching** — `Netra.prompts.getPrompt()` accepts `useCache` and `cacheTtl`. When `useCache` is true, responses are served from an in-memory TTL cache (default TTL: `PROMPT_CACHE_TTL_SECONDS` = 60). Caching is off by default.
+- **Models API** — `Netra.models.getModelPricing()` fetches model pricing (optional `name` filter) with the same opt-in cache pattern (`useCache`, `cacheTtl`; default TTL: `MODEL_PRICING_CACHE_TTL_SECONDS` = 300).
+- **Cache lifecycle** — `Netra.shutdown()` clears prompts and models in-memory caches. `clearCache()` is also available on each client.
+- **Exported cache constants** — `PROMPT_CACHE_TTL_SECONDS` and `MODEL_PRICING_CACHE_TTL_SECONDS` are public exports.
+
 ### Changed
 
 - **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.

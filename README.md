@@ -10,7 +10,7 @@
 - 🔧 **Multi-Provider Support**: Works with OpenAI, Google GenAI, Mistral, Anthropic, and more
 - 📈 **Session Management**: Track user sessions and custom attributes
 - 🌐 **Automatic Instrumentation**: Zero-code instrumentation for popular frameworks and libraries
-- ⚡ **Opt-in Read Caching**: In-memory TTL caching for read-heavy SDK calls (e.g. prompt fetches)
+- ⚡ **Opt-in Read Caching**: In-memory TTL caching for read-heavy SDK calls (`getPrompt`, `getModelPricing`)
 
 ## 📦 Installation
 
@@ -217,6 +217,40 @@ const shortLived = await Netra.prompts.getPrompt({
 ```
 
 > **Note**: Cached prompts may be stale for up to the TTL after dashboard edits. Use `useCache: false` when you need the latest version immediately. `Netra.shutdown()` clears in-memory caches.
+
+## 💰 Models API
+
+Fetch model pricing via `Netra.models.getModelPricing()`. Caching is **opt-in per call** — omit `useCache` (or set it to `false`) to always hit the API.
+
+Default TTL is **300 seconds** (`MODEL_PRICING_CACHE_TTL_SECONDS`). Override TTL for a single call with `cacheTtl`.
+
+```typescript
+import { Netra } from "netra-sdk";
+
+await Netra.init({
+  appName: "my-ai-app",
+});
+
+// Always fetches from the API (default)
+const pricing = await Netra.models.getModelPricing();
+
+// Optional name filter
+const gptPricing = await Netra.models.getModelPricing({ name: "gpt-4o" });
+
+// Cached for 300s (default TTL)
+const cached = await Netra.models.getModelPricing({
+  useCache: true,
+});
+
+// Cached for 60s for this call only
+const shortLived = await Netra.models.getModelPricing({
+  name: "gpt-4o",
+  useCache: true,
+  cacheTtl: 60,
+});
+```
+
+> **Note**: Cached pricing may be stale for up to the TTL after dashboard edits. Use `useCache: false` when you need the latest values immediately. `Netra.shutdown()` clears in-memory caches.
 
 ## 🔧 Environment Variables
 
