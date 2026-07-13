@@ -23,6 +23,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
+## [1.5.0] - 2026-07-10
+
+### Added
+
+- **Google GenAI Instrumentation**: Added instrumentation support for the Google GenAI (`@google/genai`) SDK, with a shared `base-instrumentor` abstraction and a separate `google-generative-ai` module.
+
+### Fixed
+
+- **OpenAI Agents Cache Tokens**: Captured cache token details (`cached_tokens`, `cache_write_tokens`, `reasoning_tokens`) for Claude models in OpenAI Agents instrumentation.
+- **Raw Chat Completions Response**: Added a helper to handle usage from the Chat Completions API naming (`prompt_tokens`/`completion_tokens` and their token details) alongside the Responses API naming, so `OpenAIChatCompletionsModel` usage is captured correctly.
+- **Span Input/Output on Active and Root Spans**: Updated utility functions so input and output attributes are set correctly on both the active span and the root span.
+
+## [1.4.0] - 2026-07-02
+
+### Added
+
+- **Anthropic Tool Runner Support**: Added span capture for the Anthropic tool-runner flow, so tool-execution turns within an agentic Anthropic run are traced.
+- **Attribute Size Limit Processor**: New `AttributeSizeLimitProcessor` enforces a hard per-attribute size cap (default 32KB, configurable via `NETRA_SPAN_ATTRIBUTE_MAX_SIZE`) by wrapping `setAttribute` on span start, preventing "entity too large" errors during export.
+- **Resource Attributes Propagation**: `Config` now sets `OTEL_RESOURCE_ATTRIBUTES` so the `TracerProvider` resource carries `service.name` and `deployment.environment`, with precedence order: pre-existing env value > config `resourceAttributes` > Netra defaults.
+
+### Changed
+
+- **SDK Version Source**: `Config.LIBRARY_VERSION` now derives from `SDK_VERSION` in `src/version.ts` instead of a hardcoded string, keeping the reported library version in sync with the package version.
+
+## [1.3.0] - 2026-07-01
+
+### Added
+
+- **NativeTracingMode**: Replaced the boolean `disableNativeTracing` option with a `NativeTracingMode` (`"both" | "netra" | "netra-strict"`) for granular control over where OpenAI Agents traces are sent. Configurable per-instrument or via the `NATIVE_TRACING_MODE` environment variable. `"netra"` routes traces to Netra only (falling back to additive mode with a warning if SDK APIs are unavailable), `"netra-strict"` (default) never falls back to native, and `"both"` sends to Netra and native.
+
+### Fixed
+
+- **Netra-only OpenAI Agents Tracing**: Added `canSet` gating and a restore fallback so the OpenAI Agents processor can be swapped safely, and included `OPENAI_AGENTS` in the root-span instrument allowlist (`DEFAULT_INSTRUMENTS_FOR_ROOT`) so agent runs are captured as root spans.
+
+## [1.2.0] - 2026-06-23
+
+### Added
+
+- **Simulation File Handling**: The simulation workflow now supports file attachments on user messages. The SDK parses `attachments` metadata from the API (`FileData`), downloads the referenced content via pre-signed URLs, and delivers it to user tasks as base64-encoded `ProcessedFile` objects. `ProcessedFile` is now exported from the package root.
+
+## [1.1.0] - 2026-06-16
+
+### Added
+
+- **Context Propagation Helpers**: Exported `netraExpressMiddleware` and `runWithExtractedContext` for distributed tracing. These utilities extract incoming W3C Trace Context from HTTP headers and run code within that context, covering cases where auto-instrumentation is unavailable (ESM load-order issues, missing peer dependencies, or non-Express frameworks). 
+
+### Fixed
+
+- **CommonJS (CJS) Support for LLM Provider Instrumentations**: Fixed instrumentation for Anthropic, Google GenAI, Groq, and Mistral AI so they patch correctly under CommonJS module resolution, resolving instrumentation failures in CJS applications.
 
 ## [1.6.0] - 2026-07-17
 
