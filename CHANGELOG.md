@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Simulation Lifecycle Hooks**: Added prescript/postscript support for multi-turn simulations via `SimulationHooks` (`beforeAll`, `beforeEach`, `before`, `after`, `afterEach`, `afterAll`). Hooks can return setup context passed into `BaseTask.run`, and the run uses a two-phase initialize / first-turn flow so hooks execute before any LLM spend. Execution order is `beforeAll` → `beforeEach` → item-specific `before` → task → item-specific `after` → `afterEach` → `afterAll`. `beforeAll` failure aborts the run as `prescript_failed`; item `before` failure marks only that scenario; `after`, `afterEach`, and `afterAll` failures are logged and do not affect status.
 
+## [Unreleased]
+
+### Added
+
+- **Opt-in prompt caching** — `Netra.prompts.getPrompt()` accepts `useCache` and `cacheTtl`. When `useCache` is true, responses are served from an in-memory TTL cache (default TTL: `PROMPT_CACHE_TTL_SECONDS` = 60). Caching is off by default.
+- **Models API** — `Netra.models.getModelPricing()` fetches model pricing (optional `name` filter) with the same opt-in cache pattern (`useCache`, `cacheTtl`; default TTL: `MODEL_PRICING_CACHE_TTL_SECONDS` = 300).
+- **Cache lifecycle** — `Netra.shutdown()` clears prompts and models in-memory caches. `clearCache()` is also available on each client.
+- **Exported cache constants** — `PROMPT_CACHE_TTL_SECONDS` and `MODEL_PRICING_CACHE_TTL_SECONDS` are public exports.
+
+### Changed
+
+- **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
+
 ## [1.6.0] - 2026-07-17
 
 ### Added
@@ -118,7 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Context Propagation Helpers**: Exported `netraExpressMiddleware` and `runWithExtractedContext` for distributed tracing. These utilities extract incoming W3C Trace Context from HTTP headers and run code within that context, covering cases where auto-instrumentation is unavailable (ESM load-order issues, missing peer dependencies, or non-Express frameworks). 
+- **Context Propagation Helpers**: Exported `netraExpressMiddleware` and `runWithExtractedContext` for distributed tracing. These utilities extract incoming W3C Trace Context from HTTP headers and run code within that context, covering cases where auto-instrumentation is unavailable (ESM load-order issues, missing peer dependencies, or non-Express frameworks).
 
 ### Fixed
 
