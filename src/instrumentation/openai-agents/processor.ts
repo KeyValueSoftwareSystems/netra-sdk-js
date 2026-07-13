@@ -228,8 +228,9 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
     }
 
     if (agentSpan.error) {
+      const MAX_ERROR_DATA_LEN = 4096;
       const errorMsg = agentSpan.error.data
-        ? `${agentSpan.error.message}: ${safeStringify(agentSpan.error.data)}`
+        ? `${agentSpan.error.message}: ${safeStringify(agentSpan.error.data, { maxLength: MAX_ERROR_DATA_LEN })}`
         : agentSpan.error.message;
       span.setStatus({ code: SpanStatusCode.ERROR, message: errorMsg });
       span.recordException(new Error(agentSpan.error.message));
