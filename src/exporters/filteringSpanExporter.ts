@@ -8,11 +8,11 @@ import {
 } from "../utils/pattern-matching";
 import {
   addBlockedTraceId,
+  findRootSpansBlocked,
   getTraceId,
   isTraceIdBlocked,
   isTrialBlocked,
   normalizeParent,
-  resolveRootDropped,
 } from "./utils";
 
 /**
@@ -51,6 +51,20 @@ class ReparentedSpan implements ReadableSpan {
   get droppedLinksCount() { return this.delegate.droppedLinksCount; }
 }
 
+/**
+ * SpanExporter wrapper that drops spans by name and by root-instrument policy.
+ *
+ * A span is dropped when any of the following holds:
+ * - its trace id was blocked while a trial/quota block was active;
+ * - its name matches a globally configured block pattern;
+ * - its name matches a per-span local block pattern set by
+ *   `LocalFilteringSpanProcessor`;
+ * - it is a root-connected span from an instrumentation not allowed to emit
+ *   root spans (resolved by `findRootSpansBlocked`).
+ *
+ * Children of a dropped span are reparented onto the dropped span's parent so
+ * subtrees are never silently discarded.
+ */
 export class FilteringSpanExporter implements SpanExporter {
   private static readonly MAX_REMEMBERED_ENTRIES = 10_000;
 
@@ -78,15 +92,20 @@ export class FilteringSpanExporter implements SpanExporter {
     this.compiled = compilePatterns(globalPatterns);
   }
 
+  /**
+   * Filter `spans`, reparent survivors, and forward them to the wrapped exporter.
+   *
+   * While a trial/quota block is active the whole batch is dropped and its trace
+   * ids are remembered so their later spans are dropped too. Otherwise the batch
+   * is classified into name/local drops and root-instrument drops, the survivors
+   * are reparented past any dropped ancestor, and only they are forwarded.
+   */
   export(
     spans: ReadableSpan[],
     resultCallback: (result: { code: ExportResultCode }) => void,
   ): void {
     if (isTrialBlocked()) {
-      for (const span of spans) {
-        const traceId = getTraceId(span);
-        if (traceId) addBlockedTraceId(traceId);
-      }
+      this.recordBlockedTraceIds(spans);
       resultCallback({ code: ExportResultCode.SUCCESS });
       return;
     }
@@ -97,81 +116,38 @@ export class FilteringSpanExporter implements SpanExporter {
       ? new Map(this.localBlockedMap)
       : undefined;
 
-    // 1. Classify unconditional name/local drops first. Feeding these into the
-    //    peel is what stops a disallowed candidate from being promoted to a
-    //    root when its only surviving ancestor is itself name-blocked.
-    const nameLocalParentMap = new Map<string, SpanContext | undefined>();
-    for (const span of spans) {
-      const traceId = getTraceId(span);
-      if (traceId && isTraceIdBlocked(traceId)) continue;
+    // Find unconditional name/local drops first, then resolve which root-block
+    // candidates are root-connected. Feeding the name/local drops into that walk
+    // is what stops a disallowed candidate from being promoted to a root when
+    // its only surviving ancestor is itself name-blocked.
+    const parentsOfSpansBlockedByName = this.findSpansBlockedByName(spans);
+    const { rootConnectedIds: rootSpansBlocked, parentsOfRootSpansBlocked } =
+      findRootSpansBlocked(spans, parentsOfSpansBlockedByName);
 
-      const name = span.name;
-      const globallyBlocked = matchesAnyPattern(name, this.compiled);
-
-      const localPatterns = this.getLocalPatterns(span);
-      const locallyBlocked =
-        (localPatterns.length > 0 &&
-          matchesAnyPattern(name, this.getCompiledLocalPatterns(localPatterns))) ||
-        this.hasLocalBlockFlag(span);
-
-      if (!globallyBlocked && !locallyBlocked) continue;
-
-      const spanId = span.spanContext().spanId;
-      const parentCtx = normalizeParent(span.parentSpanContext);
-      nameLocalParentMap.set(spanId, parentCtx);
-      this.rememberedBlockedParentMap.set(spanId, parentCtx);
-    }
-
-    // 2. Resolve which root-block candidates are root-connected.
-    const { dropped: rootDropped, droppedParentMap } = resolveRootDropped(
-      spans,
-      nameLocalParentMap,
-    );
-
-    // 3. Collect survivors: not trace-blocked and not dropped.
-    const droppedIds = new Set<string>([
-      ...nameLocalParentMap.keys(),
-      ...rootDropped,
+    const allBlockedSpanIds = new Set<string>([
+      ...parentsOfSpansBlockedByName.keys(),
+      ...rootSpansBlocked,
     ]);
 
-    const filtered: ReadableSpan[] = [];
-    for (const span of spans) {
-      const traceId = getTraceId(span);
-      if (traceId && isTraceIdBlocked(traceId)) continue;
-      if (droppedIds.has(span.spanContext().spanId)) continue;
-      filtered.push(span);
-    }
+    const survivingSpans = this.collectSurvivors(spans, allBlockedSpanIds);
 
-    // 4. Merge parent maps — later wins on conflict, so in-batch drops override
-    //    the cross-batch registry and injected local map.
-    const merged = new Map<string, SpanContext | undefined>();
-    for (const [k, v] of this.rememberedBlockedParentMap) {
-      merged.set(k, v);
-    }
-    if (localBlockedSnapshot) {
-      for (const [k, v] of localBlockedSnapshot) {
-        merged.set(k, v);
-      }
-    }
-    for (const [k, v] of droppedParentMap) {
-      merged.set(k, v);
-    }
-    for (const [k, v] of nameLocalParentMap) {
-      merged.set(k, v);
-    }
-
-    if (merged.size > 0) {
-      this.reparentBlockedChildren(filtered, merged);
+    const reparentMap = this.buildReparentMap(
+      parentsOfRootSpansBlocked,
+      parentsOfSpansBlockedByName,
+      localBlockedSnapshot,
+    );
+    if (reparentMap.size > 0) {
+      this.reparentSpans(survivingSpans, reparentMap);
     }
 
     this.evictRememberedIfNeeded();
 
-    if (filtered.length === 0) {
+    if (survivingSpans.length === 0) {
       resultCallback({ code: ExportResultCode.SUCCESS });
       return;
     }
 
-    this.exporter.export(filtered, resultCallback);
+    this.exporter.export(survivingSpans, resultCallback);
   }
 
   shutdown(): Promise<void> {
@@ -182,6 +158,114 @@ export class FilteringSpanExporter implements SpanExporter {
 
   forceFlush(): Promise<void> {
     return this.exporter.forceFlush?.() ?? Promise.resolve();
+  }
+
+  /**
+   * Remember the trace ids seen during a block so their later spans are dropped
+   * too, even after the block expires.
+   */
+  private recordBlockedTraceIds(spans: ReadableSpan[]): void {
+    for (const span of spans) {
+      const traceId = getTraceId(span);
+      if (traceId) addBlockedTraceId(traceId);
+    }
+  }
+
+  /**
+   * Find the spans dropped unconditionally by a global or local name rule.
+   *
+   * Trace-blocked spans are skipped entirely (dropped without reparenting). Each
+   * dropped span is also recorded in the cross-batch remembered map so a child
+   * arriving in a later batch can still be reparented past it. The returned map
+   * feeds both the root-connected candidate walk — as transparent dropped
+   * ancestors — and the reparent map.
+   *
+   * @returns A `{droppedSpanId -> normalizedParent}` map for the name/locally
+   *   blocked spans in this batch.
+   */
+  private findSpansBlockedByName(
+    spans: ReadableSpan[],
+  ): Map<string, SpanContext | undefined> {
+    const parentMap = new Map<string, SpanContext | undefined>();
+    for (const span of spans) {
+      const traceId = getTraceId(span);
+      if (traceId && isTraceIdBlocked(traceId)) continue;
+
+      const name = span.name;
+      const globallyBlocked = matchesAnyPattern(name, this.compiled);
+      if (!globallyBlocked && !this.isLocallyBlocked(span, name)) continue;
+
+      const spanId = span.spanContext().spanId;
+      const parentCtx = normalizeParent(span.parentSpanContext);
+      parentMap.set(spanId, parentCtx);
+      this.rememberedBlockedParentMap.set(spanId, parentCtx);
+    }
+    return parentMap;
+  }
+
+  /**
+   * Check whether `span` is blocked by its per-span local rules — either its
+   * name matches a local pattern or it carries the local-block flag.
+   */
+  private isLocallyBlocked(span: ReadableSpan, name: string): boolean {
+    const localPatterns = this.readLocalBlockPatterns(span);
+    if (
+      localPatterns.length > 0 &&
+      matchesAnyPattern(name, this.getCompiledLocalPatterns(localPatterns))
+    ) {
+      return true;
+    }
+    return this.hasLocalBlockFlag(span);
+  }
+
+  /**
+   * Return the spans that survive filtering: not trace-blocked and not in
+   * `allBlockedSpanIds` (name/local drops or the root-instrument policy).
+   */
+  private collectSurvivors(
+    spans: ReadableSpan[],
+    allBlockedSpanIds: Set<string>,
+  ): ReadableSpan[] {
+    const survivingSpans: ReadableSpan[] = [];
+    for (const span of spans) {
+      const traceId = getTraceId(span);
+      if (traceId && isTraceIdBlocked(traceId)) continue;
+      if (allBlockedSpanIds.has(span.spanContext().spanId)) continue;
+      survivingSpans.push(span);
+    }
+    return survivingSpans;
+  }
+
+  /**
+   * Merge the cross-batch remembered map with this batch's dropped-parent maps.
+   *
+   * Ordering matters — later wins on conflict: the remembered map and the
+   * injected local-block snapshot are the base, overlaid by root-blocked
+   * parents, then this batch's name/local blocks, so in-batch drops win.
+   *
+   * @returns The merged `{droppedSpanId -> parent}` map used for reparenting.
+   */
+  private buildReparentMap(
+    parentsOfRootSpansBlocked: Map<string, SpanContext | undefined>,
+    parentsOfSpansBlockedByName: Map<string, SpanContext | undefined>,
+    localBlockedSnapshot?: Map<string, SpanContext | undefined>,
+  ): Map<string, SpanContext | undefined> {
+    const reparentMap = new Map<string, SpanContext | undefined>();
+    for (const [k, v] of this.rememberedBlockedParentMap) {
+      reparentMap.set(k, v);
+    }
+    if (localBlockedSnapshot) {
+      for (const [k, v] of localBlockedSnapshot) {
+        reparentMap.set(k, v);
+      }
+    }
+    for (const [k, v] of parentsOfRootSpansBlocked) {
+      reparentMap.set(k, v);
+    }
+    for (const [k, v] of parentsOfSpansBlockedByName) {
+      reparentMap.set(k, v);
+    }
+    return reparentMap;
   }
 
   private getCompiledLocalPatterns(patterns: string[]): CompiledPatterns {
@@ -213,7 +297,11 @@ export class FilteringSpanExporter implements SpanExporter {
     }
   }
 
-  private getLocalPatterns(span: ReadableSpan): string[] {
+  /**
+   * Read the per-span local-block patterns set by `LocalFilteringSpanProcessor`,
+   * or an empty list when none are set.
+   */
+  private readLocalBlockPatterns(span: ReadableSpan): string[] {
     const value = span.attributes?.["netra.local_blocked_spans"];
     if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
       return (value as string[]).filter((v) => v !== "");
@@ -221,17 +309,20 @@ export class FilteringSpanExporter implements SpanExporter {
     return [];
   }
 
+  /** Check whether the processor explicitly flagged `span` as locally blocked. */
   private hasLocalBlockFlag(span: ReadableSpan): boolean {
     return span.attributes?.["netra.local_blocked"] === true;
   }
 
   /**
-   * Walk up the blocked-parent chain for each surviving span and wrap it
-   * with a ReparentedSpan pointing to the nearest non-blocked ancestor.
+   * Reparent each span past any dropped ancestor onto its first surviving one.
    *
-   * A cycle guard (visited set) prevents infinite loops in malformed traces.
+   * Walks the chain of dropped parents (following `blockedMap`) until a surviving
+   * parent — or `undefined` (promote to root) — is reached, then wraps the span
+   * in a `ReparentedSpan` pointing there. A cycle guard (visited set) prevents
+   * infinite loops in malformed traces.
    */
-  private reparentBlockedChildren(
+  private reparentSpans(
     spans: ReadableSpan[],
     blockedMap: Map<string, SpanContext | undefined>,
   ): void {
