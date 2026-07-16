@@ -11,6 +11,8 @@ import {
   getTraceId,
   isTraceIdBlocked,
   isTrialBlocked,
+  normalizeParent,
+  resolveRootDropped,
 } from "./utils";
 
 /**
@@ -89,21 +91,21 @@ export class FilteringSpanExporter implements SpanExporter {
       return;
     }
 
-    const filtered: ReadableSpan[] = [];
-    const batchBlockedMap = new Map<string, SpanContext | undefined>();
-
     // Snapshot the shared processor map to avoid iteration/mutation races
     // when BatchSpanProcessor invokes export() concurrently with onStart().
     const localBlockedSnapshot = this.localBlockedMap
       ? new Map(this.localBlockedMap)
       : undefined;
 
+    // 1. Classify unconditional name/local drops first. Feeding these into the
+    //    peel is what stops a disallowed candidate from being promoted to a
+    //    root when its only surviving ancestor is itself name-blocked.
+    const nameLocalParentMap = new Map<string, SpanContext | undefined>();
     for (const span of spans) {
       const traceId = getTraceId(span);
       if (traceId && isTraceIdBlocked(traceId)) continue;
 
       const name = span.name;
-
       const globallyBlocked = matchesAnyPattern(name, this.compiled);
 
       const localPatterns = this.getLocalPatterns(span);
@@ -112,19 +114,37 @@ export class FilteringSpanExporter implements SpanExporter {
           matchesAnyPattern(name, this.getCompiledLocalPatterns(localPatterns))) ||
         this.hasLocalBlockFlag(span);
 
-      if (!globallyBlocked && !locallyBlocked) {
-        filtered.push(span);
-        continue;
-      }
+      if (!globallyBlocked && !locallyBlocked) continue;
 
       const spanId = span.spanContext().spanId;
-      const parentCtx = span.parentSpanContext;
-      batchBlockedMap.set(spanId, parentCtx);
+      const parentCtx = normalizeParent(span.parentSpanContext);
+      nameLocalParentMap.set(spanId, parentCtx);
       this.rememberedBlockedParentMap.set(spanId, parentCtx);
     }
 
-    const merged = new Map<string, SpanContext | undefined>();
+    // 2. Resolve which root-block candidates are root-connected.
+    const { dropped: rootDropped, droppedParentMap } = resolveRootDropped(
+      spans,
+      nameLocalParentMap,
+    );
 
+    // 3. Collect survivors: not trace-blocked and not dropped.
+    const droppedIds = new Set<string>([
+      ...nameLocalParentMap.keys(),
+      ...rootDropped,
+    ]);
+
+    const filtered: ReadableSpan[] = [];
+    for (const span of spans) {
+      const traceId = getTraceId(span);
+      if (traceId && isTraceIdBlocked(traceId)) continue;
+      if (droppedIds.has(span.spanContext().spanId)) continue;
+      filtered.push(span);
+    }
+
+    // 4. Merge parent maps — later wins on conflict, so in-batch drops override
+    //    the cross-batch registry and injected local map.
+    const merged = new Map<string, SpanContext | undefined>();
     for (const [k, v] of this.rememberedBlockedParentMap) {
       merged.set(k, v);
     }
@@ -133,7 +153,10 @@ export class FilteringSpanExporter implements SpanExporter {
         merged.set(k, v);
       }
     }
-    for (const [k, v] of batchBlockedMap) {
+    for (const [k, v] of droppedParentMap) {
+      merged.set(k, v);
+    }
+    for (const [k, v] of nameLocalParentMap) {
       merged.set(k, v);
     }
 
