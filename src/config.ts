@@ -18,6 +18,26 @@ export interface NetraConfig {
   blockedSpans?: string[];
   instruments?: Set<NetraInstruments>;
   blockInstruments?: Set<NetraInstruments>;
+  /**
+   * Set of instruments allowed to produce root-level spans. Independent of
+   * `instruments`. Defaults to `DEFAULT_INSTRUMENTS_FOR_ROOT` when omitted.
+   *
+   * When a root span comes from an instrumentation outside this set, only that
+   * span is dropped — its children are reparented onto its parent (a true
+   * root's children become the new roots). The peel then repeats: if a promoted
+   * child is itself from a non-root instrumentation it is dropped too,
+   * recursively, until a surviving span is reached (an allowed instrument, a
+   * Netra decorator / manual span, or any non-instrumentation span). This keeps
+   * LLM/vector spans that originate under an unwanted server root (e.g.
+   * Express/HTTP) without emitting the server span itself. A span whose parent
+   * link is remote (cross-process) is kept as a root so an upstream distributed
+   * trace is not severed.
+   *
+   * Note: when `enableRootSpan` is true, Netra attaches its own root span and
+   * every auto-instrumentation span becomes its child, so no reparenting
+   * occurs. Pass a set containing `NetraInstruments.ALL` to allow all
+   * instrumentations to produce root spans (legacy behaviour).
+   */
   rootInstruments?: Set<NetraInstruments>;
 }
 
