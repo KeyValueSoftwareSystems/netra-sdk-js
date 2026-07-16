@@ -3,12 +3,13 @@ import type { SpanContext } from "@opentelemetry/api";
 import { Config } from "../config";
 import { Logger } from "../logger";
 import {
-  getRootBlockCandidates,
+  getRootBlockCandidatesFor,
   isRootBlockCandidate,
   rootBlockCandidatesContains,
+  INVALID_SPAN_ID,
 } from "../processors/root-instrument-filter-processor";
 
-export const INVALID_SPAN_ID = "0000000000000000";
+export { INVALID_SPAN_ID };
 
 let trialBlockedAt: number | null = null;
 const blockedTraceIds = new Set<string>();
@@ -133,7 +134,8 @@ export function resolveRootDropped(
  * In-batch markers let a marked span be recognised even if its registry entry
  * was evicted or cleared before export. The registry is only consulted for
  * cross-batch ancestry (a batch parent recorded in an earlier batch); when no
- * batch parent references such an entry, the full snapshot is skipped.
+ * batch parent references such an entry, it is skipped entirely, and otherwise
+ * only the reachable ancestry is walked.
  */
 function collectCandidates(
   spans: ReadableSpan[],
@@ -166,7 +168,9 @@ function collectCandidates(
     return inBatch;
   }
 
-  const candidates = getRootBlockCandidates();
+  // Walk only the ancestry reachable from the batch's unresolved parents rather
+  // than copying the whole registry.
+  const candidates = getRootBlockCandidatesFor(unresolvedParents);
   for (const [spanId, parentCtx] of inBatch) {
     candidates.set(spanId, parentCtx);
   }

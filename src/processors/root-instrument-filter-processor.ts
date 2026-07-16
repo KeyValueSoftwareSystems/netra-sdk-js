@@ -29,7 +29,7 @@ import { Context, Span } from "@opentelemetry/api";
 import type { SpanContext } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 
-const INVALID_SPAN_ID = "0000000000000000";
+export const INVALID_SPAN_ID = "0000000000000000";
 
 const INSTRUMENTATION_PREFIXES = [
   "opentelemetry.instrumentation.",
@@ -40,6 +40,25 @@ const INSTRUMENTATION_PREFIXES = [
 
 const MAX_ROOT_CANDIDATES = 4096;
 const ROOT_CANDIDATE_TTL_MS = 600_000; // 600 seconds
+/**
+ * Minimum spacing between TTL sweeps. `onEnd` fires for every span, so the
+ * (unbounded-order) full sweep is time-throttled to keep the hot path cheap;
+ * the hard `MAX_ROOT_CANDIDATES` overflow bound still applies between sweeps.
+ */
+const EVICTION_INTERVAL_MS = 10_000;
+
+/**
+ * Canonicalize an instrumentation name for allow-list comparison. Instrument
+ * scope names arrive concatenated (e.g. `@traceloop/instrumentation-llamaindex`
+ * → `"llamaindex"`, `...-mistralai` → `"mistralai"`) while the
+ * `NetraInstruments` values use snake_case (`"llama_index"`, `"mistral_ai"`).
+ * The only discrepancy is underscore placement, so lower-casing and stripping
+ * underscores on both sides makes the two representations match without a
+ * hand-maintained alias table.
+ */
+export function canonicalInstrumentName(name: string): string {
+  return name.toLowerCase().replace(/_/g, "");
+}
 
 /**
  * Durable per-span marker set the moment a span is classified as a root-block
@@ -78,16 +97,42 @@ interface CandidateEntry {
 const ROOT_BLOCK_CANDIDATES = new Map<string, CandidateEntry>();
 
 /**
- * Return a snapshot `{ spanId -> parentCtx }` of the current candidate registry
- * for the exporter's peel. Copies so the exporter's read is decoupled from
- * later writes.
+ * Resolve only the registry ancestry reachable from `seedIds` — the cross-batch
+ * parent ids (and their parents, transitively) referenced by the current export
+ * batch. Returns a fresh `{ spanId -> parentCtx }` map, decoupled from later
+ * writes. Walking only the reachable subset avoids copying the entire registry
+ * (up to `MAX_ROOT_CANDIDATES` entries) on every export.
  */
-export function getRootBlockCandidates(): Map<string, SpanContext | undefined> {
-  const snapshot = new Map<string, SpanContext | undefined>();
-  for (const [spanId, entry] of ROOT_BLOCK_CANDIDATES) {
-    snapshot.set(spanId, entry.parentCtx);
+export function getRootBlockCandidatesFor(
+  seedIds: Set<string>,
+): Map<string, SpanContext | undefined> {
+  const out = new Map<string, SpanContext | undefined>();
+  const stack = [...seedIds];
+  while (stack.length > 0) {
+    const spanId = stack.pop();
+    if (spanId === undefined || out.has(spanId)) {
+      continue;
+    }
+    const entry = ROOT_BLOCK_CANDIDATES.get(spanId);
+    if (!entry) {
+      continue;
+    }
+    out.set(spanId, entry.parentCtx);
+    const parentId = entry.parentCtx?.spanId;
+    if (parentId && parentId !== INVALID_SPAN_ID) {
+      stack.push(parentId);
+    }
   }
-  return snapshot;
+  return out;
+}
+
+/**
+ * Clear the module-global candidate registry. Called when a new processor is
+ * constructed so a fresh Netra session (or test) does not inherit stale
+ * cross-batch state. Deliberately NOT called on shutdown — see `shutdown()`.
+ */
+export function resetRootBlockCandidates(): void {
+  ROOT_BLOCK_CANDIDATES.clear();
 }
 
 /**
@@ -116,9 +161,15 @@ export function isRootBlockCandidate(span: unknown): boolean {
 
 export class RootInstrumentFilterProcessor implements SpanProcessor {
   private readonly _allowed: Set<string>;
+  private _lastEvictionAt = 0;
 
   constructor(allowedRootInstrumentNames: Set<string>) {
-    this._allowed = new Set(allowedRootInstrumentNames);
+    this._allowed = new Set(
+      [...allowedRootInstrumentNames].map(canonicalInstrumentName),
+    );
+    // A new processor marks the start of a fresh session; drop any registry
+    // state left behind by a previous init (or a prior test).
+    resetRootBlockCandidates();
   }
 
   onStart(span: Span, _parentContext: Context): void {
@@ -131,8 +182,9 @@ export class RootInstrumentFilterProcessor implements SpanProcessor {
 
   onEnd(span: ReadableSpan): void {
     try {
-      this._markEnded(span);
-      this._evictStaleCandidates();
+      const now = Date.now();
+      this._markEnded(span, now);
+      this._evictStaleCandidates(now);
     } catch {
       // no-op
     }
@@ -141,11 +193,13 @@ export class RootInstrumentFilterProcessor implements SpanProcessor {
   /**
    * No-op — the candidate registry is deliberately NOT cleared here.
    *
-   * This processor is registered before the exporter's span processor, so
-   * clearing the shared registry on shutdown would empty it *before* the
-   * exporter's final flush runs — letting still-buffered blocked roots slip
-   * through as exported roots. The registry is bounded (`MAX_ROOT_CANDIDATES`)
-   * and TTL-evicted, so leaving it intact is safe.
+   * `MultiSpanProcessor.shutdown()` invokes every registered processor's
+   * `shutdown()` concurrently (`Promise.all`), so clearing the shared registry
+   * here could race with the exporter's final flush still reading it to
+   * reparent buffered blocked roots. Fresh sessions instead reset the registry
+   * on construction (see the constructor); it is also bounded
+   * (`MAX_ROOT_CANDIDATES`) and TTL-evicted, so leaving it intact on shutdown
+   * is safe.
    */
   shutdown(): Promise<void> {
     return Promise.resolve();
@@ -161,7 +215,7 @@ export class RootInstrumentFilterProcessor implements SpanProcessor {
     }
 
     const instrName = this._extractInstrumentationName(span);
-    if (instrName === null || this._allowed.has(instrName)) {
+    if (instrName === null || this._allowed.has(canonicalInstrumentName(instrName))) {
       return;
     }
 
@@ -202,29 +256,39 @@ export class RootInstrumentFilterProcessor implements SpanProcessor {
   }
 
   /** Start the TTL clock for a just-ended candidate, if it has an entry. */
-  private _markEnded(span: ReadableSpan): void {
+  private _markEnded(span: ReadableSpan, now: number): void {
     const spanId = this._getOwnSpanId(span);
     if (spanId === null) {
       return;
     }
     const entry = ROOT_BLOCK_CANDIDATES.get(spanId);
     if (entry) {
-      entry.endedAt = Date.now();
+      entry.endedAt = now;
     }
   }
 
   /**
    * Evict entries whose span ended more than `ROOT_CANDIDATE_TTL_MS` ago.
-   * Active candidates (`endedAt === null`) are never TTL-evicted; scanning stops
-   * at the first entry still active or not yet stale.
+   * Active candidates (`endedAt === null`) are skipped — never evicted while the
+   * span is still open.
+   *
+   * The scan cannot break early: the registry is ordered by span *start*
+   * (insertion) whereas staleness is measured from span *end*, and those two
+   * orders do not coincide (a long-lived active root sits at the head while
+   * short spans behind it may already be stale). A full sweep is therefore
+   * required, but it is time-throttled (`EVICTION_INTERVAL_MS`) so it does not
+   * run on every span end.
    */
-  private _evictStaleCandidates(): void {
-    const cutoff = Date.now() - ROOT_CANDIDATE_TTL_MS;
+  private _evictStaleCandidates(now: number): void {
+    if (now - this._lastEvictionAt < EVICTION_INTERVAL_MS) {
+      return;
+    }
+    this._lastEvictionAt = now;
+    const cutoff = now - ROOT_CANDIDATE_TTL_MS;
     for (const [spanId, entry] of ROOT_BLOCK_CANDIDATES) {
-      if (entry.endedAt === null || entry.endedAt > cutoff) {
-        break;
+      if (entry.endedAt !== null && entry.endedAt <= cutoff) {
+        ROOT_BLOCK_CANDIDATES.delete(spanId);
       }
-      ROOT_BLOCK_CANDIDATES.delete(spanId);
     }
   }
 
