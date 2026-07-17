@@ -1,6 +1,6 @@
 {
   "name": "netra-sdk",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "A comprehensive TypeScript/JavaScript SDK for AI application observability built on top of OpenTelemetry and Traceloop",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -50,33 +50,33 @@
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^2.0.1",
-    "@opentelemetry/instrumentation-undici": "^0.6.0",
     "@opentelemetry/instrumentation-express": "^0.67.0",
     "@opentelemetry/instrumentation-http": "^0.219.0",
+    "@opentelemetry/instrumentation-undici": "^0.6.0",
     "@opentelemetry/otlp-transformer": "^0.211.0",
     "@opentelemetry/resources": "^2.0.1",
     "@opentelemetry/sdk-trace-base": "^2.0.1",
     "@traceloop/node-server-sdk": "^0.22.5",
     "axios": "^1.13.4",
-    "dotenv": "^17.2.3",
+    "jsonrepair": "^3.15.0",
     "p-limit": "^7.2.0",
     "shimmer": "^1.2.1"
   },
   "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.60.0",
+    "@google/genai": ">=1.0.0",
+    "@google/generative-ai": "^0.24.1",
     "@langchain/langgraph": "^1.1.1",
     "@langchain/ollama": "^1.2.1",
     "@mistralai/mistralai": ">=1.0.0",
-    "@google/generative-ai": "^0.24.1",
-    "@google/genai": ">=1.0.0",
+    "@openai/agents": ">=0.10.0 <1.0.0",
     "@opentelemetry/instrumentation": ">=0.53.0",
     "@opentelemetry/instrumentation-express": "^0.67.0",
     "@opentelemetry/instrumentation-http": "^0.219.0",
     "@opentelemetry/instrumentation-undici": "^0.6.0",
     "@prisma/instrumentation": "^5.0.0",
     "groq-sdk": ">=0.3.0",
-    "openai": "^4.0.0 || ^5.0.0 || ^6.0.0",
-    "@anthropic-ai/sdk": ">=0.60.0",
-    "@openai/agents": ">=0.10.0 <1.0.0"
+    "openai": "^4.0.0 || ^5.0.0 || ^6.0.0"
   },
   "peerDependenciesMeta": {
     "@opentelemetry/instrumentation": {

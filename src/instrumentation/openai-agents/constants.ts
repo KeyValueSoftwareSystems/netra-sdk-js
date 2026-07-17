@@ -1,7 +1,6 @@
 export const INSTRUMENTATION_NAME = "netra.instrumentation.openai_agents";
 export const DEFAULT_LLM_SYSTEM = "openai";
 export const MAX_INDEXED_MESSAGES = 128;
-export const MAX_STRINGIFY_LENGTH = 65_536;
 
 export const NETRA_SPAN_TYPE_ATTR = "netra.span.type";
 
