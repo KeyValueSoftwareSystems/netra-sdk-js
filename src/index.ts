@@ -26,12 +26,14 @@ export {
 } from "./config";
 export { agent, span, task, workflow } from "./decorators";
 export {
-  AttributeSizeLimitProcessor,
   InstrumentationSpanProcessor,
   ScrubbingSpanProcessor,
+  SerializationSpanProcessor,
   SessionSpanProcessor,
   SpanIOProcessor,
 } from "./processors";
+export { safeStringify, TruncatingSerializer } from "./utils/serialization";
+export type { SafeStringifyOptions } from "./utils/serialization";
 export { ConversationType } from "./session-manager";
 export { SpanType } from "./types";
 export type { ActionModel, UsageModel, SpanOptions } from "./types";

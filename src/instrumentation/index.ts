@@ -18,12 +18,12 @@ import {
 } from "../config";
 import { Logger } from "../logger";
 import {
-  AttributeSizeLimitProcessor,
   InstrumentationSpanProcessor,
   LlmTraceIdentifierSpanProcessor,
   RootSpanProcessor,
   RootInstrumentFilterProcessor,
   ScrubbingSpanProcessor,
+  SerializationSpanProcessor,
   SessionSpanProcessor,
   SpanIOProcessor,
 } from "../processors";
@@ -804,21 +804,32 @@ function addCustomSpanProcessors(
     }
 
     // ─── Processor registration order matters ───
-    // Processors that wrap span.setAttribute form an implicit call chain:
-    //   InstrumentationSpanProcessor (#1) wraps setAttribute for truncation,
-    //   then SpanIOProcessor (#3) wraps the already-wrapped setAttribute for
-    //   IO normalisation. Reordering these will break the chain silently.
     //
-    // onEnd runs in registration order: SpanIOProcessor (#3) promotes
-    // netra.user.input/output → input/output BEFORE RootSpanProcessor (#5)
-    // cleans up its root span map.
+    // Processors that wrap span.setAttribute in onStart form an implicit call
+    // chain. The LAST registered wrapper is the OUTERMOST (first to intercept
+    // an external setAttribute call). The chain is:
+    //
+    //   External setAttribute call
+    //     → SpanIOProcessor (outermost: routes/assembles IO attributes)
+    //       → SerializationSpanProcessor (middle: serializes & truncates values)
+    //         → ScrubbingSpanProcessor (innermost: scrubs sensitive data)
+    //           → OTel original setAttribute
+    //
+    // Serialization runs before scrubbing so complex objects are converted to
+    // JSON strings first, allowing the regex-based scrubber to detect sensitive
+    // patterns in the serialized text. When SpanIOProcessor assembles a derived
+    // value (e.g. combined `input` JSON) and writes it via its saved `original`
+    // reference, that reference points to the Serialization wrapper — so
+    // assembled values still get serialized, scrubbed, and stored.
+    //
+    // Processors that only CALL setAttribute (not wrap) must be registered AFTER
+    // all wrapping processors so their writes flow through the full chain.
 
     // 0. Local Filtering Span Processor - filters spans based on local context
     const localFilteringSpanProcessor = new LocalFilteringSpanProcessor();
     provider.addSpanProcessor(localFilteringSpanProcessor);
 
     // 0.5. Root Instrument Filter Processor - blocks root spans from non-allowed instrumentations
-    // When rootInstrumentNames is null, all instrumentations may produce root spans (no filtering).
     if (rootInstrumentNames !== null) {
       const rootFilterProcessor = new RootInstrumentFilterProcessor(
         rootInstrumentNames,
@@ -826,48 +837,47 @@ function addCustomSpanProcessors(
       provider.addSpanProcessor(rootFilterProcessor);
     }
 
-    // 1. Instrumentation Span Processor - truncates attributes and adds instrumentation name.
-    //    MUST run before SpanIOProcessor so the IO processor's setAttribute wrapper
-    //    captures the truncation wrapper in its call chain.
-    const instrumentationProcessor = new InstrumentationSpanProcessor();
-    provider.addSpanProcessor(instrumentationProcessor);
-
-    // 2. Session Span Processor - adds session context (session_id, user_id, etc.)
-    const sessionProcessor = new SessionSpanProcessor(config.environment);
-    provider.addSpanProcessor(sessionProcessor);
-
-    // 3. Span I/O Processor - normalises input/output from gen_ai.prompt/completion
-    //    and traceloop.entity attributes; remaps traceloop.* → netra.*
-    //    MUST run after InstrumentationSpanProcessor (captures its setAttribute wrapper).
-    //    MUST run before RootSpanProcessor (promotes netra.user.* in onEnd first).
-    const spanIOProcessor = new SpanIOProcessor();
-    provider.addSpanProcessor(spanIOProcessor);
-
-    // 4. LLM Trace Identifier Span Processor - marks root spans that contain LLM calls
-    const llmTraceProcessor = new LlmTraceIdentifierSpanProcessor();
-    provider.addSpanProcessor(llmTraceProcessor);
-
-    // 5. Root Span Processor - tracks the root span per trace by traceId.
-    //    Registered AFTER LlmTraceIdentifierSpanProcessor so that on_end cleanup
-    //    happens after the LLM processor has finished annotating the root span.
-    //    Registered AFTER SpanIOProcessor so root spans have setAttribute wrapped
-    //    before being stored in the root span map.
-    const rootSpanProcessor = new RootSpanProcessor();
-    provider.addSpanProcessor(rootSpanProcessor);
-
-    // 6. Scrubbing Span Processor - scrubs sensitive data (if enabled)
+    // 1. Scrubbing Span Processor (wraps setAttribute — innermost layer)
+    //    Scrubs sensitive data from already-serialized string values just
+    //    before they reach OTel storage.
     if (config.enableScrubbing) {
       const scrubbingProcessor = new ScrubbingSpanProcessor();
       provider.addSpanProcessor(scrubbingProcessor);
     }
 
-    // 7. Attribute Size Limit Processor - enforces hard size limits on span
-    //    attributes before export to prevent "entity too large" errors.
-    //    MUST be last so it acts as final gate after all other processors.
-    const sizeLimitProcessor = new AttributeSizeLimitProcessor(
-      Config.SPAN_ATTRIBUTE_MAX_SIZE,
-    );
-    provider.addSpanProcessor(sizeLimitProcessor);
+    // 2. Serialization Span Processor (wraps setAttribute — middle layer)
+    //    Serializes objects to JSON strings and truncates values at write time.
+    //    Runs before scrubbing so the scrubber receives string values.
+    const serializationProcessor = new SerializationSpanProcessor();
+    provider.addSpanProcessor(serializationProcessor);
+
+    // 3. Span I/O Processor (wraps setAttribute — outermost layer)
+    //    Routes IO-related attributes, assembles input/output from gen_ai.*
+    //    and traceloop.* keys. Assembled values flow through serialize → scrub.
+    const spanIOProcessor = new SpanIOProcessor();
+    provider.addSpanProcessor(spanIOProcessor);
+
+    // 4. Instrumentation Span Processor - tags instrumentation name.
+    //    Runs AFTER wrappers are in place so its setAttribute calls flow
+    //    through the full chain.
+    const instrumentationProcessor = new InstrumentationSpanProcessor();
+    provider.addSpanProcessor(instrumentationProcessor);
+
+    // 5. Session Span Processor - adds session context (session_id, user_id, etc.)
+    //    Runs AFTER wrappers so session attributes flow through scrub→serialize.
+    const sessionProcessor = new SessionSpanProcessor(config.environment);
+    provider.addSpanProcessor(sessionProcessor);
+
+    // 6. LLM Trace Identifier Span Processor - marks root spans containing LLM calls.
+    //    Uses setAttribute on root span in onEnd (root span is still recording).
+    const llmTraceProcessor = new LlmTraceIdentifierSpanProcessor();
+    provider.addSpanProcessor(llmTraceProcessor);
+
+    // 7. Root Span Processor - tracks root span per trace.
+    //    Registered AFTER LlmTraceIdentifierSpanProcessor so onEnd cleanup
+    //    runs after LLM annotation is complete.
+    const rootSpanProcessor = new RootSpanProcessor();
+    provider.addSpanProcessor(rootSpanProcessor);
 
     Logger.debug("Custom span processors registered successfully");
 

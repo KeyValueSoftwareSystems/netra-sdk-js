@@ -1,18 +1,6 @@
 import { SpanType } from "../../types";
-import { MAX_STRINGIFY_LENGTH } from "./constants";
 import { AgentSpan, SpanData } from "./types";
-
-export function safeJsonStringify(obj: unknown, maxLength: number = MAX_STRINGIFY_LENGTH): string {
-  try {
-    if (typeof obj === "string") {
-      return maxLength > 0 && obj.length > maxLength ? obj.slice(0, maxLength) : obj;
-    }
-    const s = JSON.stringify(obj);
-    return maxLength > 0 && s.length > maxLength ? s.slice(0, maxLength) : s;
-  } catch {
-    return String(obj);
-  }
-}
+import { safeStringify } from "../../utils/serialization";
 
 export function getNetraSpanType(data: SpanData): SpanType {
   switch (data.type) {
@@ -36,7 +24,8 @@ export function getNetraSpanType(data: SpanData): SpanType {
 export function getSpanName(agentSpan: AgentSpan): string {
   const data = agentSpan.spanData;
   if (data.name) return data.name;
-  if (data.type === "handoff" && data.to_agent) return `handoff to ${data.to_agent}`;
+  if (data.type === "handoff" && data.to_agent)
+    return `handoff to ${data.to_agent}`;
   return `openai.agents.${data.type}`;
 }
 
@@ -53,7 +42,7 @@ export function extractContentString(content: unknown): string {
         }
       }
     }
-    return texts.length > 0 ? texts.join(" ") : safeJsonStringify(content);
+    return texts.length > 0 ? texts.join(" ") : safeStringify(content);
   }
   return String(content);
 }

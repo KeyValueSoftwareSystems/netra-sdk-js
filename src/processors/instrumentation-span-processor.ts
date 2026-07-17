@@ -1,9 +1,9 @@
 /**
  * Instrumentation Span Processor
- * 
- * OpenTelemetry span processor that:
- * 1. Records the raw instrumentation scope name for each span
- * 2. Truncates attribute values to prevent oversized payloads
+ *
+ * OpenTelemetry span processor that records the raw instrumentation scope
+ * name for each span. This enables downstream processors and the dashboard
+ * to identify which provider/framework produced a given span.
  */
 
 import { Context, Span } from "@opentelemetry/api";
@@ -45,19 +45,8 @@ const ALLOWED_INSTRUMENTATION_NAMES = new Set([
 ]);
 
 export class InstrumentationSpanProcessor implements SpanProcessor {
-  private maxAttributeLength: number;
-
-  constructor(maxAttributeLength?: number) {
-    this.maxAttributeLength = maxAttributeLength ?? Config.ATTRIBUTE_MAX_LEN;
-  }
-
-  /**
-   * Detect the raw instrumentation name from the span's instrumentation scope.
-   */
   private detectRawInstrumentationName(span: Span): string | null {
     try {
-      // Access the instrumentation scope from the span
-      // In JS SDK, this is typically available via the span's internal properties
       const spanAny = span as any;
       const scope =
         spanAny.instrumentationLibrary || spanAny.instrumentationScope;
@@ -80,73 +69,20 @@ export class InstrumentationSpanProcessor implements SpanProcessor {
                 return base;
               }
             } catch {
-              // Fall through to return the full name
+              Logger.debug("InstrumentationSpanProcessor: Error extracting base name:", name);
             }
           }
           return name;
         }
       }
     } catch {
-      // Ignore errors
+      Logger.debug("InstrumentationSpanProcessor: Error detecting instrumentation name");
     }
     return null;
   }
 
-  /**
-   * Truncate a value to the maximum allowed length.
-   * Handles strings, bytes, and recursively handles lists and objects.
-   */
-  private truncateValue(value: unknown): unknown {
+  onStart(span: Span, _parentContext: Context): void {
     try {
-      if (typeof value === "string") {
-        return value.length <= this.maxAttributeLength
-          ? value
-          : value.substring(0, this.maxAttributeLength);
-      }
-
-      if (Array.isArray(value)) {
-        return value.map((v) =>
-          typeof v === "string" ? this.truncateValue(v) : v
-        );
-      }
-
-      if (typeof value === "object" && value !== null) {
-        const result: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(value)) {
-          result[k] = typeof v === "string" ? this.truncateValue(v) : v;
-        }
-        return result;
-      }
-    } catch {
-      return value;
-    }
-    return value;
-  }
-
-  /**
-   * Called when a span starts. Wraps setAttribute to truncate values
-   * and records the instrumentation name.
-   */
-  onStart(span: Span, parentContext: Context): void {
-    try {
-      // Wrap setAttribute to truncate values
-      const originalSetAttribute = span.setAttribute.bind(span);
-
-      span.setAttribute = (key: string, value: unknown): Span => {
-        try {
-          const truncated = this.truncateValue(value);
-          return originalSetAttribute(key, truncated as any);
-        } catch {
-          // Best-effort; never break span
-          try {
-            return originalSetAttribute(key, value as any);
-          } catch {
-            return span;
-          }
-        }
-      };
-
-      // Set instrumentation name attribute
       const name = this.detectRawInstrumentationName(span);
       if (name && ALLOWED_INSTRUMENTATION_NAMES.has(name.toLowerCase())) {
         span.setAttribute(`${Config.LIBRARY_NAME}.instrumentation.name`, name);
@@ -154,28 +90,17 @@ export class InstrumentationSpanProcessor implements SpanProcessor {
     } catch (e) {
       Logger.error(
         "InstrumentationSpanProcessor: Error on span start:",
-        e
+        e,
       );
     }
   }
 
-  /**
-   * Called when a span ends. No-op for this processor.
-   */
-  onEnd(span: ReadableSpan): void {
-    // No-op
-  }
+  onEnd(_span: ReadableSpan): void {}
 
-  /**
-   * Shuts down the processor.
-   */
   shutdown(): Promise<void> {
     return Promise.resolve();
   }
 
-  /**
-   * Forces a flush of any pending spans.
-   */
   forceFlush(): Promise<void> {
     return Promise.resolve();
   }

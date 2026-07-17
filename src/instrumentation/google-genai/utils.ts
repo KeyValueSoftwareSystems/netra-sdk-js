@@ -12,7 +12,6 @@
  */
 
 import { Span } from "@opentelemetry/api";
-import { Config } from "../../config";
 import { Logger } from "../../logger";
 import { safeStringify } from "../../utils/serialization";
 import { SpanAttributes } from "../span-attributes";
@@ -146,7 +145,7 @@ function buildGoogleInputMessages(
     const sysContent =
       typeof cfg.systemInstruction === "string"
         ? cfg.systemInstruction
-        : safeStringify(cfg.systemInstruction, Config.CONVERSATION_MAX_LEN);
+        : safeStringify(cfg.systemInstruction);
     messages.push({ role: "system", content: sysContent });
   }
 
@@ -186,7 +185,7 @@ function buildGoogleInputMessages(
       } else {
         messages.push({
           role: "user",
-          content: safeStringify(item, Config.CONVERSATION_MAX_LEN),
+          content: safeStringify(item),
         });
       }
     }
@@ -201,7 +200,7 @@ function buildGoogleInputMessages(
   } else {
     messages.push({
       role: "user",
-      content: safeStringify(contents, Config.CONVERSATION_MAX_LEN),
+      content: safeStringify(contents),
     });
   }
 
@@ -220,10 +219,10 @@ function extractTextFromParts(parts: unknown[]): string {
     if (typeof part.text === "string") {
       texts.push(part.text);
     } else if (part.functionCall) {
-      texts.push(safeStringify(part.functionCall, Config.CONVERSATION_MAX_LEN));
+      texts.push(safeStringify(part.functionCall));
     } else if (part.functionResponse) {
       texts.push(
-        safeStringify(part.functionResponse, Config.CONVERSATION_MAX_LEN),
+        safeStringify(part.functionResponse),
       );
     }
   }
@@ -402,7 +401,6 @@ function buildGoogleOutputMessages(
         role: "tool",
         content: safeStringify(
           { name: fc.name, arguments: fc.args },
-          Config.CONVERSATION_MAX_LEN,
         ),
       });
     }
@@ -429,7 +427,6 @@ function buildGoogleOutputMessages(
               role: "tool",
               content: safeStringify(
                 { name: fc.name, arguments: fc.args },
-                Config.CONVERSATION_MAX_LEN,
               ),
             });
           }

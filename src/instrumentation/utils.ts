@@ -4,7 +4,6 @@
  */
 
 import { Span, context, type Context as OTelContext } from "@opentelemetry/api";
-import { Config } from "../config";
 import { Logger } from "../logger";
 import { safeStringify } from "../utils/serialization";
 import { SpanAttributes } from "./span-attributes";
@@ -212,7 +211,7 @@ export function buildInputMessages(
             tool_use_id: block.tool_use_id,
             content: block.content,
             is_error: block.is_error ?? false,
-          }, Config.CONVERSATION_MAX_LEN),
+          }),
         });
       }
     }
@@ -244,7 +243,7 @@ export function buildInputMessages(
     // Embeddings / genericinput
     const input = kwargs.input ?? kwargs.inputs;
     if (hasContent(input)) {
-      const content = safeStringify(input, Config.CONVERSATION_MAX_LEN);
+      const content = safeStringify(input);
       messages.push({ role: "user", content });
     }
   }
@@ -456,7 +455,7 @@ export function setRequestAttributes(
 
   // Tool definitions
   if (Array.isArray(kwargs.tools)) {
-    span.setAttribute("tools", safeStringify(kwargs.tools, Config.ATTRIBUTE_MAX_LEN));
+    span.setAttribute("tools", safeStringify(kwargs.tools));
   }
 
   // Reasoning config
@@ -476,7 +475,7 @@ export function setRequestAttributes(
     if (kwargs.suffix !== undefined) {
       span.setAttribute(
         "llm.request.suffix",
-        safeStringify(kwargs.suffix, Config.CONVERSATION_MAX_LEN),
+        safeStringify(kwargs.suffix),
       );
     }
   }

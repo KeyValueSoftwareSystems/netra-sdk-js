@@ -8,7 +8,7 @@ import { Logger } from "./logger";
 import { SessionManager } from "./session-manager";
 import { SpanType, DecoratorOptions } from "./types";
 import { wrapResponse } from "./utils/response-handler";
-import { safeStringify, serializeValue } from "./utils/serialization";
+import { safeStringify } from "./utils/serialization";
 
 type AnyFunction = (...args: any[]) => any;
 type AsyncFunction = (...args: any[]) => Promise<any>;
@@ -41,7 +41,7 @@ function spanHasOutput(span: Span): boolean {
 function addInputAttributes(span: Span, args: any[], entityType: string): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
   if (args.length > 0) {
-    span.setAttribute("input", safeStringify(args, Config.ATTRIBUTE_MAX_LEN));
+    span.setAttribute("input", safeStringify(args));
   }
 }
 
@@ -49,7 +49,7 @@ function addOutputAttributes(span: Span, result: any): void {
   // Skip if the user already set output explicitly inside the decorated function
   if (result === undefined || spanHasOutput(span)) return;
   try {
-    span.setAttribute("output", serializeValue(result, Config.ATTRIBUTE_MAX_LEN));
+    span.setAttribute("output", safeStringify(result));
   } catch (e) {
     span.setAttribute("output_error", String(e));
   }

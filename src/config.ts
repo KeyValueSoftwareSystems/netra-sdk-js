@@ -126,15 +126,22 @@ export class Config {
   static readonly LIBRARY_NAME = "netra";
   static readonly LIBRARY_VERSION = SDK_VERSION;
   static readonly TRIAL_BLOCK_DURATION_SECONDS = 900; // 15 minutes
-  static readonly ATTRIBUTE_MAX_LEN = parseInt(
-    process.env.NETRA_ATTRIBUTE_MAX_LEN || "50000",
-  );
-  static readonly CONVERSATION_MAX_LEN = parseInt(
-    process.env.NETRA_CONVERSATION_CONTENT_MAX_LEN || "50000",
-  );
-  static readonly SPAN_ATTRIBUTE_MAX_SIZE = parseInt(
-    process.env.NETRA_SPAN_ATTRIBUTE_MAX_SIZE || "30000",
-  );
+
+  private static _spanAttributeMaxSize: number | undefined;
+
+  /**
+   * Lazily reads NETRA_SPAN_ATTRIBUTE_MAX_SIZE from process.env on first
+   * access so that env vars set before Netra.init() (via dotenv, shell
+   * export, Docker, etc.) are always respected regardless of import order.
+   */
+  static get SPAN_ATTRIBUTE_MAX_SIZE(): number {
+    if (Config._spanAttributeMaxSize === undefined) {
+      Config._spanAttributeMaxSize = parseInt(
+        process.env.NETRA_SPAN_ATTRIBUTE_MAX_SIZE || "30000",
+      );
+    }
+    return Config._spanAttributeMaxSize;
+  }
 
   appName: string;
   otlpEndpoint?: string;
