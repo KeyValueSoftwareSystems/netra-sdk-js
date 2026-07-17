@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
 
+## [1.6.0] - 2026-07-14
+
+### Added
+
+- **SerializationSpanProcessor** — New span processor that serializes and truncates span attributes at write time via `setAttribute` wrapping. Uses `jsonrepair`-based truncation for JSON values and `...[TRUNCATED]` suffix for plain strings.
+
+### Changed
+
+- **Span processor registration order** — `ScrubbingSpanProcessor` is now registered before `SerializationSpanProcessor` so that serialization executes first in the `setAttribute` wrapper chain, converting values to strings before the scrubber runs its regex-based redaction.
+- **Lazy env var loading** — `Config.SPAN_ATTRIBUTE_MAX_SIZE` is now a lazy getter that reads `process.env` on first access rather than at import time, so environment variables set before `Netra.init()` are always respected. Removed the `dotenv` dependency — env loading is the application's responsibility.
+
+### Fixed
+
+- **Conversation accumulation** — `addConversation` now correctly reads existing entries from `span.attributes` instead of the internal `_attributes` property, so all conversation entries are persisted rather than only the last one.
+- **Error data truncation** — `span.setStatus({ message })` in the OpenAI Agents processor now enforces a 4 KB limit on error data using `safeStringify`, preventing unbounded error messages.
+
 ## [1.5.0] - 2026-07-10
 
 ### Added
