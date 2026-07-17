@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-07-17
+
+### Added
+
+- **Reparent Children of Blocked Root Instruments**: When a root-instrument span is blocked, its children are no longer dropped along with the subtree. Instead they are reparented onto the blocked span's parent (a true root's children become the new roots), and the peel repeats for promoted spans that are themselves blocked. 
+### Changed
+
+- **Standardized Attribute Serialization**: Introduced a single `SerializationSpanProcessor` that serializes and truncates every span attribute at write time, replacing the removed `AttributeSizeLimitProcessor`. Truncation uses a `jsonrepair`-based serializer for JSON values (and a `...[TRUNCATED]` suffix for plain strings) to stay aligned with backend behavior, and runs before the scrubbing layer so the regex scrubber sees values in string form. The per-attribute cap is read lazily from `NETRA_SPAN_ATTRIBUTE_MAX_SIZE` (default 30000). Serialization helpers were consolidated under `src/utils/serialization/`.
+
+### Fixed
+
+- **`addConversation` Persistence**: Fixed appending conversation entries to the active span's `conversation` attribute so existing entries are parsed and preserved (rather than overwritten) when a new entry is added, with defensive fallback when the stored value cannot be parsed.
+
 ## [1.5.0] - 2026-07-10
 
 ### Added
