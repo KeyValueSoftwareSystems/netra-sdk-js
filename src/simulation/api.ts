@@ -97,128 +97,170 @@ export class Simulation {
             return null;
         }
 
-        // --- Phase 2: Run beforeAll hook ---
-        let sharedContext: Record<string, any> | null = null;
-        if (hooks?.beforeAll) {
-            try {
-                sharedContext = await runBeforeAll(hooks);
-            } catch (error) {
-                const errorMsg = `beforeAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
-                Logger.error(`${LOG_PREFIX}: ${errorMsg} — aborting run (no LLM spent)`);
-
-                for (const item of items) {
-                    await this._client.reportFailure(
-                        runId,
-                        item.runItemId,
-                        errorMsg,
-                        "prescript_failed",
-                    );
-                }
-                await this._client.postRunStatus(runId, "completed");
-
-                return {
-                    success: false,
-                    completed: [],
-                    failed: items.map((item) => ({
-                        runItemId: item.runItemId,
-                        success: false,
-                        error: errorMsg,
-                    })),
-                    totalItems: items.length,
-                };
+        let interrupted = false;
+        const proc = typeof process !== "undefined" ? process : undefined;
+        const finalizeFailure = (signal?: NodeJS.Signals) => {
+            if (interrupted) {
+                return;
             }
+            interrupted = true;
+            proc?.removeListener("SIGINT", handleSignal);
+            proc?.removeListener("SIGTERM", handleSignal);
+            proc?.removeListener("uncaughtException", handleException);
+            proc?.removeListener("unhandledRejection", handleRejection);
+            void this._client.postRunStatus(runId, "failed").finally(() => {
+                if (signal) {
+                    proc?.kill(proc.pid, signal);
+                }
+            });
+        };
+        const handleSignal = (signal: "SIGINT" | "SIGTERM") => {
+            finalizeFailure(signal);
+        };
+        const handleException = () => {
+            finalizeFailure();
+        };
+        const handleRejection = () => {
+            finalizeFailure();
+        };
+        if (proc && typeof proc.once === "function") {
+            proc.once("SIGINT", handleSignal);
+            proc.once("SIGTERM", handleSignal);
+            proc.once("uncaughtException", handleException);
+            proc.once("unhandledRejection", handleRejection);
         }
 
-        // --- Phase 3: Run per-item before hooks + generate first turns (concurrent) ---
-        const setupContexts: Map<string, Record<string, any> | null> = new Map();
-        const simulationItems: SimulationItem[] = [];
-        const failedItems: ConversationResult[] = [];
+        try {
+            // --- Phase 2: Run beforeAll hook ---
+            let sharedContext: Record<string, any> | null = null;
+            if (hooks?.beforeAll) {
+                try {
+                    sharedContext = await runBeforeAll(hooks);
+                } catch (error) {
+                    const errorMsg = `beforeAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
+                    Logger.error(`${LOG_PREFIX}: ${errorMsg} — aborting run (no LLM spent)`);
 
-        const limit = pLimit(Math.min(5, maxConcurrency));
-        const setupPromises = items.map((item) =>
-            limit(async () => {
-                const { runItemId, datasetItemId } = item;
-                const hasBeforeHook = hooks?.before && datasetItemId in hooks.before;
+                    for (const item of items) {
+                        await this._client.reportFailure(
+                            runId,
+                            item.runItemId,
+                            errorMsg,
+                            "prescript_failed",
+                        );
+                    }
+                    await this._client.postRunStatus(runId, "completed");
 
-                if (hasBeforeHook) {
-                    try {
-                        const itemContext = await runBefore(hooks, datasetItemId, sharedContext);
-                        setupContexts.set(runItemId, itemContext);
-                    } catch (error) {
-                        const errorMsg = `before hook failed: ${error instanceof Error ? error.message : String(error)}`;
-                        Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
+                    return {
+                        success: false,
+                        completed: [],
+                        failed: items.map((item) => ({
+                            runItemId: item.runItemId,
+                            success: false,
+                            error: errorMsg,
+                        })),
+                        totalItems: items.length,
+                    };
+                }
+            }
 
-                        await this._client.reportFailure(runId, runItemId, errorMsg, "prescript_failed");
+            // --- Phase 3: Run per-item before hooks + generate first turns (concurrent) ---
+            const setupContexts: Map<string, Record<string, any> | null> = new Map();
+            const simulationItems: SimulationItem[] = [];
+            const failedItems: ConversationResult[] = [];
+
+            const limit = pLimit(Math.min(5, maxConcurrency));
+            const setupPromises = items.map((item) =>
+                limit(async () => {
+                    const { runItemId, datasetItemId } = item;
+                    const hasBeforeHook = hooks?.before && datasetItemId in hooks.before;
+
+                    if (hasBeforeHook) {
+                        try {
+                            const itemContext = await runBefore(hooks, datasetItemId, sharedContext);
+                            setupContexts.set(runItemId, itemContext);
+                        } catch (error) {
+                            const errorMsg = `before hook failed: ${error instanceof Error ? error.message : String(error)}`;
+                            Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
+
+                            await this._client.reportFailure(runId, runItemId, errorMsg, "prescript_failed");
+                            const itemResult: ConversationResult = {
+                                runItemId,
+                                success: false,
+                                error: errorMsg,
+                            };
+                            failedItems.push(itemResult);
+                            await runAfter(hooks, datasetItemId, itemResult as any, sharedContext);
+                            return;
+                        }
+                    } else {
+                        setupContexts.set(runItemId, sharedContext);
+                    }
+
+                    const simItem = await this._client.generateFirstTurn(runId, runItemId);
+                    if (!simItem) {
+                        Logger.warn(`${LOG_PREFIX}: Failed to generate first turn for item ${runItemId}, marking failed`);
+                        await this._client.reportFailure(runId, runItemId, "Failed to generate first user message");
                         const itemResult: ConversationResult = {
                             runItemId,
                             success: false,
-                            error: errorMsg,
+                            error: "Failed to generate first user message",
                         };
                         failedItems.push(itemResult);
-                        await runAfter(hooks, datasetItemId, itemResult as any, sharedContext);
+                        await runAfter(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
                         return;
                     }
-                } else {
-                    setupContexts.set(runItemId, sharedContext);
-                }
 
-                const simItem = await this._client.generateFirstTurn(runId, runItemId);
-                if (!simItem) {
-                    Logger.warn(`${LOG_PREFIX}: Failed to generate first turn for item ${runItemId}, marking failed`);
-                    await this._client.reportFailure(runId, runItemId, "Failed to generate first user message");
-                    const itemResult: ConversationResult = {
-                        runItemId,
-                        success: false,
-                        error: "Failed to generate first user message",
-                    };
-                    failedItems.push(itemResult);
-                    await runAfter(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
-                    return;
-                }
-
-                simulationItems.push(simItem);
-            }),
-        );
-
-        await Promise.all(setupPromises);
-
-        if (simulationItems.length === 0) {
-            Logger.error(`${LOG_PREFIX}: All items failed during setup/generation`);
-            const results: SimulationResult = {
-                success: false,
-                completed: [],
-                failed: failedItems,
-                totalItems: items.length,
-            };
-            await runAfterAll(hooks, results as any, sharedContext);
-            await this._client.postRunStatus(runId, "completed");
-            return results;
-        }
-
-        // --- Phase 4: Run conversation loops ---
-        Logger.info(`${LOG_PREFIX}: Starting simulation with ${simulationItems.length} items`);
-
-        try {
-            const result = await this._runSimulationAsync(
-                runId,
-                simulationItems,
-                task,
-                maxConcurrency,
-                hooks,
-                sharedContext,
-                setupContexts,
-                failedItems,
+                    simulationItems.push(simItem);
+                }),
             );
 
-            const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
-            Logger.info(`${LOG_PREFIX}: Simulation completed in ${elapsedTime} seconds`);
+            await Promise.all(setupPromises);
 
-            await this._client.postRunStatus(runId, "completed");
-            return result;
-        } catch (error) {
-            Logger.error(`${LOG_PREFIX}: Run simulation failed`);
-            await this._client.postRunStatus(runId, "failed");
-            return null;
+            if (simulationItems.length === 0) {
+                Logger.error(`${LOG_PREFIX}: All items failed during setup/generation`);
+                const results: SimulationResult = {
+                    success: false,
+                    completed: [],
+                    failed: failedItems,
+                    totalItems: items.length,
+                };
+                await runAfterAll(hooks, results as any, sharedContext);
+                await this._client.postRunStatus(runId, "completed");
+                return results;
+            }
+
+            // --- Phase 4: Run conversation loops ---
+            Logger.info(`${LOG_PREFIX}: Starting simulation with ${simulationItems.length} items`);
+
+            try {
+                const result = await this._runSimulationAsync(
+                    runId,
+                    simulationItems,
+                    task,
+                    maxConcurrency,
+                    hooks,
+                    sharedContext,
+                    setupContexts,
+                    failedItems,
+                );
+
+                const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
+                Logger.info(`${LOG_PREFIX}: Simulation completed in ${elapsedTime} seconds`);
+
+                await this._client.postRunStatus(runId, "completed");
+                return result;
+            } catch (error) {
+                Logger.error(`${LOG_PREFIX}: Run simulation failed`);
+                await this._client.postRunStatus(runId, "failed");
+                throw error;
+            }
+        } finally {
+            if (proc && typeof proc.removeListener === "function") {
+                proc.removeListener("SIGINT", handleSignal);
+                proc.removeListener("SIGTERM", handleSignal);
+                proc.removeListener("uncaughtException", handleException);
+                proc.removeListener("unhandledRejection", handleRejection);
+            }
         }
     }
 
