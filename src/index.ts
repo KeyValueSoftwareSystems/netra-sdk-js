@@ -126,7 +126,6 @@ export type {
   BeforeFn,
   ConversationResponse,
   ConversationResult,
-  CreateRunResult,
   InitializeRunResult,
   ProcessedFile,
   SimulationHooks,

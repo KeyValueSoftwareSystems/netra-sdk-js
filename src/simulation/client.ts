@@ -17,14 +17,6 @@ export interface InitializeRunResult {
 }
 
 /**
- * Result from creating a simulation run.
- */
-export interface CreateRunResult {
-    runId: string;
-    simulationItems: SimulationItem[];
-}
-
-/**
  * Internal HTTP client for simulation API endpoints.
  */
 export class SimulationHttpClient {
@@ -116,64 +108,10 @@ export class SimulationHttpClient {
     }
 
     /**
-     * Create a new simulation run for the specified dataset.
-     */
-    async createRun(
-        name: string,
-        datasetId: string,
-        context?: Record<string, any>,
-    ): Promise<CreateRunResult | null> {
-        if (!this.client) {
-            Logger.error(`${LOG_PREFIX}: Client not initialized`);
-            return null;
-        }
-
-        try {
-            const url = "/evaluations/test_run/multi-turn";
-            const payload = {
-                name,
-                datasetId,
-                context: context || {},
-            };
-
-            const response: AxiosResponse = await this.client.post(url, payload);
-            const data = response.data;
-
-            const responseData = data.data || {};
-            const userMessages = responseData.userMessages || [];
-
-            if (userMessages.length === 0) {
-                Logger.warn(`${LOG_PREFIX}: No user messages returned from create_run`);
-                return null;
-            }
-
-            const runId = responseData.id || "";
-            const simulationItems: SimulationItem[] = userMessages.map(
-                (msg: any) => ({
-                    runItemId: msg.testRunItemId || "",
-                    datasetItemId: msg.datasetItemId || "",
-                    message: msg.userMessage || "",
-                    turnId: msg.turnId || "",
-                    files: parseFiles(msg.attachments),
-                }),
-            );
-
-            return {
-                runId,
-                simulationItems,
-            };
-        } catch (error) {
-            const errorMsg = this._extractErrorMessage(error);
-            Logger.error(`${LOG_PREFIX}: Failed to create simulation run:`, errorMsg);
-            return null;
-        }
-    }
-
-    /**
      * Initialize a simulation run without generating first user messages.
      *
-     * Used in the two-phase flow when hooks are configured, so that
-     * beforeAll/before hooks can run before any LLM spend.
+     * Used in the two-phase flow so that beforeAll/before hooks can run
+     * before any LLM spend.
      */
     async initializeRun(
         name: string,

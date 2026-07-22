@@ -148,9 +148,8 @@ export class Simulation {
                             "prescript_failed",
                         );
                     }
-                    await this._client.postRunStatus(runId, "completed");
 
-                    return {
+                    const results: SimulationResult = {
                         success: false,
                         completed: [],
                         failed: items.map((item) => ({
@@ -160,6 +159,9 @@ export class Simulation {
                         })),
                         totalItems: items.length,
                     };
+                    await runAfterAll(hooks, results as any, null);
+                    await this._client.postRunStatus(runId, "completed");
+                    return results;
                 }
             }
 

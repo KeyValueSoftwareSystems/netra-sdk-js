@@ -4,7 +4,7 @@
 
 export { Simulation } from "./api";
 export type { SimulationOptions } from "./api";
-export type { CreateRunResult, InitializeRunResult } from "./client";
+export type { InitializeRunResult } from "./client";
 export {
     type AfterAllFn,
     type AfterFn,
