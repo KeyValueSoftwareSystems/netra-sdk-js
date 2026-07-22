@@ -209,6 +209,7 @@ export async function processFiles(
  * @param message - The input message to pass to the task
  * @param sessionId - The current session identifier
  * @param rawFiles - Optional array of file metadata to download and forward
+ * @param setupContext - Optional dict from beforeAll / before hooks
  * @returns A tuple of [response_message, session_id]
  * @throws Error if the task returns an unsupported type or file download fails
  */
@@ -217,12 +218,13 @@ export async function executeTask(
     message: string,
     sessionId: string | null,
     rawFiles?: FileData[] | null,
+    setupContext?: Record<string, any> | null,
 ): Promise<[string, string | null]> {
     const processedFiles = rawFiles && rawFiles.length > 0
         ? await processFiles(rawFiles)
         : null;
 
-    const result = task.run(message, sessionId, processedFiles);
+    const result = task.run(message, sessionId, processedFiles, setupContext);
 
     const resolvedResult = result instanceof Promise ? await result : result;
 

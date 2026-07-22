@@ -9,6 +9,14 @@ const LOG_PREFIX = "netra.simulation";
 const DEFAULT_TIMEOUT = 10000; // 10 seconds in milliseconds
 
 /**
+ * Result from initializing a simulation run (two-phase flow).
+ */
+export interface InitializeRunResult {
+    runId: string;
+    items: Array<{ runItemId: string; datasetItemId: string }>;
+}
+
+/**
  * Result from creating a simulation run.
  */
 export interface CreateRunResult {
@@ -143,6 +151,7 @@ export class SimulationHttpClient {
             const simulationItems: SimulationItem[] = userMessages.map(
                 (msg: any) => ({
                     runItemId: msg.testRunItemId || "",
+                    datasetItemId: msg.datasetItemId || "",
                     message: msg.userMessage || "",
                     turnId: msg.turnId || "",
                     files: parseFiles(msg.attachments),
@@ -156,6 +165,97 @@ export class SimulationHttpClient {
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
             Logger.error(`${LOG_PREFIX}: Failed to create simulation run:`, errorMsg);
+            return null;
+        }
+    }
+
+    /**
+     * Initialize a simulation run without generating first user messages.
+     *
+     * Used in the two-phase flow when hooks are configured, so that
+     * beforeAll/before hooks can run before any LLM spend.
+     */
+    async initializeRun(
+        name: string,
+        datasetId: string,
+        context?: Record<string, any>,
+        hooksMeta?: Record<string, any> | null,
+    ): Promise<InitializeRunResult | null> {
+        if (!this.client) {
+            Logger.error(`${LOG_PREFIX}: Client not initialized`);
+            return null;
+        }
+
+        try {
+            const url = "/evaluations/test_run/multi-turn/initialize";
+            const payload: Record<string, any> = {
+                name,
+                datasetId,
+                context: context || {},
+            };
+            if (hooksMeta) {
+                payload.lifecycleHooks = hooksMeta;
+            }
+
+            const response: AxiosResponse = await this.client.post(url, payload);
+            const data = response.data;
+
+            const responseData = data.data || {};
+            const items = responseData.items || [];
+
+            if (items.length === 0) {
+                Logger.warn(`${LOG_PREFIX}: No items returned from initialize_run`);
+                return null;
+            }
+
+            const runId = responseData.id || "";
+            return {
+                runId,
+                items: items.map((item: any) => ({
+                    runItemId: item.testRunItemId || "",
+                    datasetItemId: item.datasetItemId || "",
+                })),
+            };
+        } catch (error) {
+            const errorMsg = this._extractErrorMessage(error);
+            Logger.error(`${LOG_PREFIX}: Failed to initialize run:`, errorMsg);
+            return null;
+        }
+    }
+
+    /**
+     * Generate the first user message for a single test run item.
+     *
+     * Used in the two-phase flow after hooks have been executed.
+     */
+    async generateFirstTurn(
+        runId: string,
+        runItemId: string,
+    ): Promise<SimulationItem | null> {
+        if (!this.client) {
+            Logger.error(`${LOG_PREFIX}: Client not initialized`);
+            return null;
+        }
+
+        try {
+            const url = `/evaluations/run/${runId}/item/${runItemId}/first-turn`;
+            const response: AxiosResponse = await this.client.post(url, {});
+            const data = response.data;
+
+            const responseData = data.data || {};
+            return {
+                runItemId,
+                datasetItemId: responseData.datasetItemId || "",
+                message: responseData.userMessage || "",
+                turnId: responseData.turnId || "",
+                files: parseFiles(responseData.attachments),
+            };
+        } catch (error) {
+            const errorMsg = this._extractErrorMessage(error);
+            Logger.error(
+                `${LOG_PREFIX}: Failed to generate first turn for item ${runItemId}:`,
+                errorMsg,
+            );
             return null;
         }
     }
@@ -220,7 +320,12 @@ export class SimulationHttpClient {
     /**
      * Report a task execution failure to the backend.
      */
-    async reportFailure(runId: string, runItemId: string, error: string): Promise<void> {
+    async reportFailure(
+        runId: string,
+        runItemId: string,
+        error: string,
+        status: string = "failed",
+    ): Promise<void> {
         if (!this.client) {
             Logger.error(`${LOG_PREFIX}: Client not initialized`);
             return;
@@ -228,7 +333,7 @@ export class SimulationHttpClient {
 
         try {
             const url = `/evaluations/run/${runId}/item/${runItemId}/status`;
-            const payload = { status: "failed", failureReason: error };
+            const payload = { status, failureReason: error };
             await this.client.patch(url, payload);
             Logger.info(`${LOG_PREFIX}: Reported failure - ${error}`);
         } catch (err) {

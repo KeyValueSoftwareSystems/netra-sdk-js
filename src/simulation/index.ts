@@ -4,7 +4,14 @@
 
 export { Simulation } from "./api";
 export type { SimulationOptions } from "./api";
-export type { CreateRunResult } from "./client";
+export type { CreateRunResult, InitializeRunResult } from "./client";
+export {
+    type AfterAllFn,
+    type AfterFn,
+    type BeforeAllFn,
+    type BeforeFn,
+    type SimulationHooks,
+} from "./hooks";
 export {
     ConversationStatus,
     type ConversationResponse,
