@@ -39,6 +39,7 @@ export interface ProcessedFile {
  */
 export interface SimulationItem {
   runItemId: string;
+  datasetItemId: string;
   message: string;
   turnId: string;
   files?: FileData[];

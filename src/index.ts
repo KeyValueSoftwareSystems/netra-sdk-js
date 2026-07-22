@@ -112,10 +112,15 @@ export type {
 // Export simulation types and classes
 export { BaseTask, Simulation } from "./simulation";
 export type {
+  AfterAllFn,
+  AfterFn,
+  BeforeAllFn,
+  BeforeFn,
   ConversationResponse,
   ConversationResult,
-  CreateRunResult,
+  InitializeRunResult,
   ProcessedFile,
+  SimulationHooks,
   SimulationItem,
   SimulationOptions,
   SimulationResult,
