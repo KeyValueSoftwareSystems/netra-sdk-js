@@ -251,7 +251,9 @@ export async function runBeforeEach(
  * Execute the item-specific after hook for a single scenario (best-effort).
  *
  * Called regardless of whether the scenario succeeded, failed, or had its
- * before hook fail. Exceptions are caught and logged.
+ * before hook fail. When a before hook fails, setupContext is the furthest
+ * successfully built context (e.g. beforeAll only, or beforeAll + beforeEach
+ * if before failed). Exceptions are caught and logged.
  */
 export async function runAfter(
     hooks: SimulationHooks | undefined,

@@ -179,13 +179,16 @@ export class Simulation {
                     const hasBeforeHook = hooks?.before && datasetItemId in hooks.before;
                     const hasBeforeEachHook = !!hooks?.beforeEach;
 
+                    // Track the furthest successfully built context so teardown can
+                    // clean up anything beforeEach created even if before fails.
+                    let setupContext: Record<string, any> | null = sharedContext;
                     if (hasBeforeEachHook || hasBeforeHook) {
                         try {
                             // beforeEach runs first for every item
-                            let itemContext = await runBeforeEach(hooks, datasetItemId, sharedContext);
+                            setupContext = await runBeforeEach(hooks, datasetItemId, setupContext);
                             // then item-specific before hook (receives merged context from beforeEach)
-                            itemContext = await runBefore(hooks, datasetItemId, itemContext);
-                            setupContexts.set(runItemId, itemContext);
+                            setupContext = await runBefore(hooks, datasetItemId, setupContext);
+                            setupContexts.set(runItemId, setupContext);
                         } catch (error) {
                             const errorMsg = `before hook failed: ${error instanceof Error ? error.message : String(error)}`;
                             Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
@@ -197,12 +200,12 @@ export class Simulation {
                                 error: errorMsg,
                             };
                             failedItems.push(itemResult);
-                            await runAfter(hooks, datasetItemId, itemResult as any, sharedContext);
-                            await runAfterEach(hooks, datasetItemId, itemResult as any, sharedContext);
+                            await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                            await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                             return;
                         }
                     } else {
-                        setupContexts.set(runItemId, sharedContext);
+                        setupContexts.set(runItemId, setupContext);
                     }
 
                     const simItem = await this._client.generateFirstTurn(runId, runItemId);
