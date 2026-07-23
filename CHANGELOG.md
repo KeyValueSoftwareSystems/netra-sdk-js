@@ -5,18 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
 
-### Added
-
-- **Opt-in prompt caching** — `Netra.prompts.getPrompt()` accepts `useCache` and `cacheTtl`. When `useCache` is true, responses are served from an in-memory TTL cache (default TTL: `PROMPT_CACHE_TTL_SECONDS` = 60). Caching is off by default.
-- **Models API** — `Netra.models.getModelPricing()` fetches model pricing (optional `name` filter) with the same opt-in cache pattern (`useCache`, `cacheTtl`; default TTL: `MODEL_PRICING_CACHE_TTL_SECONDS` = 300).
-- **Cache lifecycle** — `Netra.shutdown()` clears prompts and models in-memory caches. `clearCache()` is also available on each client.
-- **Exported cache constants** — `PROMPT_CACHE_TTL_SECONDS` and `MODEL_PRICING_CACHE_TTL_SECONDS` are public exports.
+## [1.7.0] - 2026-07-23
 
 ### Changed
 
-- **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
+- **Evaluation/simulation trace origin label** — Root spans created for evaluation and simulation runs now carry a `netra.trace.origin` attribute (`Config.TRACE_ORIGIN_KEY`) set to `"evaluation"` (`Config.TRACE_ORIGIN_EVALUATION`), so the backend/frontend can distinguish these traces from normal workflow invocations.
+
 
 ## [1.6.0] - 2026-07-14
 
