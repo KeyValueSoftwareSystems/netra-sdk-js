@@ -248,7 +248,17 @@ export class SpanIOProcessor implements SpanProcessor {
           return original(_USAGE_COMPLETION_TOKENS, value);
         }
 
-        // 9. Pass through
+        // 9. db.statement → input (DB instrumentations: TypeORM, etc.)
+        // Keep db.statement; never map into output.
+        if (key === "db.statement") {
+          original(key, value);
+          if (!inputLocked() && inputIsEmpty() && !isEmpty(value)) {
+            original("input", typeof value === "string" ? value : String(value));
+          }
+          return span;
+        }
+
+        // 10. Pass through
         return original(key, value);
       } catch (e) {
         Logger.debug(`SpanIOProcessor: error processing key=${key}`, e);
