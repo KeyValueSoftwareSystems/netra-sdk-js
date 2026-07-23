@@ -351,7 +351,11 @@ export class Simulation {
         let rawFiles: FileData[] = initialFiles ?? [];
 
         while (true) {
-            const span = new SpanWrapper(SPAN_NAME, {}, LOG_PREFIX);
+            const span = new SpanWrapper(
+                SPAN_NAME,
+                { [Config.TRACE_ORIGIN_KEY]: Config.TRACE_ORIGIN_EVALUATION },
+                LOG_PREFIX,
+            );
             span.start();
 
             try {
