@@ -368,7 +368,11 @@ export class Evaluation {
   ): Promise<{ status: string }> {
     const spanName = `TestRun.${runName}`;
 
-    const span = new SpanWrapper(spanName, {}, "netra.evaluation");
+    const span = new SpanWrapper(
+      spanName,
+      { [Config.TRACE_ORIGIN_KEY]: Config.TRACE_ORIGIN_EVALUATION },
+      "netra.evaluation",
+    );
     span.start();
 
     try {

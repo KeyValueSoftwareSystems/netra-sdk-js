@@ -127,6 +127,11 @@ export class Config {
   static readonly LIBRARY_VERSION = SDK_VERSION;
   static readonly TRIAL_BLOCK_DURATION_SECONDS = 900; // 15 minutes
 
+  // Root-span attribute marking traces produced by evaluation/simulation runs
+  // so the FE/BE can distinguish them from normal workflow invocations.
+  static readonly TRACE_ORIGIN_KEY = "netra.trace.origin";
+  static readonly TRACE_ORIGIN_EVALUATION = "evaluation";
+
   private static _spanAttributeMaxSize: number | undefined;
 
   /**
