@@ -11,8 +11,10 @@ import {
     describeHooks,
     runAfter,
     runAfterAll,
+    runAfterEach,
     runBefore,
     runBeforeAll,
+    runBeforeEach,
     SimulationHooks,
 } from "./hooks";
 import {
@@ -175,10 +177,14 @@ export class Simulation {
                 limit(async () => {
                     const { runItemId, datasetItemId } = item;
                     const hasBeforeHook = hooks?.before && datasetItemId in hooks.before;
+                    const hasBeforeEachHook = !!hooks?.beforeEach;
 
-                    if (hasBeforeHook) {
+                    if (hasBeforeEachHook || hasBeforeHook) {
                         try {
-                            const itemContext = await runBefore(hooks, datasetItemId, sharedContext);
+                            // beforeEach runs first for every item
+                            let itemContext = await runBeforeEach(hooks, datasetItemId, sharedContext);
+                            // then item-specific before hook (receives merged context from beforeEach)
+                            itemContext = await runBefore(hooks, datasetItemId, itemContext);
                             setupContexts.set(runItemId, itemContext);
                         } catch (error) {
                             const errorMsg = `before hook failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -192,6 +198,7 @@ export class Simulation {
                             };
                             failedItems.push(itemResult);
                             await runAfter(hooks, datasetItemId, itemResult as any, sharedContext);
+                            await runAfterEach(hooks, datasetItemId, itemResult as any, sharedContext);
                             return;
                         }
                     } else {
@@ -209,6 +216,7 @@ export class Simulation {
                         };
                         failedItems.push(itemResult);
                         await runAfter(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
+                        await runAfterEach(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
                         return;
                     }
 
@@ -386,6 +394,7 @@ export class Simulation {
                         turnId,
                     };
                     await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                    await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                     return itemResult;
                 }
 
@@ -399,6 +408,7 @@ export class Simulation {
                         finalTurnId: turnId,
                     };
                     await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                    await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                     return itemResult;
                 }
 
@@ -418,6 +428,7 @@ export class Simulation {
                     turnId,
                 };
                 await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                 return itemResult;
             } finally {
                 span.end();

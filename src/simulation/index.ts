@@ -7,8 +7,10 @@ export type { SimulationOptions } from "./api";
 export type { InitializeRunResult } from "./client";
 export {
     type AfterAllFn,
+    type AfterEachFn,
     type AfterFn,
     type BeforeAllFn,
+    type BeforeEachFn,
     type BeforeFn,
     type SimulationHooks,
 } from "./hooks";

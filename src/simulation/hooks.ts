@@ -6,21 +6,26 @@
  *
  * Hook levels:
  *   beforeAll  -- runs once before any scenario starts (dataset-level setup)
+ *   beforeEach -- runs before every scenario (common per-item setup)
  *   before     -- runs before specific scenarios only (item-specific setup, keyed by datasetItemId)
  *   after      -- runs after specific scenarios only (item-specific teardown, keyed by datasetItemId)
+ *   afterEach  -- runs after every scenario (common per-item teardown)
  *   afterAll   -- runs once after all scenarios complete (dataset-level teardown)
  *
  * Execution order per item:
  *   beforeAll()                              -> returns sharedContext (Record | null)
- *   before[datasetItemId](sharedContext)     -> returns itemContext (Record | null), if registered
+ *   beforeEach(sharedContext)               -> returns eachContext (Record | null)
+ *   before[datasetItemId](mergedContext)    -> returns itemContext (Record | null), if registered
  *   BaseTask.run(..., setupContext)          <- receives merged context
  *   after[datasetItemId](result, setupContext), if registered
+ *   afterEach(result, setupContext)
  *   afterAll(results, sharedContext)
  *
  * Failure semantics:
- *   - beforeAll failure -> entire run is marked failed (prescript_failed), no scenarios run
- *   - before failure    -> that scenario is marked failed (prescript_failed), others continue
- *   - after / afterAll failures are logged as warnings and do not affect run/scenario status
+ *   - beforeAll failure  -> entire run is marked failed (prescript_failed), no scenarios run
+ *   - beforeEach failure -> that scenario is marked failed (prescript_failed), others continue
+ *   - before failure     -> that scenario is marked failed (prescript_failed), others continue
+ *   - after / afterEach / afterAll failures are logged as warnings and do not affect run/scenario status
  */
 
 import { Logger } from "../logger";
@@ -34,7 +39,16 @@ export type BeforeAllFn = () =>
     | void
     | Promise<Record<string, any> | null | void>;
 
-/** Hook that runs before a specific scenario. Receives shared context, may return item context. */
+/** Hook that runs before every scenario. Receives shared context, may return per-item context. */
+export type BeforeEachFn = (
+    sharedContext: Record<string, any> | null,
+) =>
+    | Record<string, any>
+    | null
+    | void
+    | Promise<Record<string, any> | null | void>;
+
+/** Hook that runs before a specific scenario. Receives merged context, may return item context. */
 export type BeforeFn = (
     sharedContext: Record<string, any> | null,
 ) =>
@@ -45,6 +59,12 @@ export type BeforeFn = (
 
 /** Hook that runs after a specific scenario. Receives result and setup context. */
 export type AfterFn = (
+    itemResult: Record<string, any>,
+    setupContext: Record<string, any> | null,
+) => void | Promise<void>;
+
+/** Hook that runs after every scenario. Receives result and setup context. */
+export type AfterEachFn = (
     itemResult: Record<string, any>,
     setupContext: Record<string, any> | null,
 ) => void | Promise<void>;
@@ -64,10 +84,14 @@ export type AfterAllFn = (
 export interface SimulationHooks {
     /** Called once before any scenario starts. May return a dict forwarded as sharedContext. */
     beforeAll?: BeforeAllFn;
+    /** Called before every scenario. Receives sharedContext, may return per-item context merged into setupContext. */
+    beforeEach?: BeforeEachFn;
     /** Dict mapping datasetItemId to hook functions. Called before specific scenarios only. */
     before?: Record<string, BeforeFn>;
     /** Dict mapping datasetItemId to hook functions. Called after specific scenarios only. */
     after?: Record<string, AfterFn>;
+    /** Called after every scenario. Receives the item result and setupContext. */
+    afterEach?: AfterEachFn;
     /** Called once after all scenarios finish. Receives aggregated results and sharedContext. */
     afterAll?: AfterAllFn;
 }
@@ -99,8 +123,12 @@ export function describeHooks(hooks: SimulationHooks): Record<string, any> {
     const payload: Record<string, any> = {};
 
     const beforeAllDesc = descFn(hooks.beforeAll);
+    const beforeEachDesc = descFn(hooks.beforeEach);
+    const afterEachDesc = descFn(hooks.afterEach);
     const afterAllDesc = descFn(hooks.afterAll);
     if (beforeAllDesc) payload.beforeAll = beforeAllDesc;
+    if (beforeEachDesc) payload.beforeEach = beforeEachDesc;
+    if (afterEachDesc) payload.afterEach = afterEachDesc;
     if (afterAllDesc) payload.afterAll = afterAllDesc;
 
     const itemIds = new Set([
@@ -186,6 +214,40 @@ export async function runBefore(
 }
 
 /**
+ * Execute the beforeEach hook for a single scenario.
+ *
+ * Unlike `before` (which is item-specific), `beforeEach` runs for every dataset item.
+ *
+ * @returns Merged context dict (sharedContext + beforeEach result),
+ *          or sharedContext unchanged when no hook is configured.
+ * @throws Re-raises any exception so the caller can mark the scenario as prescript_failed.
+ */
+export async function runBeforeEach(
+    hooks: SimulationHooks | undefined,
+    datasetItemId: string,
+    sharedContext: Record<string, any> | null,
+): Promise<Record<string, any> | null> {
+    if (!hooks?.beforeEach) return sharedContext;
+
+    Logger.info(
+        `${LOG_PREFIX}: running beforeEach hook for datasetItemId=${datasetItemId}`,
+    );
+    const result = await hooks.beforeEach(sharedContext);
+
+    const base: Record<string, any> = { ...(sharedContext || {}) };
+    if (result !== null && result !== undefined) {
+        if (typeof result === "object") {
+            Object.assign(base, result);
+        } else {
+            Logger.warn(
+                `${LOG_PREFIX}: beforeEach hook returned ${typeof result} (expected object or null); ignoring value`,
+            );
+        }
+    }
+    return Object.keys(base).length > 0 ? base : null;
+}
+
+/**
  * Execute the item-specific after hook for a single scenario (best-effort).
  *
  * Called regardless of whether the scenario succeeded, failed, or had its
@@ -209,6 +271,33 @@ export async function runAfter(
                 error,
             );
         }
+    }
+}
+
+/**
+ * Execute the afterEach hook for a single scenario (best-effort).
+ *
+ * Unlike `after` (which is item-specific), `afterEach` runs for every dataset item.
+ * Exceptions are caught and logged; they do not affect scenario status.
+ */
+export async function runAfterEach(
+    hooks: SimulationHooks | undefined,
+    datasetItemId: string,
+    itemResult: Record<string, any>,
+    setupContext: Record<string, any> | null,
+): Promise<void> {
+    if (!hooks?.afterEach) return;
+
+    Logger.info(
+        `${LOG_PREFIX}: running afterEach hook for datasetItemId=${datasetItemId}`,
+    );
+    try {
+        await hooks.afterEach(itemResult, setupContext);
+    } catch (error) {
+        Logger.warn(
+            `${LOG_PREFIX}: afterEach hook raised an exception for datasetItemId=${datasetItemId} (ignored):`,
+            error,
+        );
     }
 }
 
