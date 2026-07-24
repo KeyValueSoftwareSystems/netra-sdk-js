@@ -20,6 +20,10 @@ export const SpanAttributes = {
   LLM_RESPONSE_DURATION: "llm.response.duration",
 
   LLM_TIME_TO_FIRST_TOKEN: "gen_ai.performance.time_to_first_token",
+  LLM_TIME_TO_FIRST_TOKEN_TIMESTAMP:
+    "gen_ai.performance.time_to_first_token.timestamp",
+  LLM_TIME_TO_FIRST_TOKEN_STREAMING:
+    "gen_ai.performance.time_to_first_token.streaming",
   LLM_RELATIVE_TIME_TO_FIRST_TOKEN:
     "gen_ai.performance.relative_time_to_first_token",
 

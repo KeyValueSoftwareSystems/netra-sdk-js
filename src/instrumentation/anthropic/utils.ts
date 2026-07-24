@@ -51,7 +51,7 @@ export function processStreamChunk(
 
       case "content_block_delta": {
         // First delta of any block -- text or tool-call JSON -- is the first token
-        recordFirstTokenTiming(span);
+        recordFirstTokenTiming(span, { streaming: true });
         if (
           !completeResponse.content ||
           completeResponse.content.length === 0

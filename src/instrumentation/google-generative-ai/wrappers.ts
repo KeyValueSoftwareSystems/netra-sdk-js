@@ -12,6 +12,7 @@ import {
   recordFirstTokenTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
+import { SpanAttributes } from "../span-attributes";
 import { extractModelName, setRequestAttributes, setResponseAttributes } from "./utils";
 
 type GoogleGenerativeAIRequestType = "chat" | "embedding";
@@ -96,9 +97,10 @@ function googleGenerativeAIWrapper(
               return (async () => {
                 try {
                   const value = await response;
-                  if (requestType !== "embedding") {
-                    recordFirstTokenTiming(span);
-                  }
+                  recordFirstTokenTiming(span, {
+                    requestType,
+                    streaming: false,
+                  });
                   try {
                     const endTime = Date.now();
                     const responseDict = modelAsDict(value);
@@ -123,9 +125,10 @@ function googleGenerativeAIWrapper(
                 }
               })();
             } else {
-              if (requestType !== "embedding") {
-                recordFirstTokenTiming(span);
-              }
+              recordFirstTokenTiming(span, {
+                requestType,
+                streaming: false,
+              });
               try {
                 const endTime = Date.now();
                 const responseDict = modelAsDict(response);
@@ -176,7 +179,12 @@ function googleGenerativeAIStreamWrapper(
         spanName,
         {
           kind: SpanKind.CLIENT,
-          attributes: { "llm.request.type": requestType },
+          attributes: {
+            "llm.request.type": requestType,
+            // `generateContentStream` carries no `stream` argument to infer
+            // this from, so mark it here.
+            [SpanAttributes.LLM_IS_STREAMING]: true,
+          },
         },
         currentContext,
         (span: Span) => {
@@ -207,7 +215,11 @@ function googleGenerativeAIStreamWrapper(
                   !originalStream ||
                   typeof originalStream[Symbol.asyncIterator] !== "function"
                 ) {
-                  recordFirstTokenTiming(span);
+                  // Not actually a stream: the whole response is already here.
+                  recordFirstTokenTiming(span, {
+                    requestType,
+                    streaming: false,
+                  });
                   try {
                     const endTime = Date.now();
                     const responseDict = modelAsDict(streamResult);
@@ -273,7 +285,10 @@ function googleGenerativeAIStreamWrapper(
                                 ? chunk.text()
                                 : chunk?.text;
                             if (typeof t === "string" && t) {
-                              recordFirstTokenTiming(span);
+                              recordFirstTokenTiming(span, {
+                                requestType,
+                                streaming: true,
+                              });
                             }
                           } catch {
                             // ignore chunk parsing issues

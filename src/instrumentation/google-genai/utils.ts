@@ -501,7 +501,6 @@ export function processStreamChunk(
     if (chunkText && chunkText.length > 0) {
       if (!accumulated._text) {
         accumulated._text = chunkText;
-        recordFirstTokenTiming(span);
       } else {
         accumulated._text += chunkText;
       }
@@ -509,9 +508,17 @@ export function processStreamChunk(
 
     // Accumulate function calls
     const fcs = chunk.functionCalls;
-    if (Array.isArray(fcs) && fcs.length > 0) {
+    const hasFunctionCalls = Array.isArray(fcs) && fcs.length > 0;
+    if (hasFunctionCalls) {
       if (!accumulated._functionCalls) accumulated._functionCalls = [];
       accumulated._functionCalls.push(...fcs);
+    }
+
+    // A function-calling turn can stream no text at all, so gating first-token
+    // timing on text alone would leave tool-use spans unmeasured and bias any
+    // aggregate toward text-only calls. Idempotent, so no first-chunk flag.
+    if (chunkText || hasFunctionCalls) {
+      recordFirstTokenTiming(span, { streaming: true });
     }
 
     // Usage metadata -- later chunks overwrite; final chunk has full counts

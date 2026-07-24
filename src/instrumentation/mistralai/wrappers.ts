@@ -10,7 +10,12 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, recordFirstTokenTiming } from "../utils";
+import {
+  defineHidden,
+  recordFirstTokenFromDelta,
+  isPromise,
+  recordFirstTokenTiming,
+} from "../utils";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -61,7 +66,10 @@ function mistralWrapper(
             return (async () => {
               try {
                 const value = await response;
-                recordFirstTokenTiming(span);
+                recordFirstTokenTiming(span, {
+                  requestType,
+                  streaming: false,
+                });
                 const endTime = Date.now();
                 setResponseAttributes(span, modelAsDict(value));
                 span.setAttribute(
@@ -85,7 +93,13 @@ function mistralWrapper(
             })();
           }
 
-          recordFirstTokenTiming(span);
+          recordFirstTokenTiming(span, {
+
+            requestType,
+
+            streaming: false,
+
+          });
           const endTime = Date.now();
           setResponseAttributes(span, modelAsDict(response));
           span.setAttribute(
@@ -344,8 +358,8 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
           this.ensureChoice(index);
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
+          recordFirstTokenFromDelta(this.span, delta);
           if (typeof delta === "object" && delta.content) {
-            recordFirstTokenTiming(this.span);
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -380,8 +394,8 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         this.ensureChoice(index);
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
+        recordFirstTokenFromDelta(this.span, delta);
         if (typeof delta === "object" && delta.content) {
-          recordFirstTokenTiming(this.span);
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {
@@ -564,8 +578,8 @@ export class AsyncStreamingWrapper
           this.ensureChoice(index);
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
+          recordFirstTokenFromDelta(this.span, delta);
           if (typeof delta === "object" && delta.content) {
-            recordFirstTokenTiming(this.span);
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -600,8 +614,8 @@ export class AsyncStreamingWrapper
         this.ensureChoice(index);
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
+        recordFirstTokenFromDelta(this.span, delta);
         if (typeof delta === "object" && delta.content) {
-          recordFirstTokenTiming(this.span);
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {

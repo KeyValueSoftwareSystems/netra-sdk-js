@@ -65,6 +65,17 @@ const TRACKED_STREAM_EVENTS = new Set([
 ]);
 
 /**
+ * Stream events the wrapper subscribes to on its own behalf, independent of
+ * what the consumer subscribes to. Named so they can be re-registered after a
+ * consumer's `removeAllListeners()` strips them.
+ */
+const SAFETY_NET_EVENTS = {
+  STREAM_EVENT: "streamEvent",
+  END: "end",
+  ERROR: "error",
+} as const;
+
+/**
  * Wrap each tool's `run()` method so every invocation produces a TOOL span.
  * Preserves the tool's prototype chain — only `run` is replaced.
  * User tool errors are recorded on the span and re-thrown.
@@ -239,7 +250,13 @@ class MessageStreamWrapper {
           if (prop === "removeAllListeners") {
             return function (event?: string) {
               target.listenerMap = new WeakMap();
-              return method.call(target.messageStream, event);
+              const result = method.call(target.messageStream, event);
+              // The consumer only meant to drop its own listeners, but the
+              // call is indiscriminate and also takes out the wrapper's --
+              // losing first-token timing and, worse, the end/error handlers
+              // that finalize the span. Put back whatever it removed.
+              target.registerSafetyNetListeners(event);
+              return result;
             };
           }
           return method.bind(target.messageStream);
@@ -283,27 +300,57 @@ class MessageStreamWrapper {
     });
   }
 
-  private registerSafetyNetListeners(): void {
+  /**
+   * Register the listeners this wrapper needs regardless of what the consumer
+   * subscribes to.
+   *
+   * @param onlyEvent - Register just this one event. Used to restore a single
+   *   listener after the consumer removed it; omit to register all of them.
+   */
+  private registerSafetyNetListeners(onlyEvent?: string): void {
     try {
       if (typeof this.messageStream?.on !== "function") return;
 
-      this.messageStream.on("end", () => {
-        if (!this.completionPending) {
-          this.finalizeSpanOnce(SpanStatusCode.OK);
-        }
-      });
-      this.messageStream.on("error", (err: any) => {
-        if (err && !this.spanFinalized) {
-          this.span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          this.span.recordException(
-            err instanceof Error ? err : new Error(String(err)),
-          );
-        }
-        this.finalizeSpanOnce(SpanStatusCode.ERROR);
-      });
+      const wants = (event: string) =>
+        onlyEvent === undefined || onlyEvent === event;
+
+      // First-token timing has to come from a listener we register ourselves:
+      // `processEventData` only runs for events the *consumer* subscribed to,
+      // and `processStreamChunk` only runs if the consumer iterates. Neither
+      // happens for `await stream.finalMessage()`. `streamEvent` carries the
+      // raw events, so this covers text and tool-call JSON deltas alike;
+      // `recordFirstTokenTiming` is idempotent per span, so a consumer with
+      // its own listeners does not double-record.
+      if (wants(SAFETY_NET_EVENTS.STREAM_EVENT)) {
+        this.messageStream.on(SAFETY_NET_EVENTS.STREAM_EVENT, (event: any) => {
+          if (event?.type === "content_block_delta") {
+            recordFirstTokenTiming(this.span, { streaming: true });
+          }
+        });
+      }
+
+      if (wants(SAFETY_NET_EVENTS.END)) {
+        this.messageStream.on(SAFETY_NET_EVENTS.END, () => {
+          if (!this.completionPending) {
+            this.finalizeSpanOnce(SpanStatusCode.OK);
+          }
+        });
+      }
+
+      if (wants(SAFETY_NET_EVENTS.ERROR)) {
+        this.messageStream.on(SAFETY_NET_EVENTS.ERROR, (err: any) => {
+          if (err && !this.spanFinalized) {
+            this.span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: err instanceof Error ? err.message : String(err),
+            });
+            this.span.recordException(
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          }
+          this.finalizeSpanOnce(SpanStatusCode.ERROR);
+        });
+      }
     } catch (e) {
       Logger.error(
         "netra.instrumentation.anthropic: safety net listener registration failed",
@@ -347,9 +394,6 @@ class MessageStreamWrapper {
         break;
 
       case "text":
-        // `.on("text")` consumers never drive processStreamChunk, so first-token
-        // timing has to be recorded from the event path too.
-        recordFirstTokenTiming(this.span);
         if (!this.completeResponse.currentText) {
           this.completeResponse.currentText = "";
         }
@@ -437,6 +481,7 @@ function anthropicWrapper(
             if (isStreaming) {
               span.setAttribute("llm.streaming", true);
             }
+            span.setAttribute(SpanAttributes.LLM_IS_STREAMING, isStreaming);
             const startTime = Date.now();
             const spanContext = trace.setSpan(currentContext, span);
             const response = context.with(spanContext, () =>
@@ -465,7 +510,12 @@ function anthropicWrapper(
                   span.recordException(error as Error);
                 },
                 onSuccess: (value) => {
-                  recordFirstTokenTiming(span);
+                  // No-op when streaming: `processStreamChunk` already recorded
+                  // from the first content_block_delta.
+                  recordFirstTokenTiming(span, {
+                    requestType,
+                    streaming: isStreaming,
+                  });
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
@@ -541,6 +591,7 @@ function streamWrapper(
           attributes: {
             "llm.request.type": requestType,
             "llm.streaming": true,
+            [SpanAttributes.LLM_IS_STREAMING]: true,
             "llm.operation": "stream",
           },
         },

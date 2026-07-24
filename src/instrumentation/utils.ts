@@ -9,7 +9,7 @@ import {
   type Context as OTelContext,
   type HrTime,
 } from "@opentelemetry/api";
-import { hrTime, hrTimeToMilliseconds } from "@opentelemetry/core";
+import { hrTimeToMilliseconds } from "@opentelemetry/core";
 import { Logger } from "../logger";
 import { RootSpanProcessor } from "../processors/root-span-processor";
 import { safeStringify } from "../utils/serialization";
@@ -135,26 +135,108 @@ export function hasContent(value: unknown): boolean {
 
 // First-token timing
 
-/** Companion attribute holding the wall-clock instant of a timing attribute. */
-const TIMESTAMP_ATTRIBUTE_SUFFIX = ".timestamp";
-
-/** Spans that already carry a time-to-first-token measurement. */
-const firstTokenRecordedSpans = new WeakSet<Span>();
+/**
+ * Spans whose first-token timing has already been dealt with -- either recorded
+ * or deliberately skipped. Membership is what makes `recordFirstTokenTiming`
+ * idempotent, and it covers the skip cases too so that a span we cannot measure
+ * is examined (and logged about) once, rather than once per chunk for the whole
+ * life of a stream.
+ */
+const firstTokenHandledSpans = new WeakSet<Span>();
 
 /**
- * Epoch milliseconds on the same clock OTel derives span timestamps from.
- * Deliberately not `Date.now()`: span start times come from
- * `performance.timeOrigin`, which drifts from the system clock in
- * long-running processes, and mixing the two skews short elapsed times.
+ * Provider request types this SDK instruments, declared as one union rather
+ * than per provider so that `TOKENLESS_REQUEST_TYPES` is checked against it.
+ * A provider that starts instrumenting a new operation fails to compile at its
+ * `recordFirstTokenTiming` call until someone widens this union, which forces
+ * the question of whether that operation generates tokens.
  */
-function nowMs(): number {
-  return hrTimeToMilliseconds(hrTime());
+export type LlmRequestType =
+  | "agent"
+  | "batches"
+  | "beta"
+  | "chat"
+  | "embedding"
+  | "fim"
+  | "response";
+
+/**
+ * Request types whose spans complete without generating any tokens, so a
+ * time-to-first-token measurement would be meaningless on them. Keeping the
+ * rule here rather than at each call site keeps every provider consistent.
+ */
+const TOKENLESS_REQUEST_TYPES = new Set<LlmRequestType>([
+  "batches",
+  "embedding",
+]);
+
+/**
+ * Fields a streaming chat delta may carry that represent generated output.
+ * `content` alone is not enough: a tool-calling turn streams tool-call deltas
+ * with a null `content`, and would otherwise never record a first token.
+ * Both casings are listed because Mistral's SDK camelCases delta fields while
+ * the OpenAI-compatible providers use snake_case. Reasoning models are listed
+ * under both `reasoning` and `reasoning_content` because OpenAI-compatible
+ * gateways disagree on which one carries the thinking stream, and on a
+ * reasoning turn it precedes visible `content` by seconds.
+ */
+const CONTENT_BEARING_DELTA_FIELDS = [
+  "content",
+  "tool_calls",
+  "toolCalls",
+  "function_call",
+  "functionCall",
+  "refusal",
+  "reasoning",
+  "reasoning_content",
+  "audio",
+] as const;
+
+/** True if a streaming chat delta carries generated output of any kind. */
+function hasGeneratedContent(delta: unknown): boolean {
+  if (!isDict(delta)) return false;
+  return CONTENT_BEARING_DELTA_FIELDS.some((field) => hasContent(delta[field]));
 }
 
 function spanStartMs(span: Span): number | undefined {
   // `startTime` exists on SDK spans but not on the api-level Span interface.
   const startTime = (span as unknown as { startTime?: HrTime }).startTime;
-  return Array.isArray(startTime) ? hrTimeToMilliseconds(startTime) : undefined;
+  if (!Array.isArray(startTime)) return undefined;
+  const startMs = hrTimeToMilliseconds(startTime);
+  return Number.isFinite(startMs) ? startMs : undefined;
+}
+
+/**
+ * Elapsed seconds between two wall-clock readings, or `undefined` when the
+ * pair does not yield a usable duration.
+ *
+ * A backward clock step (NTP correction, host suspend) between the span
+ * starting and the first token arriving yields a negative duration. Clamping
+ * that to zero would only swap one corrupt value for another: a zero-second
+ * time-to-first-token is indistinguishable from a real measurement, so it
+ * silently drags down every average and histogram bucket it lands in.
+ * Returning `undefined` leaves the attribute off the span instead, which
+ * downstream can at least see and account for.
+ */
+function elapsedSeconds(
+  eventMs: number,
+  startMs: number,
+): number | undefined {
+  const seconds = (eventMs - startMs) / 1000;
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
+export interface FirstTokenTimingOptions {
+  /**
+   * Whether the value being recorded came from a streamed response. Stamped
+   * onto the span so consumers never have to infer the call shape.
+   */
+  streaming: boolean;
+  /**
+   * Provider request type, when the call site has one. Spans for token-less
+   * operations (embeddings, batch submission) are skipped.
+   */
+  requestType?: LlmRequestType;
 }
 
 /**
@@ -163,41 +245,122 @@ function spanStartMs(span: Span): number | undefined {
  * Sets:
  *   - `gen_ai.performance.time_to_first_token` -- seconds since this span started.
  *   - `gen_ai.performance.time_to_first_token.timestamp` -- UTC ISO-8601 instant.
+ *   - `gen_ai.performance.time_to_first_token.streaming` -- whether the value
+ *     came from a streamed response (see below).
  *   - `gen_ai.performance.relative_time_to_first_token` -- seconds since the
  *     trace's root span started, so first-token latency of the individual LLM
- *     calls of one request can be placed on a shared timeline. Omitted when the
- *     root span is unavailable (already ended, or never registered).
+ *     calls of one request can be placed on a shared timeline.
  *
- * Call this on the first content-bearing chunk when streaming, and as soon as
- * the response resolves when not. Only the first call per span takes effect,
- * so streaming call sites need no first-chunk bookkeeping of their own.
+ * On a non-streaming call the first token is not observable before the whole
+ * response is, so the recorded value necessarily equals total request latency.
+ * Folding those into a streaming first-token aggregate inflates it by the full
+ * generation time of every non-streaming call, so the call shape is stamped on
+ * the span itself. Do not use `llm.is_streaming` to make that split: it is
+ * absent rather than `false` on non-streaming spans, Anthropic's `.stream()`
+ * helper reports `llm.streaming` instead, and the google-generative-ai stream
+ * wrapper sets neither.
+ *
+ * `relative_time_to_first_token` is omitted whenever no root span is registered
+ * for the trace. Note that `RootSpanProcessor` only registers spans with no
+ * parent *in this process*, so a service handling a request that arrived with a
+ * `traceparent` header has no local root and emits no relative timing for any of
+ * its spans. Absolute `time_to_first_token` is still emitted.
+ *
+ * Call this on the first content-bearing chunk when streaming -- or use
+ * `recordFirstTokenFromDelta`, which makes that check -- and as soon as the
+ * response resolves when not. Only the first call per span takes effect, so
+ * streaming call sites need no first-chunk bookkeeping of their own.
+ *
+ * Never throws. This runs on every chunk of every stream, and in several
+ * providers the enclosing iterator rethrows to the host application, so an
+ * instrumentation failure here would otherwise abort the caller's stream.
  */
-export function recordFirstTokenTiming(span: Span): void {
-  if (!span.isRecording() || firstTokenRecordedSpans.has(span)) return;
+export function recordFirstTokenTiming(
+  span: Span,
+  opts: FirstTokenTimingOptions,
+): void {
+  try {
+    if (firstTokenHandledSpans.has(span) || !span.isRecording()) return;
 
-  const eventMs = nowMs();
-  const spanStart = spanStartMs(span);
-  if (spanStart === undefined) return;
+    if (
+      opts.requestType !== undefined &&
+      TOKENLESS_REQUEST_TYPES.has(opts.requestType)
+    ) {
+      firstTokenHandledSpans.add(span);
+      return;
+    }
 
-  firstTokenRecordedSpans.add(span);
+    // `Date.now()` and not the monotonic clock: `@opentelemetry/sdk-trace-base`
+    // derives `Span.startTime` from `Date.now()`, and subtracting a monotonic
+    // reading from a wall-clock one biases the result by however far the two
+    // have diverged -- far enough to go negative after a host suspend or an
+    // NTP step.
+    const eventMs = Date.now();
+    const spanStart = spanStartMs(span);
+    if (spanStart === undefined) {
+      firstTokenHandledSpans.add(span);
+      Logger.debug(
+        "netra.instrumentation: no readable startTime on span," +
+          " skipping time-to-first-token",
+      );
+      return;
+    }
 
-  span.setAttribute(
-    SpanAttributes.LLM_TIME_TO_FIRST_TOKEN,
-    (eventMs - spanStart) / 1000,
-  );
-  span.setAttribute(
-    `${SpanAttributes.LLM_TIME_TO_FIRST_TOKEN}${TIMESTAMP_ATTRIBUTE_SUFFIX}`,
-    new Date(eventMs).toISOString(),
-  );
+    const timeToFirstToken = elapsedSeconds(eventMs, spanStart);
+    if (timeToFirstToken === undefined) {
+      firstTokenHandledSpans.add(span);
+      Logger.debug(
+        "netra.instrumentation: span start is after its first token" +
+          " (clock step), skipping time-to-first-token",
+      );
+      return;
+    }
 
-  const rootSpan = RootSpanProcessor.getRootSpan(span);
-  const rootStart = rootSpan ? spanStartMs(rootSpan) : undefined;
-  if (rootStart === undefined) return;
+    firstTokenHandledSpans.add(span);
+    span.setAttribute(
+      SpanAttributes.LLM_TIME_TO_FIRST_TOKEN,
+      timeToFirstToken,
+    );
+    span.setAttribute(
+      SpanAttributes.LLM_TIME_TO_FIRST_TOKEN_TIMESTAMP,
+      new Date(eventMs).toISOString(),
+    );
+    span.setAttribute(
+      SpanAttributes.LLM_TIME_TO_FIRST_TOKEN_STREAMING,
+      opts.streaming,
+    );
 
-  span.setAttribute(
-    SpanAttributes.LLM_RELATIVE_TIME_TO_FIRST_TOKEN,
-    (eventMs - rootStart) / 1000,
-  );
+    const rootSpan = RootSpanProcessor.getRootSpan(span);
+    const rootStart = rootSpan ? spanStartMs(rootSpan) : undefined;
+    if (rootStart === undefined) return;
+
+    const relative = elapsedSeconds(eventMs, rootStart);
+    if (relative === undefined) return;
+
+    span.setAttribute(
+      SpanAttributes.LLM_RELATIVE_TIME_TO_FIRST_TOKEN,
+      relative,
+    );
+  } catch (e) {
+    Logger.error(
+      "netra.instrumentation: time-to-first-token recording failed",
+      e,
+    );
+  }
+}
+
+/**
+ * Record first-token timing from a streaming chat delta, when that delta is the
+ * first one carrying generated output.
+ *
+ * Consults the already-handled set before inspecting the delta, so the field
+ * scan runs only up to the first token rather than on every chunk of the
+ * stream.
+ */
+export function recordFirstTokenFromDelta(span: Span, delta: unknown): void {
+  if (firstTokenHandledSpans.has(span)) return;
+  if (!hasGeneratedContent(delta)) return;
+  recordFirstTokenTiming(span, { streaming: true });
 }
 
 // Attribute Mapping (model params → span attributes)

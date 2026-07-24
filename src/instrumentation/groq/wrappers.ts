@@ -3,6 +3,7 @@ import { Logger } from "../../logger";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
   defineHidden,
+  recordFirstTokenFromDelta,
   modelAsDict,
   isPromise,
   recordFirstTokenTiming,
@@ -92,7 +93,10 @@ function groqWrapper(
               return (async () => {
                 try {
                   const value = await response;
-                  recordFirstTokenTiming(span);
+                  recordFirstTokenTiming(span, {
+                    requestType,
+                    streaming: false,
+                  });
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
@@ -116,7 +120,10 @@ function groqWrapper(
                 }
               })();
             } else {
-              recordFirstTokenTiming(span);
+              recordFirstTokenTiming(span, {
+                requestType,
+                streaming: false,
+              });
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
@@ -222,8 +229,8 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         this.ensureChoice(index);
 
         const delta = choice.delta || {};
+        recordFirstTokenFromDelta(this.span, delta);
         if (delta?.content) {
-          recordFirstTokenTiming(this.span);
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
           }
@@ -363,8 +370,8 @@ export class AsyncStreamingWrapper
         const index = Number(choice.index || 0);
         this.ensureChoice(index);
         const delta = (choice.delta || {}) as Record<string, unknown>;
+        recordFirstTokenFromDelta(this.span, delta);
         if (typeof delta === "object" && delta.content) {
-          recordFirstTokenTiming(this.span);
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (!choiceEntry.message) {

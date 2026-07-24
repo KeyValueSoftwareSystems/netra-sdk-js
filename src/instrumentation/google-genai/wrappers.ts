@@ -114,7 +114,10 @@ function genericWrapperFactory(
               {
                 withContext: (fn) => context.with(spanContext, fn),
                 onSuccess: (value) => {
-                  recordFirstTokenTiming(span);
+                  recordFirstTokenTiming(span, {
+                    requestType,
+                    streaming: false,
+                  });
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   // Preserve getter-based properties that JSON serialization drops
