@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Removed
+
+- **`enableRootSpan` configuration** — Removed the `enableRootSpan` option and the `NETRA_ENABLE_ROOT_SPAN` environment variable from `Netra.init()`, along with the now-unused `Netra.runWithRootSpan()` method. Netra no longer creates a long-lived process root span at initialization. **Breaking change.**
+
 ## [1.7.0] - 2026-07-23
 
 ### Changed
