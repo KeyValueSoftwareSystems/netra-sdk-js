@@ -11,8 +11,10 @@ import {
     describeHooks,
     runAfter,
     runAfterAll,
+    runAfterEach,
     runBefore,
     runBeforeAll,
+    runBeforeEach,
     SimulationHooks,
 } from "./hooks";
 import {
@@ -175,11 +177,18 @@ export class Simulation {
                 limit(async () => {
                     const { runItemId, datasetItemId } = item;
                     const hasBeforeHook = hooks?.before && datasetItemId in hooks.before;
+                    const hasBeforeEachHook = !!hooks?.beforeEach;
 
-                    if (hasBeforeHook) {
+                    // Track the furthest successfully built context so teardown can
+                    // clean up anything beforeEach created even if before fails.
+                    let setupContext: Record<string, any> | null = sharedContext;
+                    if (hasBeforeEachHook || hasBeforeHook) {
                         try {
-                            const itemContext = await runBefore(hooks, datasetItemId, sharedContext);
-                            setupContexts.set(runItemId, itemContext);
+                            // beforeEach runs first for every item
+                            setupContext = await runBeforeEach(hooks, datasetItemId, setupContext);
+                            // then item-specific before hook (receives merged context from beforeEach)
+                            setupContext = await runBefore(hooks, datasetItemId, setupContext);
+                            setupContexts.set(runItemId, setupContext);
                         } catch (error) {
                             const errorMsg = `before hook failed: ${error instanceof Error ? error.message : String(error)}`;
                             Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
@@ -191,11 +200,12 @@ export class Simulation {
                                 error: errorMsg,
                             };
                             failedItems.push(itemResult);
-                            await runAfter(hooks, datasetItemId, itemResult as any, sharedContext);
+                            await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                            await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                             return;
                         }
                     } else {
-                        setupContexts.set(runItemId, sharedContext);
+                        setupContexts.set(runItemId, setupContext);
                     }
 
                     const simItem = await this._client.generateFirstTurn(runId, runItemId);
@@ -209,6 +219,7 @@ export class Simulation {
                         };
                         failedItems.push(itemResult);
                         await runAfter(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
+                        await runAfterEach(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
                         return;
                     }
 
@@ -382,6 +393,7 @@ export class Simulation {
                         turnId,
                     };
                     await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                    await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                     return itemResult;
                 }
 
@@ -395,6 +407,7 @@ export class Simulation {
                         finalTurnId: turnId,
                     };
                     await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                    await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                     return itemResult;
                 }
 
@@ -414,6 +427,7 @@ export class Simulation {
                     turnId,
                 };
                 await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
+                await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
                 return itemResult;
             } finally {
                 span.end();
