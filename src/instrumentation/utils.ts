@@ -3,8 +3,15 @@
  * Handles setting OTel span attributes for LLM request/response tracing.
  */
 
-import { Span, context, type Context as OTelContext } from "@opentelemetry/api";
+import {
+  Span,
+  context,
+  type Context as OTelContext,
+  type HrTime,
+} from "@opentelemetry/api";
+import { hrTime, hrTimeToMilliseconds } from "@opentelemetry/core";
 import { Logger } from "../logger";
+import { RootSpanProcessor } from "../processors/root-span-processor";
 import { safeStringify } from "../utils/serialization";
 import { SpanAttributes } from "./span-attributes";
 
@@ -124,6 +131,73 @@ export function hasContent(value: unknown): boolean {
   if (typeof value === "string") return value.length > 0;
   if (Array.isArray(value)) return value.length > 0;
   return true;
+}
+
+// First-token timing
+
+/** Companion attribute holding the wall-clock instant of a timing attribute. */
+const TIMESTAMP_ATTRIBUTE_SUFFIX = ".timestamp";
+
+/** Spans that already carry a time-to-first-token measurement. */
+const firstTokenRecordedSpans = new WeakSet<Span>();
+
+/**
+ * Epoch milliseconds on the same clock OTel derives span timestamps from.
+ * Deliberately not `Date.now()`: span start times come from
+ * `performance.timeOrigin`, which drifts from the system clock in
+ * long-running processes, and mixing the two skews short elapsed times.
+ */
+function nowMs(): number {
+  return hrTimeToMilliseconds(hrTime());
+}
+
+function spanStartMs(span: Span): number | undefined {
+  // `startTime` exists on SDK spans but not on the api-level Span interface.
+  const startTime = (span as unknown as { startTime?: HrTime }).startTime;
+  return Array.isArray(startTime) ? hrTimeToMilliseconds(startTime) : undefined;
+}
+
+/**
+ * Record time-to-first-token on an LLM span, measured at the moment of the call.
+ *
+ * Sets:
+ *   - `gen_ai.performance.time_to_first_token` -- seconds since this span started.
+ *   - `gen_ai.performance.time_to_first_token.timestamp` -- UTC ISO-8601 instant.
+ *   - `gen_ai.performance.relative_time_to_first_token` -- seconds since the
+ *     trace's root span started, so first-token latency of the individual LLM
+ *     calls of one request can be placed on a shared timeline. Omitted when the
+ *     root span is unavailable (already ended, or never registered).
+ *
+ * Call this on the first content-bearing chunk when streaming, and as soon as
+ * the response resolves when not. Only the first call per span takes effect,
+ * so streaming call sites need no first-chunk bookkeeping of their own.
+ */
+export function recordFirstTokenTiming(span: Span): void {
+  if (!span.isRecording() || firstTokenRecordedSpans.has(span)) return;
+
+  const eventMs = nowMs();
+  const spanStart = spanStartMs(span);
+  if (spanStart === undefined) return;
+
+  firstTokenRecordedSpans.add(span);
+
+  span.setAttribute(
+    SpanAttributes.LLM_TIME_TO_FIRST_TOKEN,
+    (eventMs - spanStart) / 1000,
+  );
+  span.setAttribute(
+    `${SpanAttributes.LLM_TIME_TO_FIRST_TOKEN}${TIMESTAMP_ATTRIBUTE_SUFFIX}`,
+    new Date(eventMs).toISOString(),
+  );
+
+  const rootSpan = RootSpanProcessor.getRootSpan(span);
+  const rootStart = rootSpan ? spanStartMs(rootSpan) : undefined;
+  if (rootStart === undefined) return;
+
+  span.setAttribute(
+    SpanAttributes.LLM_RELATIVE_TIME_TO_FIRST_TOKEN,
+    (eventMs - rootStart) / 1000,
+  );
 }
 
 // Attribute Mapping (model params → span attributes)

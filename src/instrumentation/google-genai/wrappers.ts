@@ -24,6 +24,7 @@ import { wrapResponse } from "../../utils/response-handler";
 import {
   createSuppressedContext,
   modelAsDict,
+  recordFirstTokenTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { GoogleGenAIRequestType, SPAN_NAMES } from "./types";
@@ -113,6 +114,7 @@ function genericWrapperFactory(
               {
                 withContext: (fn) => context.with(spanContext, fn),
                 onSuccess: (value) => {
+                  recordFirstTokenTiming(span);
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   // Preserve getter-based properties that JSON serialization drops
@@ -209,7 +211,7 @@ function streamWrapperFactory(
               {
                 withContext: (fn) => context.with(spanContext, fn),
                 onChunk: (chunk) => {
-                  processStreamChunk(accumulated, chunk, span, startTime);
+                  processStreamChunk(accumulated, chunk, span);
                 },
                 onError: (error) => {
                   span.setStatus({

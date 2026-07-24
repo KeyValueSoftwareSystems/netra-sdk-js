@@ -11,6 +11,7 @@ import {
   defineHidden,
   isPromise,
   modelAsDict,
+  recordFirstTokenTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
@@ -87,6 +88,7 @@ abstract class BaseStreamHandler {
         this.ensureChoice(index);
         const delta = (choice.delta ?? {}) as Record<string, unknown>;
         if (delta.content) {
+          recordFirstTokenTiming(this.span);
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
             entry.message = { role: "assistant", content: "" };
@@ -103,6 +105,11 @@ abstract class BaseStreamHandler {
 
     if (chunkDict.usage) {
       this.completeResponse.usage = chunkDict.usage;
+    }
+
+    // Responses API: token deltas arrive as a top-level `delta` field
+    if (chunkDict.delta) {
+      recordFirstTokenTiming(this.span);
     }
 
     // Responses API: final response object arrives in a chunk
@@ -317,6 +324,7 @@ function executeNonStreaming(
     if (isPromise(result)) {
       return result.then(
         (value) => {
+          recordFirstTokenTiming(span);
           finalizeSpanSuccess(span, modelAsDict(value), startTime);
           return value;
         },
@@ -327,6 +335,7 @@ function executeNonStreaming(
       );
     }
 
+    recordFirstTokenTiming(span);
     finalizeSpanSuccess(span, modelAsDict(result), startTime);
     return result;
   } catch (error) {

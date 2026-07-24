@@ -20,6 +20,7 @@ import {
   hasContent,
   isDict,
   isTraceContentEnabled,
+  recordFirstTokenTiming,
   writeCompletionAttributes,
   writePromptAttributes,
 } from "../utils";
@@ -481,13 +482,11 @@ function buildGoogleOutputMessages(
  * @param accumulated - Mutable dict built up across chunks.
  * @param chunk       - A single GenerateContentResponse chunk from the stream.
  * @param span        - The active span (for time-to-first-token recording).
- * @param startTime   - Request start timestamp in ms.
  */
 export function processStreamChunk(
   accumulated: Record<string, any>,
   chunk: any,
   span: Span,
-  startTime: number,
 ): void {
   try {
     if (chunk.modelVersion) {
@@ -502,10 +501,7 @@ export function processStreamChunk(
     if (chunkText && chunkText.length > 0) {
       if (!accumulated._text) {
         accumulated._text = chunkText;
-        span.setAttribute(
-          "gen_ai.performance.time_to_first_token",
-          (Date.now() - startTime) / 1000,
-        );
+        recordFirstTokenTiming(span);
       } else {
         accumulated._text += chunkText;
       }

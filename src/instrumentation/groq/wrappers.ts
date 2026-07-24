@@ -5,6 +5,7 @@ import {
   defineHidden,
   modelAsDict,
   isPromise,
+  recordFirstTokenTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
 
@@ -91,6 +92,7 @@ function groqWrapper(
               return (async () => {
                 try {
                   const value = await response;
+                  recordFirstTokenTiming(span);
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
@@ -114,6 +116,7 @@ function groqWrapper(
                 }
               })();
             } else {
+              recordFirstTokenTiming(span);
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
@@ -220,6 +223,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
         const delta = choice.delta || {};
         if (delta?.content) {
+          recordFirstTokenTiming(this.span);
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
           }
@@ -360,6 +364,7 @@ export class AsyncStreamingWrapper
         this.ensureChoice(index);
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
+          recordFirstTokenTiming(this.span);
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (!choiceEntry.message) {

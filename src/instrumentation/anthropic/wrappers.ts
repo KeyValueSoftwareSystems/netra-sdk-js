@@ -15,6 +15,7 @@ import {
   defineHidden,
   isTraceContentEnabled,
   modelAsDict,
+  recordFirstTokenTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { AnthropicRequestType, SPAN_NAMES } from "./types";
@@ -346,6 +347,9 @@ class MessageStreamWrapper {
         break;
 
       case "text":
+        // `.on("text")` consumers never drive processStreamChunk, so first-token
+        // timing has to be recorded from the event path too.
+        recordFirstTokenTiming(this.span);
         if (!this.completeResponse.currentText) {
           this.completeResponse.currentText = "";
         }
@@ -461,6 +465,7 @@ function anthropicWrapper(
                   span.recordException(error as Error);
                 },
                 onSuccess: (value) => {
+                  recordFirstTokenTiming(span);
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);

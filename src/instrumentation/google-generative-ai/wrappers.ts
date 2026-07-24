@@ -9,6 +9,7 @@ import { Logger } from "../../logger";
 import {
   isPromise,
   modelAsDict,
+  recordFirstTokenTiming,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { extractModelName, setRequestAttributes, setResponseAttributes } from "./utils";
@@ -95,18 +96,15 @@ function googleGenerativeAIWrapper(
               return (async () => {
                 try {
                   const value = await response;
+                  if (requestType !== "embedding") {
+                    recordFirstTokenTiming(span);
+                  }
                   try {
                     const endTime = Date.now();
                     const responseDict = modelAsDict(value);
                     setResponseAttributes(span, responseDict);
                     const duration = (endTime - startTime) / 1000;
                     span.setAttribute("llm.response.duration", duration);
-                    if (requestType !== "embedding") {
-                      span.setAttribute(
-                        "gen_ai.performance.time_to_first_token",
-                        duration,
-                      );
-                    }
                   } catch (e) {
                     Logger.error(`${LOG_PREFIX}:`, e);
                   }
@@ -125,6 +123,9 @@ function googleGenerativeAIWrapper(
                 }
               })();
             } else {
+              if (requestType !== "embedding") {
+                recordFirstTokenTiming(span);
+              }
               try {
                 const endTime = Date.now();
                 const responseDict = modelAsDict(response);
@@ -206,16 +207,13 @@ function googleGenerativeAIStreamWrapper(
                   !originalStream ||
                   typeof originalStream[Symbol.asyncIterator] !== "function"
                 ) {
+                  recordFirstTokenTiming(span);
                   try {
                     const endTime = Date.now();
                     const responseDict = modelAsDict(streamResult);
                     setResponseAttributes(span, responseDict);
                     const duration = (endTime - startTime) / 1000;
                     span.setAttribute("llm.response.duration", duration);
-                    span.setAttribute(
-                      "gen_ai.performance.time_to_first_token",
-                      duration,
-                    );
                   } catch (e) {
                     Logger.error(`${LOG_PREFIX}:`, e);
                   }
@@ -223,8 +221,6 @@ function googleGenerativeAIStreamWrapper(
                   span.end();
                   return streamResult;
                 }
-
-                let firstTokenRecorded = false;
 
                 const wrappedStream: AsyncIterable<any> = {
                   [Symbol.asyncIterator]() {
@@ -276,14 +272,8 @@ function googleGenerativeAIStreamWrapper(
                               typeof chunk?.text === "function"
                                 ? chunk.text()
                                 : chunk?.text;
-                            if (typeof t === "string") {
-                              if (t && !firstTokenRecorded) {
-                                span.setAttribute(
-                                  "gen_ai.performance.time_to_first_token",
-                                  (Date.now() - startTime) / 1000,
-                                );
-                                firstTokenRecorded = true;
-                              }
+                            if (typeof t === "string" && t) {
+                              recordFirstTokenTiming(span);
                             }
                           } catch {
                             // ignore chunk parsing issues

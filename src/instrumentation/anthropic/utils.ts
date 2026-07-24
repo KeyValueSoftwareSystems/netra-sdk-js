@@ -1,6 +1,7 @@
 import { Span, SpanStatusCode } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import {
+  recordFirstTokenTiming,
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
 } from "../utils";
@@ -49,6 +50,8 @@ export function processStreamChunk(
       }
 
       case "content_block_delta": {
+        // First delta of any block -- text or tool-call JSON -- is the first token
+        recordFirstTokenTiming(span);
         if (
           !completeResponse.content ||
           completeResponse.content.length === 0
