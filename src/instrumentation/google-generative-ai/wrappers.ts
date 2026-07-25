@@ -7,6 +7,7 @@ import {
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import {
+  isGenerativeRequestType,
   isPromise,
   modelAsDict,
   recordTimeToFirstToken,
@@ -102,8 +103,11 @@ function googleGenerativeAIWrapper(
                     setResponseAttributes(span, responseDict);
                     const duration = (endTime - startTime) / 1000;
                     span.setAttribute("llm.response.duration", duration);
-                    // Non-streaming: the whole response lands at once, so first token == response
-                    recordTimeToFirstToken(span, endTime);
+                    // Non-streaming: the whole response lands at once, so first
+                    // token == response. Embeddings generate no tokens.
+                    if (isGenerativeRequestType(requestType)) {
+                      recordTimeToFirstToken(span);
+                    }
                   } catch (e) {
                     Logger.error(`${LOG_PREFIX}:`, e);
                   }
@@ -130,7 +134,9 @@ function googleGenerativeAIWrapper(
                   "llm.response.duration",
                   (endTime - startTime) / 1000,
                 );
-                recordTimeToFirstToken(span, endTime);
+                if (isGenerativeRequestType(requestType)) {
+                  recordTimeToFirstToken(span);
+                }
               } catch (e) {
                 Logger.error(`${LOG_PREFIX}:`, e);
               }
@@ -211,7 +217,7 @@ function googleGenerativeAIStreamWrapper(
                     const duration = (endTime - startTime) / 1000;
                     span.setAttribute("llm.response.duration", duration);
                     // Not actually a stream — the whole response lands at once
-                    recordTimeToFirstToken(span, endTime);
+                    recordTimeToFirstToken(span);
                   } catch (e) {
                     Logger.error(`${LOG_PREFIX}:`, e);
                   }

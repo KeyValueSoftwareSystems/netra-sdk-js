@@ -10,12 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Time to first token on LLM spans** — Every LLM span produced by the custom provider instrumentors (OpenAI, Anthropic, Groq, MistralAI, Google GenAI, Google Generative AI) now carries `gen_ai.performance.time_to_first_token` (seconds from the LLM span's own start), `gen_ai.performance.time_to_first_token.timestamp` (UTC ISO 8601 wall-clock time of the first token) and `gen_ai.performance.relative_time_to_first_token` (seconds from the trace's root span start, i.e. the wait as the end user perceives it). Streaming calls record on the first content-bearing chunk; non-streaming calls record when the response resolves. Mirrors `record_span_timing` in the Python SDK.
-- **`recordSpanTiming` / `recordTimeToFirstToken`** — Shared instrumentation helpers (`src/instrumentation/utils.ts`) that compute an event's elapsed time against a span's start, the trace root span's start (resolved via `RootSpanProcessor`), or an explicit reference time, and record it as a span attribute.
+- **Time to first token on LLM spans** — Every token-generating LLM span produced by the custom provider instrumentors (OpenAI, Anthropic, Groq, MistralAI, Google GenAI, Google Generative AI) now carries `gen_ai.performance.time_to_first_token` (seconds from the LLM span's own start), `gen_ai.performance.time_to_first_token.timestamp` (UTC ISO 8601 wall-clock time of the first token) and `gen_ai.performance.relative_time_to_first_token` (seconds from the trace's root span start, i.e. the wait as the end user perceives it). Streaming calls record on the first content-bearing chunk — including tool-call and refusal fragments, not just assistant text — and non-streaming calls record when the response resolves. Embedding spans are excluded, since they generate no tokens. Mirrors `record_span_timing` in the Python SDK.
+- **`recordSpanTiming` / `recordTimeToFirstToken`** — Shared instrumentation helpers (`src/instrumentation/utils.ts`) that compute an event's elapsed time against a span's start, the trace root span's start (resolved via `RootSpanProcessor`), or an explicit reference time, and record it as a span attribute. Elapsed times are measured on the same monotonic clock OTel uses to stamp span start times, so wall-clock adjustments (NTP, host suspend) cannot leak into the measurement. Negative or unrepresentable values are dropped rather than exported.
+
+  `relative_time_to_first_token` is omitted when the trace's root span lives in another service, since no local root start time is available to measure against.
 
 ### Changed
 
-- **Google GenAI / Google Generative AI TTFT** — The previously ad-hoc `gen_ai.performance.time_to_first_token` writes in these two instrumentors now go through the shared helper, so they additionally emit the `.timestamp` and relative variants. Embedding spans are no longer excluded, matching the Python SDK's behavior of timing every instrumented LLM call.
+- **Google GenAI / Google Generative AI TTFT** — The previously ad-hoc `gen_ai.performance.time_to_first_token` writes in these two instrumentors now go through the shared helper, so they additionally emit the `.timestamp` and relative variants.
 
 - **Evaluation/simulation trace origin label** — Root spans created for evaluation and simulation runs now carry a `netra.trace.origin` attribute (`Config.TRACE_ORIGIN_KEY`) set to `"evaluation"` (`Config.TRACE_ORIGIN_EVALUATION`), so the backend/frontend can distinguish these traces from normal workflow invocations.
 

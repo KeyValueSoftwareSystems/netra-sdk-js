@@ -39,6 +39,8 @@ const WRAPPER_OWN_PROPS = new Set([
   "parentContext",
   "spanFinalized",
   "completionPending",
+  "firstTokenRecorded",
+  "recordFirstTokenOnce",
   "listenerMap",
 ]);
 
@@ -132,6 +134,15 @@ export function wrapRunnableTools(
     wrapped.run = wrappedRun;
     return wrapped;
   });
+}
+
+/**
+ * True when a finalized Anthropic Message carries at least one generated
+ * content block (text, thinking, or tool_use).
+ */
+function hasGeneratedContent(message: unknown): boolean {
+  const content = (message as { content?: unknown } | null | undefined)?.content;
+  return Array.isArray(content) && content.length > 0;
 }
 
 /**
@@ -256,10 +267,21 @@ class MessageStreamWrapper {
             try {
               const result = await method.call(target.messageStream, ...args);
 
+              // Fallback for a response whose content produced no "text"
+              // event — a tool-use-only reply, or an SDK that only emits
+              // events to registered listeners. Recorded before finalization,
+              // since finalizing ends the span and stops it accepting
+              // attributes. This lands at completion time, so it is an upper
+              // bound on the true TTFT; the safety-net "text" listener above
+              // supplies the accurate value whenever the event fires.
               if (prop === "finalMessage" || prop === "done") {
+                if (hasGeneratedContent(result)) {
+                  target.recordFirstTokenOnce();
+                }
                 target.finalizeSpanFromMessage(result);
               } else if (prop === "finalText") {
                 if (typeof result === "string" && result.length > 0) {
+                  target.recordFirstTokenOnce();
                   target.completeResponse.content = [
                     { type: "text", text: result },
                   ];
@@ -289,6 +311,14 @@ class MessageStreamWrapper {
     try {
       if (typeof this.messageStream?.on !== "function") return;
 
+      // Listen for "text" on the underlying stream, not through the Proxy's
+      // listener wrapping, so TTFT is captured at the real first-token moment
+      // no matter how the caller consumes the stream. Async iteration and a
+      // caller's own "text" listener both cover themselves, but a caller that
+      // only awaits finalMessage()/finalText()/done() triggers neither.
+      this.messageStream.on("text", (text: unknown) => {
+        if (text) this.recordFirstTokenOnce();
+      });
       this.messageStream.on("end", () => {
         if (!this.completionPending) {
           this.finalizeSpanOnce(SpanStatusCode.OK);
@@ -485,7 +515,7 @@ function anthropicWrapper(
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
                   // Non-streaming: the whole response lands at once, so first token == response
-                  recordTimeToFirstToken(span, endTime);
+                  recordTimeToFirstToken(span);
                   span.setAttribute(
                     "llm.response.duration",
                     (endTime - startTime) / 1000,

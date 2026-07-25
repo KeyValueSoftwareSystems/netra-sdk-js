@@ -9,6 +9,8 @@ import {
 } from "@opentelemetry/api";
 import {
   defineHidden,
+  isContentBearingDelta,
+  isGenerativeRequestType,
   isPromise,
   modelAsDict,
   recordTimeToFirstToken,
@@ -95,8 +97,10 @@ abstract class BaseStreamHandler {
         const index = Number(choice.index ?? 0);
         this.ensureChoice(index);
         const delta = (choice.delta ?? {}) as Record<string, unknown>;
-        if (delta.content) {
+        if (isContentBearingDelta(delta)) {
           this.recordFirstTokenOnce();
+        }
+        if (delta.content) {
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
             entry.message = { role: "assistant", content: "" };
@@ -329,11 +333,14 @@ function executeNonStreaming(
     setSpanRequestContext(span, kwargs, requestType);
     const result = call();
 
+    // Non-streaming: the whole response lands at once, so first token == response.
+    // Embeddings generate no tokens, so they get no TTFT.
+    const recordsFirstToken = isGenerativeRequestType(requestType);
+
     if (isPromise(result)) {
       return result.then(
         (value) => {
-          // Non-streaming: the whole response lands at once, so first token == response
-          recordTimeToFirstToken(span);
+          if (recordsFirstToken) recordTimeToFirstToken(span);
           finalizeSpanSuccess(span, modelAsDict(value), startTime);
           return value;
         },
@@ -344,7 +351,7 @@ function executeNonStreaming(
       );
     }
 
-    recordTimeToFirstToken(span);
+    if (recordsFirstToken) recordTimeToFirstToken(span);
     finalizeSpanSuccess(span, modelAsDict(result), startTime);
     return result;
   } catch (error) {

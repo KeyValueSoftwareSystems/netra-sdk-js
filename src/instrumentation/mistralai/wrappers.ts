@@ -10,7 +10,12 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise, recordTimeToFirstToken } from "../utils";
+import {
+  defineHidden,
+  isContentBearingDelta,
+  isPromise,
+  recordTimeToFirstToken,
+} from "../utils";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -64,7 +69,7 @@ function mistralWrapper(
                 const endTime = Date.now();
                 setResponseAttributes(span, modelAsDict(value));
                 // Non-streaming: the whole response lands at once, so first token == response
-                recordTimeToFirstToken(span, endTime);
+                recordTimeToFirstToken(span);
                 span.setAttribute(
                   "llm.response.duration",
                   (endTime - startTime) / 1000
@@ -88,7 +93,7 @@ function mistralWrapper(
 
           const endTime = Date.now();
           setResponseAttributes(span, modelAsDict(response));
-          recordTimeToFirstToken(span, endTime);
+          recordTimeToFirstToken(span);
           span.setAttribute(
             "llm.response.duration",
             (endTime - startTime) / 1000
@@ -353,8 +358,10 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
           this.ensureChoice(index);
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
-          if (typeof delta === "object" && delta.content) {
+          if (typeof delta === "object" && isContentBearingDelta(delta)) {
             this.recordFirstTokenOnce();
+          }
+          if (typeof delta === "object" && delta.content) {
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -389,8 +396,10 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         this.ensureChoice(index);
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
-        if (typeof delta === "object" && delta.content) {
+        if (typeof delta === "object" && isContentBearingDelta(delta)) {
           this.recordFirstTokenOnce();
+        }
+        if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {
@@ -581,8 +590,10 @@ export class AsyncStreamingWrapper
           this.ensureChoice(index);
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
-          if (typeof delta === "object" && delta.content) {
+          if (typeof delta === "object" && isContentBearingDelta(delta)) {
             this.recordFirstTokenOnce();
+          }
+          if (typeof delta === "object" && delta.content) {
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -617,8 +628,10 @@ export class AsyncStreamingWrapper
         this.ensureChoice(index);
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
-        if (typeof delta === "object" && delta.content) {
+        if (typeof delta === "object" && isContentBearingDelta(delta)) {
           this.recordFirstTokenOnce();
+        }
+        if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {

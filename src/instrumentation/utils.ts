@@ -4,6 +4,7 @@
  */
 
 import { Span, context, type Context as OTelContext } from "@opentelemetry/api";
+import { hrTime, hrTimeToMilliseconds } from "@opentelemetry/core";
 import { Logger } from "../logger";
 import { RootSpanProcessor } from "../processors/root-span-processor";
 import { safeStringify } from "../utils/serialization";
@@ -132,17 +133,51 @@ export function hasContent(value: unknown): boolean {
 /** Suffix under which the wall-clock time of a timing event is stored. */
 const TIMESTAMP_ATTRIBUTE_SUFFIX = ".timestamp";
 
+/**
+ * Largest absolute epoch-ms value the JS `Date` type can represent (the
+ * ECMA-262 "time clip" limit). `new Date(ms).toISOString()` throws a
+ * `RangeError` past it, which `Number.isFinite` does not catch.
+ */
+const MAX_EPOCH_MS = 8.64e15;
+
+/**
+ * Current time in epoch ms read from the same clock OTel uses to stamp span
+ * start/end times (`performance.timeOrigin + performance.now()`).
+ *
+ * Deliberately not `Date.now()`. OTel anchors this clock once at process start
+ * and never re-syncs it, so the two drift apart for the life of the process
+ * whenever the wall clock is stepped or slewed (NTP), or — on Linux, where
+ * `performance.now()` is CLOCK_MONOTONIC — across a host suspend. Any elapsed
+ * time measured against a span's `startTime` must come from this clock, or the
+ * accumulated drift lands in the measurement and can even make it negative.
+ */
+function otelNowMs(): number {
+  return hrTimeToMilliseconds(hrTime());
+}
+
 export interface SpanTimingOptions {
-  /** Event wall-clock time in ms since epoch. Defaults to `Date.now()`. */
+  /**
+   * Event time in epoch ms **on OTel's clock** (see `otelNowMs`), used for the
+   * elapsed-time computation. Defaults to now. Never pass a `Date.now()`
+   * reading here — the two clocks are not interchangeable.
+   */
   eventTimeMs?: number;
+  /**
+   * Event time in epoch ms on the **wall** clock, used only for the
+   * `{attribute}.timestamp` value. Defaults to `Date.now()`. Separate from
+   * `eventTimeMs` because a human-readable timestamp needs the wall clock,
+   * while elapsed time needs OTel's.
+   */
+  eventWallTimeMs?: number;
   /**
    * Measure elapsed time from the start of the trace's root span instead of
    * from `span`'s own start. Ignored when `referenceTimeMs` is given.
    */
   useRootSpan?: boolean;
   /**
-   * Explicit reference time in ms since epoch. When given, elapsed time is
-   * `eventTimeMs - referenceTimeMs` and no span start time is looked up.
+   * Explicit reference time in ms since epoch, on OTel's clock. When given,
+   * elapsed time is `eventTimeMs - referenceTimeMs` and no span start time is
+   * looked up.
    */
   referenceTimeMs?: number;
   /**
@@ -180,13 +215,28 @@ function resolveReferenceSeconds(
   if (!options.useRootSpan) return spanStartTimeSeconds(span);
 
   const rootSpan = RootSpanProcessor.getRootSpan(span);
-  return rootSpan ? spanStartTimeSeconds(rootSpan) : undefined;
+  if (!rootSpan) {
+    // No root span is registered when the trace's root lives in another
+    // service — the incoming context gives every local span a valid remote
+    // parent, so RootSpanProcessor never claims one. Relative timing is
+    // genuinely unavailable then; log it so a missing attribute is diagnosable.
+    Logger.debug(
+      "recordSpanTiming: no local root span for this trace " +
+        "(remote parent?); relative timing unavailable",
+    );
+    return undefined;
+  }
+  return spanStartTimeSeconds(rootSpan);
 }
 
 /**
  * Set a timing attribute, tolerating a span that can no longer accept one.
  * Instrumentation must never break the host app, so failures are logged and
  * reported back rather than thrown.
+ *
+ * Rejects negative elapsed times outright: they are physically meaningless and
+ * silently poison percentile aggregates downstream, so dropping the attribute
+ * is strictly better than exporting one.
  */
 function setTimingAttribute(
   span: Span,
@@ -194,7 +244,13 @@ function setTimingAttribute(
   value: number | string,
 ): boolean {
   if (!span.isRecording()) return false;
-  if (typeof value === "number" && !Number.isFinite(value)) return false;
+  if (typeof value === "number" && !(Number.isFinite(value) && value >= 0)) {
+    Logger.warn(
+      `recordSpanTiming: refusing invalid elapsed time for '${key}':`,
+      value,
+    );
+    return false;
+  }
 
   try {
     span.setAttribute(key, value);
@@ -202,6 +258,26 @@ function setTimingAttribute(
   } catch (e) {
     Logger.warn(`recordSpanTiming: failed to set span attribute '${key}':`, e);
     return false;
+  }
+}
+
+/**
+ * UTC ISO 8601 string for an epoch-ms value, or undefined when the value is
+ * outside the range `Date` can represent.
+ *
+ * `new Date(ms).toISOString()` throws a `RangeError` for finite values beyond
+ * ±8.64e15, so the range is checked before conversion rather than relying on a
+ * caller's try/catch — the throw would otherwise escape into the host app.
+ */
+function toIsoTimestamp(epochMs: number): string | undefined {
+  if (!Number.isFinite(epochMs) || Math.abs(epochMs) > MAX_EPOCH_MS) {
+    return undefined;
+  }
+  try {
+    return new Date(epochMs).toISOString();
+  } catch (e) {
+    Logger.warn(`recordSpanTiming: invalid event timestamp ${epochMs}:`, e);
+    return undefined;
   }
 }
 
@@ -222,7 +298,7 @@ export function recordSpanTiming(
   attribute: string,
   options: SpanTimingOptions = {},
 ): boolean {
-  const eventTimeMs = options.eventTimeMs ?? Date.now();
+  const eventTimeMs = options.eventTimeMs ?? otelNowMs();
 
   const referenceSeconds = resolveReferenceSeconds(span, options);
   if (referenceSeconds === undefined) return false;
@@ -231,14 +307,62 @@ export function recordSpanTiming(
   if (!setTimingAttribute(span, attribute, elapsedSeconds)) return false;
 
   if (options.recordEventTimestamp) {
-    setTimingAttribute(
-      span,
-      `${attribute}${TIMESTAMP_ATTRIBUTE_SUFFIX}`,
-      new Date(eventTimeMs).toISOString(),
-    );
+    const timestamp = toIsoTimestamp(options.eventWallTimeMs ?? Date.now());
+    if (timestamp !== undefined) {
+      setTimingAttribute(
+        span,
+        `${attribute}${TIMESTAMP_ATTRIBUTE_SUFFIX}`,
+        timestamp,
+      );
+    }
   }
 
   return true;
+}
+
+/**
+ * Request types that produce no generated tokens.
+ *
+ * `time_to_first_token` is a category error on these — an embedding call has no
+ * first token — and folding their latency (typically far lower than chat TTFT,
+ * and far more frequent on RAG paths) into the same attribute skews every
+ * aggregate that does not filter by request type.
+ */
+const NON_GENERATIVE_REQUEST_TYPES: ReadonlySet<string> = new Set(["embedding"]);
+
+/** True when `requestType` names a call that returns generated tokens. */
+export function isGenerativeRequestType(requestType: string): boolean {
+  return !NON_GENERATIVE_REQUEST_TYPES.has(requestType);
+}
+
+/**
+ * True when an OpenAI-compatible streaming `delta` carries generated content —
+ * assistant text, a tool/function-call fragment, or a refusal. Shared by the
+ * OpenAI, Groq and MistralAI stream handlers, which all use this chunk shape.
+ *
+ * Used to pin down the first-token moment, and deliberately broader than
+ * `delta.content`: a tool-call stream carries `delta.tool_calls` with `content`
+ * null from first chunk to last, so keying TTFT off `content` alone leaves
+ * every tool-calling stream — the common shape on agentic paths — with no TTFT
+ * recorded at all.
+ */
+export function isContentBearingDelta(delta: Record<string, unknown>): boolean {
+  return Boolean(
+    delta.content || delta.tool_calls || delta.function_call || delta.refusal,
+  );
+}
+
+export interface TimeToFirstTokenOptions {
+  /**
+   * Event time in epoch ms **on OTel's clock** (see `otelNowMs`). Defaults to
+   * now. Never pass a `Date.now()` reading here.
+   */
+  eventTimeMs?: number;
+  /**
+   * Event time in epoch ms on the **wall** clock, used for the `.timestamp`
+   * attribute. Defaults to `Date.now()`.
+   */
+  eventWallTimeMs?: number;
 }
 
 /**
@@ -253,14 +377,21 @@ export function recordSpanTiming(
  * "first chunk only" guard, since only they can tell which chunk carries
  * generated content.
  *
- * @param eventTimeMs - When the first token arrived, in ms since epoch.
+ * Both clocks are sampled once here so all three attributes describe the same
+ * instant. Instrumentation should call this with no options at the moment the
+ * token arrives; the overrides exist so tests can pin the clock. See
+ * `otelNowMs` for why the elapsed computation needs OTel's clock.
  */
 export function recordTimeToFirstToken(
   span: Span,
-  eventTimeMs: number = Date.now(),
+  options: TimeToFirstTokenOptions = {},
 ): void {
+  const eventTimeMs = options.eventTimeMs ?? otelNowMs();
+  const eventWallTimeMs = options.eventWallTimeMs ?? Date.now();
+
   recordSpanTiming(span, SpanAttributes.LLM_TIME_TO_FIRST_TOKEN, {
     eventTimeMs,
+    eventWallTimeMs,
     recordEventTimestamp: true,
   });
   recordSpanTiming(span, SpanAttributes.LLM_RELATIVE_TIME_TO_FIRST_TOKEN, {

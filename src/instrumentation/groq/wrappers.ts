@@ -3,6 +3,7 @@ import { Logger } from "../../logger";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
   defineHidden,
+  isContentBearingDelta,
   modelAsDict,
   isPromise,
   recordTimeToFirstToken,
@@ -96,7 +97,7 @@ function groqWrapper(
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
                   // Non-streaming: the whole response lands at once, so first token == response
-                  recordTimeToFirstToken(span, endTime);
+                  recordTimeToFirstToken(span);
                   span.setAttribute(
                     "llm.response.duration",
                     (endTime - startTime) / 1000
@@ -120,7 +121,7 @@ function groqWrapper(
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
-              recordTimeToFirstToken(span, endTime);
+              recordTimeToFirstToken(span);
               span.setAttribute(
                 "llm.response.duration",
                 (endTime - startTime) / 1000
@@ -224,8 +225,10 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         this.ensureChoice(index);
 
         const delta = choice.delta || {};
-        if (delta?.content) {
+        if (isContentBearingDelta(delta)) {
           this.recordFirstTokenOnce();
+        }
+        if (delta?.content) {
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
           }
@@ -373,8 +376,10 @@ export class AsyncStreamingWrapper
         const index = Number(choice.index || 0);
         this.ensureChoice(index);
         const delta = (choice.delta || {}) as Record<string, unknown>;
-        if (typeof delta === "object" && delta.content) {
+        if (typeof delta === "object" && isContentBearingDelta(delta)) {
           this.recordFirstTokenOnce();
+        }
+        if (typeof delta === "object" && delta.content) {
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (!choiceEntry.message) {
