@@ -19,6 +19,13 @@ export const SpanAttributes = {
   LLM_RESPONSE_FINISH_REASON: "llm.response.finish_reason",
   LLM_RESPONSE_DURATION: "llm.response.duration",
 
+  // Elapsed seconds from the LLM span's own start to its first generated token.
+  LLM_TIME_TO_FIRST_TOKEN: "gen_ai.performance.time_to_first_token",
+  // Elapsed seconds from the trace's root span start to the same first token,
+  // i.e. time-to-first-token as the end user perceives it.
+  LLM_RELATIVE_TIME_TO_FIRST_TOKEN:
+    "gen_ai.performance.relative_time_to_first_token",
+
   LLM_USAGE_PROMPT_TOKENS: "gen_ai.usage.prompt_tokens",
   LLM_USAGE_COMPLETION_TOKENS: "gen_ai.usage.completion_tokens",
   LLM_USAGE_CACHE_READ_INPUT_TOKENS: "gen_ai.usage.cache_read_input_tokens",

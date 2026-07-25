@@ -6,6 +6,18 @@ import {
 } from "../utils";
 
 /**
+ * True when an Anthropic SSE event carries a piece of generated content —
+ * assistant text, extended-thinking text, or streamed tool-call JSON. Used to
+ * pin down the first-token moment; `message_start` and `content_block_start`
+ * arrive before the model has produced anything.
+ */
+export function isContentDeltaChunk(chunk: any): boolean {
+  if (chunk?.type !== "content_block_delta") return false;
+  const delta = chunk.delta;
+  return Boolean(delta?.text || delta?.partial_json || delta?.thinking);
+}
+
+/**
  * Accumulate a single Anthropic SSE chunk into `completeResponse`.
  * Safe against malformed events — all field access is guarded.
  */

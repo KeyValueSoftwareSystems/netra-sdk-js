@@ -10,7 +10,7 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { defineHidden, isPromise } from "../utils";
+import { defineHidden, isPromise, recordTimeToFirstToken } from "../utils";
 import {
   modelAsDict,
   setRequestAttributes,
@@ -63,6 +63,8 @@ function mistralWrapper(
                 const value = await response;
                 const endTime = Date.now();
                 setResponseAttributes(span, modelAsDict(value));
+                // Non-streaming: the whole response lands at once, so first token == response
+                recordTimeToFirstToken(span, endTime);
                 span.setAttribute(
                   "llm.response.duration",
                   (endTime - startTime) / 1000
@@ -86,6 +88,7 @@ function mistralWrapper(
 
           const endTime = Date.now();
           setResponseAttributes(span, modelAsDict(response));
+          recordTimeToFirstToken(span, endTime);
           span.setAttribute(
             "llm.response.duration",
             (endTime - startTime) / 1000
@@ -240,6 +243,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     choices: [],
     model: "",
   };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: unknown;
@@ -276,6 +280,13 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         choices.push({ text: "" });
       }
     }
+  }
+
+  /** Record TTFT for the first chunk carrying generated content; a no-op after. */
+  private recordFirstTokenOnce(): void {
+    if (this.firstTokenRecorded) return;
+    this.firstTokenRecorded = true;
+    recordTimeToFirstToken(this.span);
   }
 
   [Symbol.iterator](): Iterator<unknown> {
@@ -343,6 +354,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
           if (typeof delta === "object" && delta.content) {
+            this.recordFirstTokenOnce();
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -378,6 +390,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
+          this.recordFirstTokenOnce();
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {
@@ -439,6 +452,7 @@ export class AsyncStreamingWrapper
   private startTime!: number;
   private requestKwargs!: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
+  private firstTokenRecorded = false;
 
   constructor(
     span: Span,
@@ -476,6 +490,13 @@ export class AsyncStreamingWrapper
         choices.push({ text: "" });
       }
     }
+  }
+
+  /** Record TTFT for the first chunk carrying generated content; a no-op after. */
+  private recordFirstTokenOnce(): void {
+    if (this.firstTokenRecorded) return;
+    this.firstTokenRecorded = true;
+    recordTimeToFirstToken(this.span);
   }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
@@ -561,6 +582,7 @@ export class AsyncStreamingWrapper
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
           if (typeof delta === "object" && delta.content) {
+            this.recordFirstTokenOnce();
             const contentPiece = String(delta.content || "");
             const choiceEntry = choices[index];
             if (this.isChat()) {
@@ -596,6 +618,7 @@ export class AsyncStreamingWrapper
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
+          this.recordFirstTokenOnce();
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (this.isChat()) {

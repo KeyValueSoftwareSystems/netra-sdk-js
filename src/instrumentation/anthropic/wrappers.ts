@@ -15,11 +15,13 @@ import {
   defineHidden,
   isTraceContentEnabled,
   modelAsDict,
+  recordTimeToFirstToken,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { AnthropicRequestType, SPAN_NAMES } from "./types";
 import {
   finalizeStreamSpan,
+  isContentDeltaChunk,
   processStreamChunk,
   setRequestAttributes,
   setResponseAttributes,
@@ -151,6 +153,7 @@ class MessageStreamWrapper {
   private parentContext!: any;
   private spanFinalized = false;
   private completionPending = false;
+  private firstTokenRecorded = false;
   private listenerMap = new WeakMap<Function, Map<string, Function[]>>();
 
   constructor(
@@ -320,6 +323,9 @@ class MessageStreamWrapper {
     try {
       for await (const chunk of this.messageStream) {
         processStreamChunk(this.completeResponse, chunk, this.span);
+        if (isContentDeltaChunk(chunk)) {
+          this.recordFirstTokenOnce();
+        }
         yield chunk;
       }
     } catch (err) {
@@ -346,6 +352,7 @@ class MessageStreamWrapper {
         break;
 
       case "text":
+        if (data) this.recordFirstTokenOnce();
         if (!this.completeResponse.currentText) {
           this.completeResponse.currentText = "";
         }
@@ -365,6 +372,13 @@ class MessageStreamWrapper {
         if (data.usage) this.completeResponse.usage = data.usage;
         break;
     }
+  }
+
+  /** Record TTFT for the first event carrying generated content; a no-op after. */
+  private recordFirstTokenOnce(): void {
+    if (this.firstTokenRecorded) return;
+    this.firstTokenRecorded = true;
+    recordTimeToFirstToken(this.span);
   }
 
   private flushCurrentText(): void {
@@ -444,13 +458,19 @@ function anthropicWrapper(
               model: "",
               usage: {},
             };
+            let firstTokenRecorded = false;
 
             return wrapResponse(
               response,
               {
                 withContext: (fn) => context.with(spanContext, fn),
-                onChunk: (chunk) =>
-                  processStreamChunk(completeResponse, chunk, span),
+                onChunk: (chunk) => {
+                  processStreamChunk(completeResponse, chunk, span);
+                  if (!firstTokenRecorded && isContentDeltaChunk(chunk)) {
+                    firstTokenRecorded = true;
+                    recordTimeToFirstToken(span);
+                  }
+                },
                 onError: (error) => {
                   Logger.error("netra.instrumentation.anthropic:", error);
                   span.setStatus({
@@ -464,6 +484,8 @@ function anthropicWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
+                  // Non-streaming: the whole response lands at once, so first token == response
+                  recordTimeToFirstToken(span, endTime);
                   span.setAttribute(
                     "llm.response.duration",
                     (endTime - startTime) / 1000,

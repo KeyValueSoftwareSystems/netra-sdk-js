@@ -9,6 +9,7 @@ import { Logger } from "../../logger";
 import {
   isPromise,
   modelAsDict,
+  recordTimeToFirstToken,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { extractModelName, setRequestAttributes, setResponseAttributes } from "./utils";
@@ -101,12 +102,8 @@ function googleGenerativeAIWrapper(
                     setResponseAttributes(span, responseDict);
                     const duration = (endTime - startTime) / 1000;
                     span.setAttribute("llm.response.duration", duration);
-                    if (requestType !== "embedding") {
-                      span.setAttribute(
-                        "gen_ai.performance.time_to_first_token",
-                        duration,
-                      );
-                    }
+                    // Non-streaming: the whole response lands at once, so first token == response
+                    recordTimeToFirstToken(span, endTime);
                   } catch (e) {
                     Logger.error(`${LOG_PREFIX}:`, e);
                   }
@@ -133,6 +130,7 @@ function googleGenerativeAIWrapper(
                   "llm.response.duration",
                   (endTime - startTime) / 1000,
                 );
+                recordTimeToFirstToken(span, endTime);
               } catch (e) {
                 Logger.error(`${LOG_PREFIX}:`, e);
               }
@@ -212,10 +210,8 @@ function googleGenerativeAIStreamWrapper(
                     setResponseAttributes(span, responseDict);
                     const duration = (endTime - startTime) / 1000;
                     span.setAttribute("llm.response.duration", duration);
-                    span.setAttribute(
-                      "gen_ai.performance.time_to_first_token",
-                      duration,
-                    );
+                    // Not actually a stream — the whole response lands at once
+                    recordTimeToFirstToken(span, endTime);
                   } catch (e) {
                     Logger.error(`${LOG_PREFIX}:`, e);
                   }
@@ -278,11 +274,8 @@ function googleGenerativeAIStreamWrapper(
                                 : chunk?.text;
                             if (typeof t === "string") {
                               if (t && !firstTokenRecorded) {
-                                span.setAttribute(
-                                  "gen_ai.performance.time_to_first_token",
-                                  (Date.now() - startTime) / 1000,
-                                );
                                 firstTokenRecorded = true;
+                                recordTimeToFirstToken(span);
                               }
                             }
                           } catch {

@@ -5,6 +5,7 @@ import {
   defineHidden,
   modelAsDict,
   isPromise,
+  recordTimeToFirstToken,
   shouldSuppressInstrumentation,
 } from "../utils";
 
@@ -94,6 +95,8 @@ function groqWrapper(
                   const endTime = Date.now();
                   const responseDict = modelAsDict(value);
                   setResponseAttributes(span, responseDict);
+                  // Non-streaming: the whole response lands at once, so first token == response
+                  recordTimeToFirstToken(span, endTime);
                   span.setAttribute(
                     "llm.response.duration",
                     (endTime - startTime) / 1000
@@ -117,6 +120,7 @@ function groqWrapper(
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
               setResponseAttributes(span, responseDict);
+              recordTimeToFirstToken(span, endTime);
               span.setAttribute(
                 "llm.response.duration",
                 (endTime - startTime) / 1000
@@ -147,6 +151,7 @@ export const chatWrapper = (tracer: Tracer) =>
 export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private iterator: Iterator<unknown> | null = null;
   private completeResponse: Record<string, any> = { choices: [], model: "" };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
@@ -220,6 +225,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 
         const delta = choice.delta || {};
         if (delta?.content) {
+          this.recordFirstTokenOnce();
           if (!choices[index].message) {
             choices[index].message = { role: "assistant", content: "" };
           }
@@ -260,6 +266,13 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     }
   }
 
+  /** Record TTFT for the first chunk carrying generated content; a no-op after. */
+  private recordFirstTokenOnce(): void {
+    if (this.firstTokenRecorded) return;
+    this.firstTokenRecorded = true;
+    recordTimeToFirstToken(this.span);
+  }
+
   private finalizeSpan(code: SpanStatusCode): void {
     const duration = (Date.now() - this.startTime) / 1000;
     this.span.setAttribute("llm.response.duration", duration);
@@ -276,6 +289,7 @@ export class AsyncStreamingWrapper
     choices: [],
     model: "",
   };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   private span!: Span;
   private response!: any;
@@ -360,6 +374,7 @@ export class AsyncStreamingWrapper
         this.ensureChoice(index);
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
+          this.recordFirstTokenOnce();
           const contentPiece = String(delta.content || "");
           const choiceEntry = choices[index];
           if (!choiceEntry.message) {
@@ -411,6 +426,13 @@ export class AsyncStreamingWrapper
         isChat ? { message: { role: "assistant", content: "" } } : { text: "" }
       );
     }
+  }
+
+  /** Record TTFT for the first chunk carrying generated content; a no-op after. */
+  private recordFirstTokenOnce(): void {
+    if (this.firstTokenRecorded) return;
+    this.firstTokenRecorded = true;
+    recordTimeToFirstToken(this.span);
   }
 
   private finalizeSpan(code: SpanStatusCode): void {

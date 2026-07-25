@@ -6,9 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [1.7.0] - 2026-07-23
+## [1.7.0]
+
+### Added
+
+- **Time to first token on LLM spans** — Every LLM span produced by the custom provider instrumentors (OpenAI, Anthropic, Groq, MistralAI, Google GenAI, Google Generative AI) now carries `gen_ai.performance.time_to_first_token` (seconds from the LLM span's own start), `gen_ai.performance.time_to_first_token.timestamp` (UTC ISO 8601 wall-clock time of the first token) and `gen_ai.performance.relative_time_to_first_token` (seconds from the trace's root span start, i.e. the wait as the end user perceives it). Streaming calls record on the first content-bearing chunk; non-streaming calls record when the response resolves. Mirrors `record_span_timing` in the Python SDK.
+- **`recordSpanTiming` / `recordTimeToFirstToken`** — Shared instrumentation helpers (`src/instrumentation/utils.ts`) that compute an event's elapsed time against a span's start, the trace root span's start (resolved via `RootSpanProcessor`), or an explicit reference time, and record it as a span attribute.
 
 ### Changed
+
+- **Google GenAI / Google Generative AI TTFT** — The previously ad-hoc `gen_ai.performance.time_to_first_token` writes in these two instrumentors now go through the shared helper, so they additionally emit the `.timestamp` and relative variants. Embedding spans are no longer excluded, matching the Python SDK's behavior of timing every instrumented LLM call.
 
 - **Evaluation/simulation trace origin label** — Root spans created for evaluation and simulation runs now carry a `netra.trace.origin` attribute (`Config.TRACE_ORIGIN_KEY`) set to `"evaluation"` (`Config.TRACE_ORIGIN_EVALUATION`), so the backend/frontend can distinguish these traces from normal workflow invocations.
 

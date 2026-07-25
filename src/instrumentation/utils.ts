@@ -5,6 +5,7 @@
 
 import { Span, context, type Context as OTelContext } from "@opentelemetry/api";
 import { Logger } from "../logger";
+import { RootSpanProcessor } from "../processors/root-span-processor";
 import { safeStringify } from "../utils/serialization";
 import { SpanAttributes } from "./span-attributes";
 
@@ -124,6 +125,148 @@ export function hasContent(value: unknown): boolean {
   if (typeof value === "string") return value.length > 0;
   if (Array.isArray(value)) return value.length > 0;
   return true;
+}
+
+// Span Timing
+
+/** Suffix under which the wall-clock time of a timing event is stored. */
+const TIMESTAMP_ATTRIBUTE_SUFFIX = ".timestamp";
+
+export interface SpanTimingOptions {
+  /** Event wall-clock time in ms since epoch. Defaults to `Date.now()`. */
+  eventTimeMs?: number;
+  /**
+   * Measure elapsed time from the start of the trace's root span instead of
+   * from `span`'s own start. Ignored when `referenceTimeMs` is given.
+   */
+  useRootSpan?: boolean;
+  /**
+   * Explicit reference time in ms since epoch. When given, elapsed time is
+   * `eventTimeMs - referenceTimeMs` and no span start time is looked up.
+   */
+  referenceTimeMs?: number;
+  /**
+   * Also store the event's UTC ISO 8601 wall-clock time under
+   * `{attribute}.timestamp`.
+   */
+  recordEventTimestamp?: boolean;
+}
+
+/**
+ * Epoch seconds for a span's start time.
+ *
+ * Read off the SDK span's `startTime` (an OTel `HrTime` tuple of
+ * `[epochSeconds, nanosecondRemainder]`), which the read-only `Span` API type
+ * does not expose. Returns undefined for spans without one — e.g. a
+ * `NonRecordingSpan` from a sampled-out trace.
+ */
+function spanStartTimeSeconds(span: Span): number | undefined {
+  const startTime = (span as { startTime?: unknown }).startTime;
+  if (!Array.isArray(startTime) || startTime.length !== 2) return undefined;
+  const [epochSeconds, nanoseconds] = startTime as [unknown, unknown];
+  if (typeof epochSeconds !== "number" || typeof nanoseconds !== "number") {
+    return undefined;
+  }
+  return epochSeconds + nanoseconds / 1e9;
+}
+
+function resolveReferenceSeconds(
+  span: Span,
+  options: SpanTimingOptions,
+): number | undefined {
+  if (options.referenceTimeMs !== undefined) {
+    return options.referenceTimeMs / 1000;
+  }
+  if (!options.useRootSpan) return spanStartTimeSeconds(span);
+
+  const rootSpan = RootSpanProcessor.getRootSpan(span);
+  return rootSpan ? spanStartTimeSeconds(rootSpan) : undefined;
+}
+
+/**
+ * Set a timing attribute, tolerating a span that can no longer accept one.
+ * Instrumentation must never break the host app, so failures are logged and
+ * reported back rather than thrown.
+ */
+function setTimingAttribute(
+  span: Span,
+  key: string,
+  value: number | string,
+): boolean {
+  if (!span.isRecording()) return false;
+  if (typeof value === "number" && !Number.isFinite(value)) return false;
+
+  try {
+    span.setAttribute(key, value);
+    return true;
+  } catch (e) {
+    Logger.warn(`recordSpanTiming: failed to set span attribute '${key}':`, e);
+    return false;
+  }
+}
+
+/**
+ * Compute the elapsed time for an event and record it as a span attribute,
+ * in seconds.
+ *
+ * Elapsed time is measured from, in order of precedence:
+ *   - `options.referenceTimeMs`, when given;
+ *   - the root span of `span`'s trace, when `options.useRootSpan` is set;
+ *   - `span`'s own start time (the default).
+ *
+ * @returns true when the attribute was recorded, false when the elapsed time
+ *   could not be computed (no start time, no root span) or the span rejected it.
+ */
+export function recordSpanTiming(
+  span: Span,
+  attribute: string,
+  options: SpanTimingOptions = {},
+): boolean {
+  const eventTimeMs = options.eventTimeMs ?? Date.now();
+
+  const referenceSeconds = resolveReferenceSeconds(span, options);
+  if (referenceSeconds === undefined) return false;
+
+  const elapsedSeconds = eventTimeMs / 1000 - referenceSeconds;
+  if (!setTimingAttribute(span, attribute, elapsedSeconds)) return false;
+
+  if (options.recordEventTimestamp) {
+    setTimingAttribute(
+      span,
+      `${attribute}${TIMESTAMP_ATTRIBUTE_SUFFIX}`,
+      new Date(eventTimeMs).toISOString(),
+    );
+  }
+
+  return true;
+}
+
+/**
+ * Record time-to-first-token on an LLM span, writing three attributes:
+ *   - `gen_ai.performance.time_to_first_token` — seconds since this span started
+ *   - `gen_ai.performance.time_to_first_token.timestamp` — UTC ISO 8601 event time
+ *   - `gen_ai.performance.relative_time_to_first_token` — seconds since the
+ *     trace's root span started
+ *
+ * Call this once per LLM span: on the first content-bearing chunk of a stream,
+ * or when a non-streaming response resolves. Callers own the
+ * "first chunk only" guard, since only they can tell which chunk carries
+ * generated content.
+ *
+ * @param eventTimeMs - When the first token arrived, in ms since epoch.
+ */
+export function recordTimeToFirstToken(
+  span: Span,
+  eventTimeMs: number = Date.now(),
+): void {
+  recordSpanTiming(span, SpanAttributes.LLM_TIME_TO_FIRST_TOKEN, {
+    eventTimeMs,
+    recordEventTimestamp: true,
+  });
+  recordSpanTiming(span, SpanAttributes.LLM_RELATIVE_TIME_TO_FIRST_TOKEN, {
+    eventTimeMs,
+    useRootSpan: true,
+  });
 }
 
 // Attribute Mapping (model params → span attributes)

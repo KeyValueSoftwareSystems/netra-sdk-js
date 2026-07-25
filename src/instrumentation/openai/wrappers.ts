@@ -11,6 +11,7 @@ import {
   defineHidden,
   isPromise,
   modelAsDict,
+  recordTimeToFirstToken,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
@@ -54,6 +55,7 @@ function finalizeSpanSuccess(
 
 abstract class BaseStreamHandler {
   protected completeResponse: StreamResponse = { choices: [], model: "" };
+  private firstTokenRecorded = false;
   // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
   protected span!: Span;
   protected startTime!: number;
@@ -73,6 +75,13 @@ abstract class BaseStreamHandler {
     return this.completeResponse;
   }
 
+  /** Record TTFT for the first chunk carrying generated content; a no-op after. */
+  private recordFirstTokenOnce(): void {
+    if (this.firstTokenRecorded) return;
+    this.firstTokenRecorded = true;
+    recordTimeToFirstToken(this.span);
+  }
+
   protected processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
 
@@ -87,6 +96,7 @@ abstract class BaseStreamHandler {
         this.ensureChoice(index);
         const delta = (choice.delta ?? {}) as Record<string, unknown>;
         if (delta.content) {
+          this.recordFirstTokenOnce();
           const entry = this.completeResponse.choices[index];
           if (!entry.message) {
             entry.message = { role: "assistant", content: "" };
@@ -103,6 +113,11 @@ abstract class BaseStreamHandler {
 
     if (chunkDict.usage) {
       this.completeResponse.usage = chunkDict.usage;
+    }
+
+    // Responses API: generated text arrives as a top-level `delta` field
+    if (chunkDict.delta) {
+      this.recordFirstTokenOnce();
     }
 
     // Responses API: final response object arrives in a chunk
@@ -317,6 +332,8 @@ function executeNonStreaming(
     if (isPromise(result)) {
       return result.then(
         (value) => {
+          // Non-streaming: the whole response lands at once, so first token == response
+          recordTimeToFirstToken(span);
           finalizeSpanSuccess(span, modelAsDict(value), startTime);
           return value;
         },
@@ -327,6 +344,7 @@ function executeNonStreaming(
       );
     }
 
+    recordTimeToFirstToken(span);
     finalizeSpanSuccess(span, modelAsDict(result), startTime);
     return result;
   } catch (error) {

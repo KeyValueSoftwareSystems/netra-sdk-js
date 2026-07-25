@@ -24,6 +24,7 @@ import { wrapResponse } from "../../utils/response-handler";
 import {
   createSuppressedContext,
   modelAsDict,
+  recordTimeToFirstToken,
   shouldSuppressInstrumentation,
 } from "../utils";
 import { GoogleGenAIRequestType, SPAN_NAMES } from "./types";
@@ -123,6 +124,8 @@ function genericWrapperFactory(
                     responseDict.functionCalls = (value as any).functionCalls;
                   }
                   setResponseAttributes(span, responseDict);
+                  // Non-streaming: the whole response lands at once, so first token == response
+                  recordTimeToFirstToken(span, endTime);
                   span.setAttribute(
                     SpanAttributes.LLM_RESPONSE_DURATION,
                     (endTime - startTime) / 1000,
@@ -209,7 +212,7 @@ function streamWrapperFactory(
               {
                 withContext: (fn) => context.with(spanContext, fn),
                 onChunk: (chunk) => {
-                  processStreamChunk(accumulated, chunk, span, startTime);
+                  processStreamChunk(accumulated, chunk, span);
                 },
                 onError: (error) => {
                   span.setStatus({
