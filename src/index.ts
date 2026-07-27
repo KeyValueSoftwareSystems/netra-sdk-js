@@ -4,7 +4,7 @@
  * Built on top of OpenTelemetry and Traceloop
  */
 
-import { context, Span, SpanKind, trace } from "@opentelemetry/api";
+import { trace } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
 import { Config, NetraConfig } from "./config";
@@ -148,7 +148,6 @@ export class Netra {
   private static _initialized = false;
   private static _config: Config | undefined;
   private static _tracer: any;
-  private static _rootSpan: Span | undefined;
   private static _metricsEnabled = false;
 
   static usage: Usage;
@@ -283,33 +282,6 @@ export class Netra {
     // Handle crashes
     process.once("uncaughtException", handleUncaughtException);
 
-    // Create root span if enabled
-    if (cfg.enableRootSpan) {
-      // Use the effective tracer if available
-      const tracer = this._tracer || trace.getTracer("netra.root.span");
-      const rootName = `${Config.LIBRARY_NAME}.root.span`;
-
-      // Create the root span
-      this._rootSpan = tracer.startSpan(rootName, {
-        kind: SpanKind.INTERNAL,
-      });
-
-      if (this._rootSpan) {
-        if (cfg.appName) {
-          this._rootSpan.setAttribute("service.name", cfg.appName);
-        }
-        this._rootSpan.setAttribute("netra.environment", cfg.environment);
-        this._rootSpan.setAttribute(
-          "netra.library.version",
-          Config.LIBRARY_VERSION,
-        );
-
-        Logger.info(
-          "Netra root span created. Use Netra.runWithRootSpan() to parent spans under it.",
-        );
-      }
-    }
-
     // Wait for all async instrumentations to be ready
     await instrumentationsReady;
   }
@@ -324,15 +296,6 @@ export class Netra {
       await uninstrumentAll();
     } catch (e) {
       Logger.error("Error during uninstrumentAll:", e);
-    }
-
-    if (this._rootSpan) {
-      try {
-        this._rootSpan.end();
-      } catch (e) {
-      } finally {
-        this._rootSpan = undefined;
-      }
     }
 
     const FLUSH_TIMEOUT_MS = 5000;
@@ -391,21 +354,6 @@ export class Netra {
 
   static setRootOutput(value: any): void {
     SessionManager.setRootOutput(value);
-  }
-
-  /**
-   * Run a function with the root span as the active parent context.
-   * All spans created within this function will be children of the root span.
-   * Note: required in JS because OTel JS has no persistent context.attach()
-   */
-  static runWithRootSpan<T>(fn: () => T): T {
-    if (!this._rootSpan) {
-      Logger.warn(
-        "runWithRootSpan: No root span available. Running function without parent context.",
-      );
-      return fn();
-    }
-    return context.with(trace.setSpan(context.active(), this._rootSpan), fn);
   }
 
   static setSessionId(sessionId: string): void {
