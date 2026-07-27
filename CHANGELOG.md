@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-07-27
+
+### Added
+
+- **Simulation Lifecycle Hooks**: Added prescript/postscript support for multi-turn simulations via `SimulationHooks` (`beforeAll`, `beforeEach`, `before`, `after`, `afterEach`, `afterAll`). Hooks can return setup context passed into `BaseTask.run`, and the run uses a two-phase initialize / first-turn flow so hooks execute before any LLM spend. Execution order is `beforeAll` → `beforeEach` → item-specific `before` → task → item-specific `after` → `afterEach` → `afterAll`. `beforeAll` failure aborts the run as `prescript_failed`; item `before` failure marks only that scenario; `after`, `afterEach`, and `afterAll` failures are logged and do not affect status.
+
 ## [1.6.0] - 2026-07-17
 
 ### Added
