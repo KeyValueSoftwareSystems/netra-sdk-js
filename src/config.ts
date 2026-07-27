@@ -11,7 +11,6 @@ export interface NetraConfig {
   disableBatch?: boolean;
   traceContent?: boolean;
   debugMode?: boolean;
-  enableRootSpan?: boolean;
   resourceAttributes?: Record<string, any>;
   environment?: string;
   enableScrubbing?: boolean;
@@ -33,10 +32,8 @@ export interface NetraConfig {
    * link is remote (cross-process) is kept as a root so an upstream distributed
    * trace is not severed.
    *
-   * Note: when `enableRootSpan` is true, Netra attaches its own root span and
-   * every auto-instrumentation span becomes its child, so no reparenting
-   * occurs. Pass a set containing `NetraInstruments.ALL` to allow all
-   * instrumentations to produce root spans (legacy behaviour).
+   * Pass a set containing `NetraInstruments.ALL` to allow all instrumentations
+   * to produce root spans (legacy behaviour).
    */
   rootInstruments?: Set<NetraInstruments>;
 }
@@ -155,7 +152,6 @@ export class Config {
   disableBatch: boolean;
   traceContent: boolean;
   debugMode: boolean;
-  enableRootSpan: boolean;
   enableScrubbing: boolean;
   environment: string;
   resourceAttributes: Record<string, any>;
@@ -179,11 +175,6 @@ export class Config {
     this.debugMode = this._getBoolConfig(
       config.debugMode,
       "NETRA_DEBUG",
-      false,
-    );
-    this.enableRootSpan = this._getBoolConfig(
-      config.enableRootSpan,
-      "NETRA_ENABLE_ROOT_SPAN",
       false,
     );
     this.enableScrubbing = this._getBoolConfig(
