@@ -584,7 +584,13 @@ function setUsageAttributes(
     );
   }
 
-  const cacheCreationTokens = usage.cache_creation_input_tokens;
+  const cacheCreationTokens =
+    usage.cache_creation_input_tokens ??
+    (
+      (usage.prompt_tokens_details ?? usage.input_tokens_details) as
+        | { cache_write_tokens?: unknown }
+        | undefined
+    )?.cache_write_tokens;
   if (cacheCreationTokens !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS,
