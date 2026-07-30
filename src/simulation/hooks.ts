@@ -25,7 +25,9 @@
  *   - beforeAll failure  -> entire run is marked failed (prescript_failed), no scenarios run
  *   - beforeEach failure -> that scenario is marked failed (prescript_failed), others continue
  *   - before failure     -> that scenario is marked failed (prescript_failed), others continue
- *   - after / afterEach / afterAll failures are logged as warnings and do not affect run/scenario status
+ *   - after failure      -> that scenario is marked postscript_failed; evaluations continue normally
+ *   - afterEach failure  -> that scenario is marked postscript_failed; evaluations continue normally
+ *   - afterAll failure   -> all scenarios are marked postscript_failed; evaluations continue normally
  */
 
 import { Logger } from "../logger";
@@ -248,12 +250,14 @@ export async function runBeforeEach(
 }
 
 /**
- * Execute the item-specific after hook for a single scenario (best-effort).
+ * Execute the item-specific after hook for a single scenario.
  *
  * Called regardless of whether the scenario succeeded, failed, or had its
  * before hook fail. When a before hook fails, setupContext is the furthest
  * successfully built context (e.g. beforeAll only, or beforeAll + beforeEach
- * if before failed). Exceptions are caught and logged.
+ * if before failed).
+ *
+ * @throws Re-raises any exception so the caller can mark the scenario as postscript_failed.
  */
 export async function runAfter(
     hooks: SimulationHooks | undefined,
@@ -265,22 +269,16 @@ export async function runAfter(
         Logger.info(
             `${LOG_PREFIX}: running after hook for datasetItemId=${datasetItemId}`,
         );
-        try {
-            await hooks.after[datasetItemId](itemResult, setupContext);
-        } catch (error) {
-            Logger.warn(
-                `${LOG_PREFIX}: after hook raised an exception for datasetItemId=${datasetItemId} (ignored):`,
-                error,
-            );
-        }
+        await hooks.after[datasetItemId](itemResult, setupContext);
     }
 }
 
 /**
- * Execute the afterEach hook for a single scenario (best-effort).
+ * Execute the afterEach hook for a single scenario.
  *
  * Unlike `after` (which is item-specific), `afterEach` runs for every dataset item.
- * Exceptions are caught and logged; they do not affect scenario status.
+ *
+ * @throws Re-raises any exception so the caller can mark the scenario as postscript_failed.
  */
 export async function runAfterEach(
     hooks: SimulationHooks | undefined,
@@ -293,20 +291,13 @@ export async function runAfterEach(
     Logger.info(
         `${LOG_PREFIX}: running afterEach hook for datasetItemId=${datasetItemId}`,
     );
-    try {
-        await hooks.afterEach(itemResult, setupContext);
-    } catch (error) {
-        Logger.warn(
-            `${LOG_PREFIX}: afterEach hook raised an exception for datasetItemId=${datasetItemId} (ignored):`,
-            error,
-        );
-    }
+    await hooks.afterEach(itemResult, setupContext);
 }
 
 /**
- * Execute the afterAll hook (best-effort).
+ * Execute the afterAll hook.
  *
- * Exceptions are caught and logged; they do not affect the run status.
+ * @throws Re-raises any exception so the caller can mark all scenarios as postscript_failed.
  */
 export async function runAfterAll(
     hooks: SimulationHooks | undefined,
@@ -316,12 +307,5 @@ export async function runAfterAll(
     if (!hooks?.afterAll) return;
 
     Logger.info(`${LOG_PREFIX}: running afterAll hook`);
-    try {
-        await hooks.afterAll(results, sharedContext);
-    } catch (error) {
-        Logger.warn(
-            `${LOG_PREFIX}: afterAll hook raised an exception (ignored):`,
-            error,
-        );
-    }
+    await hooks.afterAll(results, sharedContext);
 }

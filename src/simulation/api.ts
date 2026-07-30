@@ -161,7 +161,15 @@ export class Simulation {
                         })),
                         totalItems: items.length,
                     };
-                    await runAfterAll(hooks, results as any, null);
+                    try {
+                        await runAfterAll(hooks, results as any, null);
+                    } catch (afterAllError) {
+                        const afterAllMsg = `afterAll hook failed: ${afterAllError instanceof Error ? afterAllError.message : String(afterAllError)}`;
+                        Logger.error(`${LOG_PREFIX}: ${afterAllMsg}`);
+                        for (const item of items) {
+                            await this._client.reportFailure(runId, item.runItemId, afterAllMsg, "postscript_failed");
+                        }
+                    }
                     await this._client.postRunStatus(runId, "completed");
                     return results;
                 }
@@ -200,8 +208,7 @@ export class Simulation {
                                 error: errorMsg,
                             };
                             failedItems.push(itemResult);
-                            await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
-                            await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
+                            await this._runAfterHooks(runId, runItemId, datasetItemId, hooks, itemResult as any, setupContext);
                             return;
                         }
                     } else {
@@ -218,8 +225,7 @@ export class Simulation {
                             error: "Failed to generate first user message",
                         };
                         failedItems.push(itemResult);
-                        await runAfter(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
-                        await runAfterEach(hooks, datasetItemId, itemResult as any, setupContexts.get(runItemId) ?? null);
+                        await this._runAfterHooks(runId, runItemId, datasetItemId, hooks, itemResult as any, setupContexts.get(runItemId) ?? null);
                         return;
                     }
 
@@ -237,7 +243,15 @@ export class Simulation {
                     failed: failedItems,
                     totalItems: items.length,
                 };
-                await runAfterAll(hooks, results as any, sharedContext);
+                try {
+                    await runAfterAll(hooks, results as any, sharedContext);
+                } catch (afterAllError) {
+                    const afterAllMsg = `afterAll hook failed: ${afterAllError instanceof Error ? afterAllError.message : String(afterAllError)}`;
+                    Logger.error(`${LOG_PREFIX}: ${afterAllMsg}`);
+                    for (const item of items) {
+                        await this._client.reportFailure(runId, item.runItemId, afterAllMsg, "postscript_failed");
+                    }
+                }
                 await this._client.postRunStatus(runId, "completed");
                 return results;
             }
@@ -332,13 +346,46 @@ export class Simulation {
         results.failed.push(...setupFailedItems);
 
         // --- afterAll ---
-        await runAfterAll(hooks, results as any, sharedContext);
+        try {
+            await runAfterAll(hooks, results as any, sharedContext);
+        } catch (error) {
+            const errorMsg = `afterAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
+            Logger.error(`${LOG_PREFIX}: ${errorMsg}`);
+            const allItemIds = runItems.map((item) => item.runItemId);
+            if (setupFailedItems.length > 0) {
+                allItemIds.push(...setupFailedItems.map((item) => item.runItemId));
+            }
+            for (const rid of allItemIds) {
+                await this._client.reportFailure(runId, rid, errorMsg, "postscript_failed");
+            }
+        }
 
         Logger.info(
             `${LOG_PREFIX}: Completed=${results.completed.length}, Failed=${results.failed.length}`,
         );
 
         return results;
+    }
+
+    /**
+     * Run after/afterEach hooks and report postscript_failed on error.
+     */
+    private async _runAfterHooks(
+        runId: string,
+        runItemId: string,
+        datasetItemId: string,
+        hooks: SimulationHooks | undefined,
+        itemResult: Record<string, any>,
+        setupContext: Record<string, any> | null,
+    ): Promise<void> {
+        try {
+            await runAfter(hooks, datasetItemId, itemResult, setupContext);
+            await runAfterEach(hooks, datasetItemId, itemResult, setupContext);
+        } catch (error) {
+            const errorMsg = `after hook failed: ${error instanceof Error ? error.message : String(error)}`;
+            Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
+            await this._client.reportFailure(runId, runItemId, errorMsg, "postscript_failed");
+        }
     }
 
     /**
@@ -396,8 +443,7 @@ export class Simulation {
                         error: "Failed to get conversation response",
                         turnId,
                     };
-                    await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
-                    await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
+                    await this._runAfterHooks(runId, runItemId, datasetItemId, hooks, itemResult as any, setupContext);
                     return itemResult;
                 }
 
@@ -410,8 +456,7 @@ export class Simulation {
                         success: true,
                         finalTurnId: turnId,
                     };
-                    await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
-                    await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
+                    await this._runAfterHooks(runId, runItemId, datasetItemId, hooks, itemResult as any, setupContext);
                     return itemResult;
                 }
 
@@ -430,8 +475,7 @@ export class Simulation {
                     error: errorMsg,
                     turnId,
                 };
-                await runAfter(hooks, datasetItemId, itemResult as any, setupContext);
-                await runAfterEach(hooks, datasetItemId, itemResult as any, setupContext);
+                await this._runAfterHooks(runId, runItemId, datasetItemId, hooks, itemResult as any, setupContext);
                 return itemResult;
             } finally {
                 span.end();

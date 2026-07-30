@@ -257,6 +257,14 @@ export class SimulationHttpClient {
 
     /**
      * Report a task execution failure to the backend.
+     *
+     * @param runId - Identifier of the run.
+     * @param runItemId - Identifier of the run item.
+     * @param error - Error message describing the failure.
+     * @param status - The run status to set on the item. Use `"prescript_failed"`
+     *   when the failure originated from a beforeAll or before hook, or
+     *   `"postscript_failed"` when the failure originated from an after,
+     *   afterEach, or afterAll hook. Defaults to `"failed"`.
      */
     async reportFailure(
         runId: string,
