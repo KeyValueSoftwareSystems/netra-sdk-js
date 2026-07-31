@@ -25,9 +25,11 @@
  *   - beforeAll failure  -> entire run is marked failed (prescript_failed), no scenarios run
  *   - beforeEach failure -> that scenario is marked failed (prescript_failed), others continue
  *   - before failure     -> that scenario is marked failed (prescript_failed), others continue
- *   - after failure      -> that scenario is marked postscript_failed; evaluations continue normally
- *   - afterEach failure  -> that scenario is marked postscript_failed; evaluations continue normally
- *   - afterAll failure   -> all scenarios are marked postscript_failed; evaluations continue normally
+ *   - after / afterEach  -> both always attempt to run; if the scenario otherwise
+ *                          succeeded it is marked postscript_failed, otherwise the
+ *                          existing failure status/reason is preserved
+ *   - afterAll failure   -> successfully completed scenarios are marked
+ *                          postscript_failed; already-failed scenarios keep their status
  */
 
 import { Logger } from "../logger";
@@ -257,7 +259,8 @@ export async function runBeforeEach(
  * successfully built context (e.g. beforeAll only, or beforeAll + beforeEach
  * if before failed).
  *
- * @throws Re-raises any exception so the caller can mark the scenario as postscript_failed.
+ * @throws Re-raises any exception so the caller can decide whether to mark
+ *         the scenario as postscript_failed (only when it otherwise succeeded).
  */
 export async function runAfter(
     hooks: SimulationHooks | undefined,
@@ -278,7 +281,8 @@ export async function runAfter(
  *
  * Unlike `after` (which is item-specific), `afterEach` runs for every dataset item.
  *
- * @throws Re-raises any exception so the caller can mark the scenario as postscript_failed.
+ * @throws Re-raises any exception so the caller can decide whether to mark
+ *         the scenario as postscript_failed (only when it otherwise succeeded).
  */
 export async function runAfterEach(
     hooks: SimulationHooks | undefined,
@@ -297,7 +301,8 @@ export async function runAfterEach(
 /**
  * Execute the afterAll hook.
  *
- * @throws Re-raises any exception so the caller can mark all scenarios as postscript_failed.
+ * @throws Re-raises any exception so the caller can mark successfully
+ *         completed scenarios as postscript_failed (already-failed ones are left alone).
  */
 export async function runAfterAll(
     hooks: SimulationHooks | undefined,

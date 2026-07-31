@@ -263,8 +263,10 @@ export class SimulationHttpClient {
      * @param error - Error message describing the failure.
      * @param status - The run status to set on the item. Use `"prescript_failed"`
      *   when the failure originated from a beforeAll or before hook, or
-     *   `"postscript_failed"` when the failure originated from an after,
-     *   afterEach, or afterAll hook. Defaults to `"failed"`.
+     *   `"postscript_failed"` when an after/afterEach/afterAll hook failed on an
+     *   otherwise successful item. Callers must not overwrite an existing real
+     *   failure (e.g. `failed` / `prescript_failed`) with `postscript_failed`.
+     *   Defaults to `"failed"`.
      */
     async reportFailure(
         runId: string,

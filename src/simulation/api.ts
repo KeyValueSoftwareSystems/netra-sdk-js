@@ -142,14 +142,12 @@ export class Simulation {
                     const errorMsg = `beforeAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
                     Logger.error(`${LOG_PREFIX}: ${errorMsg} — aborting run (no LLM spent)`);
 
-                    for (const item of items) {
-                        await this._client.reportFailure(
-                            runId,
-                            item.runItemId,
-                            errorMsg,
-                            "prescript_failed",
-                        );
-                    }
+                    await this._reportFailures(
+                        runId,
+                        items.map((item) => item.runItemId),
+                        errorMsg,
+                        "prescript_failed",
+                    );
 
                     const results: SimulationResult = {
                         success: false,
@@ -164,11 +162,9 @@ export class Simulation {
                     try {
                         await runAfterAll(hooks, results as any, null);
                     } catch (afterAllError) {
+                        // Items already marked prescript_failed — do not overwrite.
                         const afterAllMsg = `afterAll hook failed: ${afterAllError instanceof Error ? afterAllError.message : String(afterAllError)}`;
                         Logger.error(`${LOG_PREFIX}: ${afterAllMsg}`);
-                        for (const item of items) {
-                            await this._client.reportFailure(runId, item.runItemId, afterAllMsg, "postscript_failed");
-                        }
                     }
                     await this._client.postRunStatus(runId, "completed");
                     return results;
@@ -246,11 +242,9 @@ export class Simulation {
                 try {
                     await runAfterAll(hooks, results as any, sharedContext);
                 } catch (afterAllError) {
+                    // All items already failed during setup — do not overwrite status.
                     const afterAllMsg = `afterAll hook failed: ${afterAllError instanceof Error ? afterAllError.message : String(afterAllError)}`;
                     Logger.error(`${LOG_PREFIX}: ${afterAllMsg}`);
-                    for (const item of items) {
-                        await this._client.reportFailure(runId, item.runItemId, afterAllMsg, "postscript_failed");
-                    }
                 }
                 await this._client.postRunStatus(runId, "completed");
                 return results;
@@ -351,13 +345,9 @@ export class Simulation {
         } catch (error) {
             const errorMsg = `afterAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
             Logger.error(`${LOG_PREFIX}: ${errorMsg}`);
-            const allItemIds = runItems.map((item) => item.runItemId);
-            if (setupFailedItems.length > 0) {
-                allItemIds.push(...setupFailedItems.map((item) => item.runItemId));
-            }
-            for (const rid of allItemIds) {
-                await this._client.reportFailure(runId, rid, errorMsg, "postscript_failed");
-            }
+            // Only mark successfully completed items — do not overwrite real failures.
+            const successfulIds = results.completed.map((item) => item.runItemId);
+            await this._reportFailures(runId, successfulIds, errorMsg, "postscript_failed");
         }
 
         Logger.info(
@@ -368,7 +358,30 @@ export class Simulation {
     }
 
     /**
-     * Run after/afterEach hooks and report postscript_failed on error.
+     * Report failures for many items concurrently.
+     */
+    private async _reportFailures(
+        runId: string,
+        runItemIds: string[],
+        error: string,
+        status: string,
+    ): Promise<void> {
+        if (runItemIds.length === 0) {
+            return;
+        }
+        await Promise.all(
+            runItemIds.map((runItemId) =>
+                this._client.reportFailure(runId, runItemId, error, status),
+            ),
+        );
+    }
+
+    /**
+     * Run after/afterEach hooks independently.
+     *
+     * Both hooks always attempt to run. `postscript_failed` is reported only
+     * when the item otherwise succeeded — an existing failure status/reason is
+     * never overwritten.
      */
     private async _runAfterHooks(
         runId: string,
@@ -378,13 +391,31 @@ export class Simulation {
         itemResult: Record<string, any>,
         setupContext: Record<string, any> | null,
     ): Promise<void> {
+        const errors: string[] = [];
+
         try {
             await runAfter(hooks, datasetItemId, itemResult, setupContext);
-            await runAfterEach(hooks, datasetItemId, itemResult, setupContext);
         } catch (error) {
             const errorMsg = `after hook failed: ${error instanceof Error ? error.message : String(error)}`;
             Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
-            await this._client.reportFailure(runId, runItemId, errorMsg, "postscript_failed");
+            errors.push(errorMsg);
+        }
+
+        try {
+            await runAfterEach(hooks, datasetItemId, itemResult, setupContext);
+        } catch (error) {
+            const errorMsg = `afterEach hook failed: ${error instanceof Error ? error.message : String(error)}`;
+            Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
+            errors.push(errorMsg);
+        }
+
+        if (errors.length > 0 && itemResult.success) {
+            await this._client.reportFailure(
+                runId,
+                runItemId,
+                errors.join("; "),
+                "postscript_failed",
+            );
         }
     }
 
