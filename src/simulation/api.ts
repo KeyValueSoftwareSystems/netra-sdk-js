@@ -147,6 +147,7 @@ export class Simulation {
                         items.map((item) => item.runItemId),
                         errorMsg,
                         "prescript_failed",
+                        maxConcurrency,
                     );
 
                     const results: SimulationResult = {
@@ -346,9 +347,25 @@ export class Simulation {
             const errorMsg = `afterAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
             Logger.error(`${LOG_PREFIX}: ${errorMsg}`);
             // Only mark successfully completed items — do not overwrite real failures.
-            const successfulIds = results.completed.map((item) => item.runItemId);
-            await this._reportFailures(runId, successfulIds, errorMsg, "postscript_failed");
+            const completed = results.completed;
+            const successfulIds = completed.map((item) => item.runItemId);
+            await this._reportFailures(
+                runId,
+                successfulIds,
+                errorMsg,
+                "postscript_failed",
+                maxConcurrency,
+            );
+            for (const item of completed) {
+                item.success = false;
+                item.error = errorMsg;
+                item.status = "postscript_failed";
+            }
+            results.failed.push(...completed);
+            results.completed = [];
         }
+
+        results.success = results.failed.length === 0;
 
         Logger.info(
             `${LOG_PREFIX}: Completed=${results.completed.length}, Failed=${results.failed.length}`,
@@ -358,20 +375,22 @@ export class Simulation {
     }
 
     /**
-     * Report failures for many items concurrently.
+     * Report failures for many items concurrently, capped like other paths.
      */
     private async _reportFailures(
         runId: string,
         runItemIds: string[],
         error: string,
         status: string,
+        maxConcurrency: number = 5,
     ): Promise<void> {
         if (runItemIds.length === 0) {
             return;
         }
+        const limit = pLimit(Math.min(5, maxConcurrency));
         await Promise.all(
             runItemIds.map((runItemId) =>
-                this._client.reportFailure(runId, runItemId, error, status),
+                limit(() => this._client.reportFailure(runId, runItemId, error, status)),
             ),
         );
     }
@@ -410,12 +429,16 @@ export class Simulation {
         }
 
         if (errors.length > 0 && itemResult.success) {
+            const error = errors.join("; ");
             await this._client.reportFailure(
                 runId,
                 runItemId,
-                errors.join("; "),
+                error,
                 "postscript_failed",
             );
+            itemResult.success = false;
+            itemResult.error = error;
+            itemResult.status = "postscript_failed";
         }
     }
 
