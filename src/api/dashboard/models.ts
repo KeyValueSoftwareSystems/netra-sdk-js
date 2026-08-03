@@ -230,12 +230,12 @@ export interface SessionStatsData {
 }
 
 // Session Detail
-export interface SessionDetailToolCall {
+export interface SessionDetailsToolCall {
   toolName: string;
   toolCallCount: number;
 }
 
-export interface SessionDetailTrace {
+export interface SessionDetailsTrace {
   traceId: string;
   traceName: string;
   startTime: string;
@@ -258,10 +258,10 @@ export interface SessionDetailTrace {
     totalCost: number;
   };
   models: string[];
-  toolCalls: SessionDetailToolCall[];
+  toolCalls: SessionDetailsToolCall[];
 }
 
-export interface SessionDetailResponse {
+export interface SessionDetailsResponse {
   sessionId: string;
-  traces: SessionDetailTrace[];
+  traces: SessionDetailsTrace[];
 }

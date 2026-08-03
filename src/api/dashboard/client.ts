@@ -254,7 +254,7 @@ export class DashboardHttpClient extends NetraHttpClient {
    * Returns:
    *   The session detail response data or null on error.
    */
-  async getSessionDetail(sessionId: string): Promise<any | null> {
+  async getSessionDetails(sessionId: string): Promise<any | null> {
     if (!this.isInitialized()) {
       Logger.error(
         "netra.dashboard: Dashboard client is not initialized; cannot get session detail",
