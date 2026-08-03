@@ -14,6 +14,7 @@ import {
   QueryDataParams,
   QueryResponse,
   Scope,
+  SessionDetailResponse,
   SessionFilter,
   SessionFilterConfig,
   SessionStatsData,
@@ -194,6 +195,23 @@ async getSessionStats(
     }
 
     return result.data ?? {};
+  }
+
+  async getSessionDetail(sessionId: string): Promise<SessionDetailResponse | null> {
+    if (!sessionId) {
+      Logger.error(
+        "netra.dashboard: session_id is required to fetch session detail",
+      );
+      return null;
+    }
+
+    const result = await this.client.getSessionDetail(sessionId);
+
+    if (!result) {
+      return null;
+    }
+
+    return result.data ?? result;
   }
 
   private isValidScope(scope: any): scope is Scope {

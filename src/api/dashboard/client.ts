@@ -244,4 +244,46 @@ export class DashboardHttpClient extends NetraHttpClient {
       return null;
     }
   }
+
+  /**
+   * Get detailed information for a specific session including all its traces.
+   *
+   * Args:
+   *   sessionId: The session ID to retrieve details for.
+   *
+   * Returns:
+   *   The session detail response data or null on error.
+   */
+  async getSessionDetail(sessionId: string): Promise<any | null> {
+    if (!this.isInitialized()) {
+      Logger.error(
+        "netra.dashboard: Dashboard client is not initialized; cannot get session detail",
+      );
+      return null;
+    }
+
+    try {
+      const url = `/public/dashboard/session/${encodeURIComponent(sessionId)}`;
+
+      const response = await this.get(url);
+
+      if (!response.ok) {
+        const errorMessage = response.data?.error?.message ?? "Unknown error";
+        Logger.error(
+          `netra.dashboard: Failed to fetch session detail: ${errorMessage}`,
+        );
+        return null;
+      }
+
+      return response.data;
+    } catch (err: any) {
+      const message = err?.response?.data?.error?.message ?? "";
+
+      Logger.error(
+        "netra.dashboard: Failed to fetch session detail:",
+        message,
+      );
+      return null;
+    }
+  }
 }
