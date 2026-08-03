@@ -72,6 +72,7 @@ export interface ConversationResult {
   runItemId: string;
   success: boolean;
   error?: string;
+  status?: string;
   finalTurnId?: string;
   turnId?: string;
 }
