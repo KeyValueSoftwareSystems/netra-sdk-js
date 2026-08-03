@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-08-03
+
+### Added
+
+- **Postscript Failed Status**: After-hook failures (`after`, `afterEach`, `afterAll`) on otherwise successful scenarios are now reported as `postscript_failed` instead of being logged and ignored. Existing failure statuses (`failed` / `prescript_failed`) are never overwritten. `after` and `afterEach` always both attempt to run; `afterAll` failure marks only successfully completed scenarios.
+
 ## [1.7.0] - 2026-07-27
 
 ### Added
