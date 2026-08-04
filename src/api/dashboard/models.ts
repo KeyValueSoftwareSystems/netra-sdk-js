@@ -228,3 +228,40 @@ export interface SessionStatsData {
   session_duration: string;
   cursor: string;
 }
+
+// Session Detail
+export interface SessionDetailsToolCall {
+  toolName: string;
+  toolCallCount: number;
+}
+
+export interface SessionDetailsTrace {
+  traceId: string;
+  traceName: string;
+  startTime: string;
+  endTime: string;
+  latencyMs: number;
+  input: string | null;
+  output: string | null;
+  tokens: {
+    promptTokens: number;
+    completionTokens: number;
+    cachedTokens: number;
+    cacheCreationTokens: number;
+    totalTokens: number;
+  };
+  cost: {
+    promptTokensCost: number;
+    completionTokensCost: number;
+    cachedTokensCost: number;
+    cacheCreationTokensCost: number;
+    totalCost: number;
+  };
+  models: string[];
+  toolCalls: SessionDetailsToolCall[];
+}
+
+export interface SessionDetailsResponse {
+  sessionId: string;
+  traces: SessionDetailsTrace[];
+}
