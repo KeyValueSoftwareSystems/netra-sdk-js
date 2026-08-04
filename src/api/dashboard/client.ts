@@ -252,12 +252,12 @@ export class DashboardHttpClient extends NetraHttpClient {
    *   sessionId: The session ID to retrieve details for.
    *
    * Returns:
-   *   The session detail response data or null on error.
+   *   The session details response data or null on error.
    */
   async getSessionDetails(sessionId: string): Promise<any | null> {
     if (!this.isInitialized()) {
       Logger.error(
-        "netra.dashboard: Dashboard client is not initialized; cannot get session detail",
+        "netra.dashboard: Dashboard client is not initialized; cannot get session details",
       );
       return null;
     }
@@ -270,7 +270,7 @@ export class DashboardHttpClient extends NetraHttpClient {
       if (!response.ok) {
         const errorMessage = response.data?.error?.message ?? "Unknown error";
         Logger.error(
-          `netra.dashboard: Failed to fetch session detail: ${errorMessage}`,
+          `netra.dashboard: Failed to fetch session details: ${errorMessage}`,
         );
         return null;
       }
@@ -280,7 +280,7 @@ export class DashboardHttpClient extends NetraHttpClient {
       const message = err?.response?.data?.error?.message ?? "";
 
       Logger.error(
-        "netra.dashboard: Failed to fetch session detail:",
+        "netra.dashboard: Failed to fetch session details:",
         message,
       );
       return null;
