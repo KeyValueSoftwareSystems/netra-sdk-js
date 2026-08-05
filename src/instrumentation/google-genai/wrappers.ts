@@ -22,6 +22,10 @@ import {
 import { Logger } from "../../logger";
 import { wrapResponse } from "../../utils/response-handler";
 import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
+import {
   createSuppressedContext,
   modelAsDict,
   shouldSuppressInstrumentation,
@@ -127,6 +131,13 @@ function genericWrapperFactory(
                     SpanAttributes.LLM_RESPONSE_DURATION,
                     (endTime - startTime) / 1000,
                   );
+                  if (requestType !== "embedding") {
+                    recordNonStreamingTimingAttributes(
+                      span,
+                      startTime,
+                      endTime,
+                    );
+                  }
                 },
                 onError: (error) => {
                   span.setStatus({
@@ -194,6 +205,7 @@ function streamWrapperFactory(
         (span: Span) => {
           const startTime = Date.now();
           const accumulated: Record<string, any> = {};
+          const tokenTracker = new FirstTokenTracker(span, startTime);
 
           try {
             setRequestAttributes(span, params, requestType);
@@ -209,7 +221,13 @@ function streamWrapperFactory(
               {
                 withContext: (fn) => context.with(spanContext, fn),
                 onChunk: (chunk) => {
-                  processStreamChunk(accumulated, chunk, span, startTime);
+                  processStreamChunk(
+                    accumulated,
+                    chunk,
+                    span,
+                    startTime,
+                    tokenTracker,
+                  );
                 },
                 onError: (error) => {
                   span.setStatus({

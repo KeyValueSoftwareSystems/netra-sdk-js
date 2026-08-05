@@ -10,6 +10,10 @@ import {
 import { Logger } from "../../logger";
 import { wrapResponse } from "../../utils/response-handler";
 import { safeStringify } from "../../utils/serialization";
+import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
 import { SpanAttributes } from "../span-attributes";
 import {
   defineHidden,
@@ -38,6 +42,7 @@ const WRAPPER_OWN_PROPS = new Set([
   "spanFinalized",
   "completionPending",
   "listenerMap",
+  "tokenTracker",
 ]);
 
 const EVENT_EMITTER_METHODS = new Set([
@@ -152,6 +157,7 @@ class MessageStreamWrapper {
   private spanFinalized = false;
   private completionPending = false;
   private listenerMap = new WeakMap<Function, Map<string, Function[]>>();
+  private tokenTracker!: FirstTokenTracker;
 
   constructor(
     span: Span,
@@ -165,6 +171,7 @@ class MessageStreamWrapper {
     defineHidden(this, "messageStream", messageStream);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
     defineHidden(
       this,
       "spanContext",
@@ -319,7 +326,12 @@ class MessageStreamWrapper {
     let errorOccurred = false;
     try {
       for await (const chunk of this.messageStream) {
-        processStreamChunk(this.completeResponse, chunk, this.span);
+        processStreamChunk(
+          this.completeResponse,
+          chunk,
+          this.span,
+          this.tokenTracker,
+        );
         yield chunk;
       }
     } catch (err) {
@@ -350,6 +362,7 @@ class MessageStreamWrapper {
           this.completeResponse.currentText = "";
         }
         this.completeResponse.currentText += data;
+        this.tokenTracker.markFirstToken();
         break;
 
       case "contentBlock":
@@ -444,13 +457,19 @@ function anthropicWrapper(
               model: "",
               usage: {},
             };
+            const tokenTracker = new FirstTokenTracker(span, startTime);
 
             return wrapResponse(
               response,
               {
                 withContext: (fn) => context.with(spanContext, fn),
                 onChunk: (chunk) =>
-                  processStreamChunk(completeResponse, chunk, span),
+                  processStreamChunk(
+                    completeResponse,
+                    chunk,
+                    span,
+                    tokenTracker,
+                  ),
                 onError: (error) => {
                   Logger.error("netra.instrumentation.anthropic:", error);
                   span.setStatus({
@@ -468,6 +487,7 @@ function anthropicWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000,
                   );
+                  recordNonStreamingTimingAttributes(span, startTime, endTime);
                 },
                 finalize: (status) => {
                   const hasStreamData =

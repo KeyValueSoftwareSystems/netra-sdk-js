@@ -10,6 +10,10 @@ import {
   context,
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
+import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
 import { defineHidden, isPromise } from "../utils";
 import {
   modelAsDict,
@@ -67,6 +71,7 @@ function mistralWrapper(
                   "llm.response.duration",
                   (endTime - startTime) / 1000
                 );
+                recordNonStreamingTimingAttributes(span, startTime, endTime);
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return value;
@@ -90,6 +95,7 @@ function mistralWrapper(
             "llm.response.duration",
             (endTime - startTime) / 1000
           );
+          recordNonStreamingTimingAttributes(span, startTime, endTime);
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;
@@ -245,12 +251,14 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private response!: unknown;
   private startTime!: number;
   private requestKwargs!: Record<string, unknown>;
+  private tokenTracker!: FirstTokenTracker;
 
   constructor(span: Span, response: unknown, startTime: number, requestKwargs: Record<string, unknown>) {
     defineHidden(this, "span", span);
     defineHidden(this, "response", response);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
   }
 
   toJSON() {
@@ -354,6 +362,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
             } else {
               choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
             }
+            this.tokenTracker.markFirstToken();
           }
 
           if (choice.finishReason) {
@@ -389,6 +398,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
           } else {
             choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
           }
+          this.tokenTracker.markFirstToken();
         }
 
         if (choice.finishReason) {
@@ -439,17 +449,19 @@ export class AsyncStreamingWrapper
   private startTime!: number;
   private requestKwargs!: Record<string, unknown>;
   private completeResponse: Record<string, unknown>;
+  private tokenTracker!: FirstTokenTracker;
 
   constructor(
     span: Span,
     response: unknown,
     startTime: number,
-    requestKwargs: Record<string, unknown>
+    requestKwargs: Record<string, unknown>,
   ) {
     defineHidden(this, "span", span);
     defineHidden(this, "response", response);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
     this.completeResponse = { choices: [], model: "" };
   }
 
@@ -572,6 +584,7 @@ export class AsyncStreamingWrapper
             } else {
               choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
             }
+            this.tokenTracker.markFirstToken();
           }
 
           if (choice.finishReason) {
@@ -607,6 +620,7 @@ export class AsyncStreamingWrapper
           } else {
             choiceEntry.text = String(choiceEntry.text || "") + contentPiece;
           }
+          this.tokenTracker.markFirstToken();
         }
 
         if (choice.finishReason) {

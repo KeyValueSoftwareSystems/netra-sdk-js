@@ -1,12 +1,16 @@
 import { Tracer, Span, SpanKind, SpanStatusCode, context } from "@opentelemetry/api";
 import { Logger } from "../../logger";
-import { setRequestAttributes, setResponseAttributes } from "./utils";
+import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
 import {
   defineHidden,
   modelAsDict,
   isPromise,
   shouldSuppressInstrumentation,
 } from "../utils";
+import { setRequestAttributes, setResponseAttributes } from "./utils";
 
 type GroqRequestType = "chat";
 
@@ -98,6 +102,7 @@ function groqWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000
                   );
+                  recordNonStreamingTimingAttributes(span, startTime, endTime);
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
                   return value;
@@ -121,6 +126,7 @@ function groqWrapper(
                 "llm.response.duration",
                 (endTime - startTime) / 1000
               );
+              recordNonStreamingTimingAttributes(span, startTime, endTime);
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
               return response;
@@ -152,12 +158,14 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
   private response!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
+  private tokenTracker!: FirstTokenTracker;
 
   constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
     defineHidden(this, "span", span);
     defineHidden(this, "response", response);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
   }
 
   toJSON() {
@@ -224,6 +232,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
             choices[index].message = { role: "assistant", content: "" };
           }
           choices[index].message.content += String(delta.content);
+          this.tokenTracker.markFirstToken();
         }
 
         if (choice.finish_reason) {
@@ -245,6 +254,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
         });
       });
       this.completeResponse.usage = chunkDict.response.usage || {};
+      this.tokenTracker.markFirstToken();
     }
 
     this.span.addEvent("llm.content.completion.chunk");
@@ -281,12 +291,14 @@ export class AsyncStreamingWrapper
   private response!: any;
   private startTime!: number;
   private requestKwargs!: Record<string, any>;
+  private tokenTracker!: FirstTokenTracker;
 
   constructor(span: Span, response: any, startTime: number, requestKwargs: Record<string, any>) {
     defineHidden(this, "span", span);
     defineHidden(this, "response", response);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
   }
 
   toJSON() {
@@ -367,6 +379,7 @@ export class AsyncStreamingWrapper
           }
           const message = choiceEntry.message as Record<string, unknown>;
           message.content = String(message.content || "") + contentPiece;
+          this.tokenTracker.markFirstToken();
         }
 
         if (choice.finish_reason) {
@@ -399,6 +412,7 @@ export class AsyncStreamingWrapper
         const usage = response.usage || {};
         this.completeResponse.usage = usage;
       });
+      this.tokenTracker.markFirstToken();
     }
     this.span.addEvent("llm.content.completion.chunk");
   }

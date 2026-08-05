@@ -14,6 +14,7 @@
 import { Span } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { safeStringify } from "../../utils/serialization";
+import type { FirstTokenTracker } from "../../utils/span-timing";
 import { SpanAttributes } from "../span-attributes";
 import {
   TracedMessage,
@@ -488,6 +489,7 @@ export function processStreamChunk(
   chunk: any,
   span: Span,
   startTime: number,
+  tokenTracker?: FirstTokenTracker,
 ): void {
   try {
     if (chunk.modelVersion) {
@@ -502,10 +504,7 @@ export function processStreamChunk(
     if (chunkText && chunkText.length > 0) {
       if (!accumulated._text) {
         accumulated._text = chunkText;
-        span.setAttribute(
-          "gen_ai.performance.time_to_first_token",
-          (Date.now() - startTime) / 1000,
-        );
+        tokenTracker?.markFirstToken();
       } else {
         accumulated._text += chunkText;
       }

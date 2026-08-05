@@ -1,5 +1,6 @@
 import { Span, SpanStatusCode } from "@opentelemetry/api";
 import { Logger } from "../../logger";
+import type { FirstTokenTracker } from "../../utils/span-timing";
 import {
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
@@ -13,6 +14,7 @@ export function processStreamChunk(
   completeResponse: Record<string, any>,
   chunk: any,
   span: Span,
+  tokenTracker?: FirstTokenTracker,
 ): void {
   try {
     switch (chunk.type) {
@@ -67,6 +69,7 @@ export function processStreamChunk(
           targetBlock.input += chunk.delta.partial_json ?? "";
         } else if (chunk.delta?.text) {
           targetBlock.text += chunk.delta.text;
+          tokenTracker?.markFirstToken();
         }
         break;
       }

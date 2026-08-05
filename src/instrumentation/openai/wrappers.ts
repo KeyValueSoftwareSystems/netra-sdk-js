@@ -8,6 +8,10 @@ import {
   trace,
 } from "@opentelemetry/api";
 import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
+import {
   defineHidden,
   isPromise,
   modelAsDict,
@@ -46,8 +50,10 @@ function finalizeSpanSuccess(
   response: Record<string, unknown>,
   startTime: number,
 ): void {
+  const endTime = Date.now();
   setResponseAttributes(span, response);
-  span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
+  span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+  recordNonStreamingTimingAttributes(span, startTime, endTime);
   span.setStatus({ code: SpanStatusCode.OK });
   span.end();
 }
@@ -58,6 +64,7 @@ abstract class BaseStreamHandler {
   protected span!: Span;
   protected startTime!: number;
   protected requestKwargs!: Record<string, unknown>;
+  protected tokenTracker!: FirstTokenTracker;
 
   constructor(
     span: Span,
@@ -67,6 +74,7 @@ abstract class BaseStreamHandler {
     defineHidden(this, "span", span);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
   }
 
   toJSON(): StreamResponse {
@@ -93,6 +101,7 @@ abstract class BaseStreamHandler {
           }
           const msg = entry.message as Record<string, unknown>;
           msg.content = String(msg.content ?? "") + String(delta.content);
+          this.tokenTracker.markFirstToken();
         }
         if (choice.finish_reason) {
           this.completeResponse.choices[index].finish_reason =
@@ -126,6 +135,7 @@ abstract class BaseStreamHandler {
         }
       }
       this.completeResponse.usage = responseChunk.usage ?? {};
+      this.tokenTracker.markFirstToken();
     }
 
     this.span.addEvent("llm.content.completion.chunk");
