@@ -370,7 +370,7 @@ class MessageStreamWrapper {
           this.completeResponse.currentText = "";
         }
         this.completeResponse.currentText += data;
-        this.tokenTracker.markFirstToken();
+        if (data) this.tokenTracker.markFirstToken();
         break;
 
       case "contentBlock":

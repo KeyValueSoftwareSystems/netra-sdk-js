@@ -71,7 +71,9 @@ function mistralWrapper(
                   "llm.response.duration",
                   (endTime - startTime) / 1000
                 );
-                recordNonStreamingTimingAttributes(span, startTime, endTime);
+                if (requestType !== "embedding") {
+                  recordNonStreamingTimingAttributes(span, startTime, endTime);
+                }
                 span.setStatus({ code: SpanStatusCode.OK });
                 span.end();
                 return value;
@@ -95,7 +97,9 @@ function mistralWrapper(
             "llm.response.duration",
             (endTime - startTime) / 1000
           );
-          recordNonStreamingTimingAttributes(span, startTime, endTime);
+          if (requestType !== "embedding") {
+            recordNonStreamingTimingAttributes(span, startTime, endTime);
+          }
           span.setStatus({ code: SpanStatusCode.OK });
           span.end();
           return response;

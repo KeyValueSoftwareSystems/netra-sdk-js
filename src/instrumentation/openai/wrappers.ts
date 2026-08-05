@@ -49,11 +49,14 @@ function finalizeSpanSuccess(
   span: Span,
   response: Record<string, unknown>,
   startTime: number,
+  requestType: OpenAIRequestType,
 ): void {
   const endTime = Date.now();
   setResponseAttributes(span, response);
   span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
-  recordNonStreamingTimingAttributes(span, startTime, endTime);
+  if (requestType !== "embedding") {
+    recordNonStreamingTimingAttributes(span, startTime, endTime);
+  }
   span.setStatus({ code: SpanStatusCode.OK });
   span.end();
 }
@@ -153,20 +156,16 @@ abstract class BaseStreamHandler {
   }
 
   protected finalizeSpan(code: SpanStatusCode): void {
-    if (code === SpanStatusCode.OK) {
-      finalizeSpanSuccess(
-        this.span,
-        this.completeResponse as Record<string, unknown>,
-        this.startTime,
-      );
-    } else {
-      this.span.setAttribute(
-        "llm.response.duration",
-        (Date.now() - this.startTime) / 1000,
-      );
-      this.span.setStatus({ code });
-      this.span.end();
-    }
+    setResponseAttributes(
+      this.span,
+      this.completeResponse as Record<string, unknown>,
+    );
+    this.span.setAttribute(
+      "llm.response.duration",
+      (Date.now() - this.startTime) / 1000,
+    );
+    this.span.setStatus({ code });
+    this.span.end();
   }
 }
 
@@ -329,7 +328,7 @@ function executeNonStreaming(
     if (isPromise(result)) {
       return result.then(
         (value) => {
-          finalizeSpanSuccess(span, modelAsDict(value), startTime);
+          finalizeSpanSuccess(span, modelAsDict(value), startTime, requestType);
           return value;
         },
         (error) => {
@@ -339,7 +338,7 @@ function executeNonStreaming(
       );
     }
 
-    finalizeSpanSuccess(span, modelAsDict(result), startTime);
+    finalizeSpanSuccess(span, modelAsDict(result), startTime, requestType);
     return result;
   } catch (error) {
     handleSpanError(span, error);
