@@ -301,6 +301,13 @@ class MessageStreamWrapper {
     try {
       if (typeof this.messageStream?.on !== "function") return;
 
+      // Capture TTFT directly from the raw stream so it is recorded
+      // even when the consumer (e.g. tool runner) never registers its
+      // own "text" listener through our proxy.
+      this.messageStream.on("text", (data: any) => {
+        if (data) this.tokenTracker.markFirstToken();
+      });
+
       this.messageStream.on("end", () => {
         if (!this.completionPending) {
           this.finalizeSpanOnce(SpanStatusCode.OK);
