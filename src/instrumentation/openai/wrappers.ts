@@ -119,6 +119,7 @@ abstract class BaseStreamHandler {
       | Record<string, unknown>
       | undefined;
     if (responseChunk?.status === "completed") {
+      let hasText = false;
       const outputs = (responseChunk.output ?? []) as Array<
         Record<string, unknown>
       >;
@@ -128,6 +129,7 @@ abstract class BaseStreamHandler {
           | undefined;
         if (Array.isArray(content)) {
           for (const item of content) {
+            if (item.text) hasText = true;
             this.completeResponse.choices.push({
               message: { role: "assistant", content: String(item.text ?? "") },
             });
@@ -135,7 +137,7 @@ abstract class BaseStreamHandler {
         }
       }
       this.completeResponse.usage = responseChunk.usage ?? {};
-      this.tokenTracker.markFirstToken();
+      if (hasText) this.tokenTracker.markFirstToken();
     }
 
     this.span.addEvent("llm.content.completion.chunk");

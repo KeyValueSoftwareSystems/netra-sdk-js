@@ -261,12 +261,20 @@ class MessageStreamWrapper {
               const result = await method.call(target.messageStream, ...args);
 
               if (prop === "finalMessage" || prop === "done") {
+                if (result) {
+                  const hasText = Array.isArray(result.content) &&
+                    result.content.some((b: any) => b.type === "text" && b.text);
+                  if (hasText) {
+                    target.tokenTracker.markFirstToken();
+                  }
+                }
                 target.finalizeSpanFromMessage(result);
               } else if (prop === "finalText") {
                 if (typeof result === "string" && result.length > 0) {
                   target.completeResponse.content = [
                     { type: "text", text: result },
                   ];
+                  target.tokenTracker.markFirstToken();
                 } else {
                   target.flushCurrentText();
                 }

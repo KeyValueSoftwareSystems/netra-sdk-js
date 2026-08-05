@@ -244,17 +244,19 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     if (chunkDict.usage) this.completeResponse.usage = chunkDict.usage;
 
     if (chunkDict.response?.status === "completed") {
+      let hasText = false;
       const outputs = chunkDict.response.output || [];
       outputs.forEach((output: any) => {
         const content = output.content || [];
         content.forEach((item: any) => {
+          if (item.text) hasText = true;
           choices.push({
             message: { role: "assistant", content: item.text || "" },
           });
         });
       });
       this.completeResponse.usage = chunkDict.response.usage || {};
-      this.tokenTracker.markFirstToken();
+      if (hasText) this.tokenTracker.markFirstToken();
     }
 
     this.span.addEvent("llm.content.completion.chunk");
@@ -392,6 +394,7 @@ export class AsyncStreamingWrapper
 
     // Response API
     if ((chunkDict.response as any)?.status === "completed") {
+      let hasText = false;
       const response = chunkDict.response as Record<string, unknown>;
       const responseOutput = (response.output || []) as Array<
         Record<string, unknown>
@@ -401,7 +404,7 @@ export class AsyncStreamingWrapper
         if (content) {
           for (const contentItem of content) {
             const assistantText = contentItem.text || "";
-            // Append to choices array instead of replacing
+            if (contentItem.text) hasText = true;
             (
               this.completeResponse.choices as Array<Record<string, unknown>>
             ).push({
@@ -412,7 +415,7 @@ export class AsyncStreamingWrapper
         const usage = response.usage || {};
         this.completeResponse.usage = usage;
       });
-      this.tokenTracker.markFirstToken();
+      if (hasText) this.tokenTracker.markFirstToken();
     }
     this.span.addEvent("llm.content.completion.chunk");
   }
