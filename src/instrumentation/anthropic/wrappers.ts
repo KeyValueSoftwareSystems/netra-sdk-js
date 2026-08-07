@@ -248,7 +248,9 @@ class MessageStreamWrapper {
             return function (event?: string) {
               target.listenerMap = new WeakMap();
               const result = method.call(target.messageStream, event);
-              if (!event || event === "text") {
+              if (!event) {
+                target.attachSafetyNetListeners();
+              } else if (event === "text") {
                 target.messageStream.on("text", target.ttftListener);
               }
               return result;
@@ -303,36 +305,35 @@ class MessageStreamWrapper {
     });
   }
 
+  private attachSafetyNetListeners(): void {
+    this.ttftListener = (data: any) => {
+      if (data) this.tokenTracker.markFirstToken();
+    };
+    this.messageStream.on("text", this.ttftListener);
+
+    this.messageStream.on("end", () => {
+      if (!this.completionPending) {
+        this.finalizeSpanOnce(SpanStatusCode.OK);
+      }
+    });
+    this.messageStream.on("error", (err: any) => {
+      if (err && !this.spanFinalized) {
+        this.span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        this.span.recordException(
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      }
+      this.finalizeSpanOnce(SpanStatusCode.ERROR);
+    });
+  }
+
   private registerSafetyNetListeners(): void {
     try {
       if (typeof this.messageStream?.on !== "function") return;
-
-      // Capture TTFT directly from the raw stream so it is recorded
-      // even when the consumer (e.g. tool runner) never registers its
-      // own "text" listener through our proxy. Stored on the instance
-      // so removeAllListeners can re-attach it.
-      this.ttftListener = (data: any) => {
-        if (data) this.tokenTracker.markFirstToken();
-      };
-      this.messageStream.on("text", this.ttftListener);
-
-      this.messageStream.on("end", () => {
-        if (!this.completionPending) {
-          this.finalizeSpanOnce(SpanStatusCode.OK);
-        }
-      });
-      this.messageStream.on("error", (err: any) => {
-        if (err && !this.spanFinalized) {
-          this.span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          this.span.recordException(
-            err instanceof Error ? err : new Error(String(err)),
-          );
-        }
-        this.finalizeSpanOnce(SpanStatusCode.ERROR);
-      });
+      this.attachSafetyNetListeners();
     } catch (e) {
       Logger.error(
         "netra.instrumentation.anthropic: safety net listener registration failed",
@@ -510,7 +511,9 @@ function anthropicWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000,
                   );
-                  recordNonStreamingTimingAttributes(span, startTime, endTime);
+                  if (requestType !== "batches") {
+                    recordNonStreamingTimingAttributes(span, startTime, endTime);
+                  }
                 },
                 finalize: (status) => {
                   const hasStreamData =

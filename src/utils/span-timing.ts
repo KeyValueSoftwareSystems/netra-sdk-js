@@ -53,10 +53,6 @@ export class FirstTokenTracker {
     private readonly startTimeMs: number,
   ) {}
 
-  get recorded(): boolean {
-    return this._recorded;
-  }
-
   markFirstToken(): void {
     if (this._recorded || !this.span.isRecording()) return;
     this._recorded = true;

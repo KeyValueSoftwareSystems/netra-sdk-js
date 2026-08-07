@@ -14,17 +14,12 @@ import {
 } from "@opentelemetry/api";
 
 import { Logger } from "../../logger";
+import { recordNonStreamingTimingAttributes } from "../../utils/span-timing";
 import {
   defineHidden,
   setResponseAttributes as setBaseResponseAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
-import { recordNonStreamingTimingAttributes } from "../../utils/span-timing";
-
-// Context key to track if we're inside a LangGraph instrumented call
-// This prevents double-instrumentation when invoke internally calls stream
-const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
-
 import {
   NetraLanggraphAttributes,
   setChainInputAttributes,
@@ -34,6 +29,10 @@ import {
   setLlmRequestAttributes,
   setToolAttributes,
 } from "./utils";
+
+// Context key to track if we're inside a LangGraph instrumented call
+// This prevents double-instrumentation when invoke internally calls stream
+const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
 
 type AnyFunc = (...args: any[]) => any;
 type AsyncIterableFunc = (...args: any[]) => Promise<AsyncIterable<any>>;
@@ -244,6 +243,8 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       attributes.extraParams,
     );
     setBaseResponseAttributes(span, response);
+    // Streaming TTFT is captured by the underlying provider instrumentation
+    // (e.g. OpenAI, Anthropic). We only record timing for non-streaming calls.
     if (attributes.startTimeMs && !this.streamedRuns.has(runId)) {
       recordNonStreamingTimingAttributes(span, attributes.startTimeMs, Date.now());
     }
@@ -555,6 +556,7 @@ export class LanggraphWrapper {
     } catch (error) {
       span.recordException(error as Error);
       span.end();
+      throw error;
     }
   }
 }

@@ -19,6 +19,7 @@ import {
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import { OpenAIRequestType, StreamResponse, WrapperFn } from "./types";
+import { Logger } from "../../logger";
 
 const SPAN_NAMES: Record<OpenAIRequestType, string> = {
   chat: "openai.chat",
@@ -156,10 +157,14 @@ abstract class BaseStreamHandler {
   }
 
   protected finalizeSpan(code: SpanStatusCode): void {
-    setResponseAttributes(
-      this.span,
-      this.completeResponse as Record<string, unknown>,
-    );
+    try {
+      setResponseAttributes(
+        this.span,
+        this.completeResponse as Record<string, unknown>,
+      );
+    } catch {
+      Logger.debug('Failed to set response attributes');
+    }
     this.span.setAttribute(
       "llm.response.duration",
       (Date.now() - this.startTime) / 1000,
