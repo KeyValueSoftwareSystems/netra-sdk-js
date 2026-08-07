@@ -79,13 +79,37 @@
     "openai": "^4.0.0 || ^5.0.0 || ^6.0.0"
   },
   "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@google/genai": {
+      "optional": true
+    },
+    "@google/generative-ai": {
+      "optional": true
+    },
+    "@langchain/langchain": {
+      "optional": true
+    },
+    "@langchain/langgraph": {
+      "optional": true
+    },
+    "@langchain/ollama": {
+      "optional": true
+    },
+    "@mistralai/mistralai": {
+      "optional": true
+    },
+    "@openai/agents": {
+      "optional": true
+    },
     "@opentelemetry/instrumentation": {
       "optional": true
     },
-    "@opentelemetry/instrumentation-http": {
+    "@opentelemetry/instrumentation-express": {
       "optional": true
     },
-    "@opentelemetry/instrumentation-express": {
+    "@opentelemetry/instrumentation-http": {
       "optional": true
     },
     "@opentelemetry/instrumentation-undici": {
@@ -94,25 +118,10 @@
     "@prisma/instrumentation": {
       "optional": true
     },
-    "openai": {
-      "optional": true
-    },
     "groq-sdk": {
       "optional": true
     },
-    "@mistralai/mistralai": {
-      "optional": true
-    },
-    "@google/generative-ai": {
-      "optional": true
-    },
-    "@google/genai": {
-      "optional": true
-    },
-    "@anthropic-ai/sdk": {
-      "optional": true
-    },
-    "@openai/agents": {
+    "openai": {
       "optional": true
     }
   },
