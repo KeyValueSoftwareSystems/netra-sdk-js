@@ -14,55 +14,12 @@ import {
 } from "@opentelemetry/api";
 
 import { Logger } from "../../logger";
+import { recordNonStreamingTimingAttributes } from "../../utils/span-timing";
 import {
   defineHidden,
   setResponseAttributes as setBaseResponseAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
-
-// Context key to track if we're inside a LangGraph instrumented call
-// This prevents double-instrumentation when invoke internally calls stream
-const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
-
-function getContextManager(): any {
-  try {
-    if ((context as any)._getContextManager) {
-      return (context as any)._getContextManager();
-    }
-
-    const globalSymbols = Object.getOwnPropertySymbols(global);
-    const otelSymbol = globalSymbols.find(s =>
-      s.toString().includes("opentelemetry.js.api"),
-    );
-    if (otelSymbol) {
-      const globalState = (global as any)[otelSymbol];
-      if (globalState?.contextManager) {
-        return globalState.contextManager;
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function enterWithContext(newContext: Context): void {
-  const contextManager = getContextManager();
-  if (!contextManager) return;
-
-  if (typeof contextManager.enterWith === "function") {
-    contextManager.enterWith(newContext);
-    return;
-  }
-
-  if (
-    contextManager._asyncLocalStorage &&
-    typeof contextManager._asyncLocalStorage.enterWith === "function"
-  ) {
-    contextManager._asyncLocalStorage.enterWith(newContext);
-  }
-}
 import {
   NetraLanggraphAttributes,
   setChainInputAttributes,
@@ -72,6 +29,10 @@ import {
   setLlmRequestAttributes,
   setToolAttributes,
 } from "./utils";
+
+// Context key to track if we're inside a LangGraph instrumented call
+// This prevents double-instrumentation when invoke internally calls stream
+const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
 
 type AnyFunc = (...args: any[]) => any;
 type AsyncIterableFunc = (...args: any[]) => Promise<AsyncIterable<any>>;
@@ -83,6 +44,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
   private nodeAttributes: Map<string, Record<string, any>> = new Map();
   private runStack: string[] = [];
   private inferredParents: Map<string, string> = new Map();
+  private streamedRuns: Set<string> = new Set();
 
   constructor(
     private tracer: Tracer,
@@ -241,8 +203,17 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       metadata,
       prompts,
       extraParams,
-      parentRunId: effectiveParentRunId, // Store parent ID to link back
+      parentRunId: effectiveParentRunId,
+      startTimeMs: Date.now(),
     });
+  }
+
+  async handleLLMNewToken(
+    _token: string,
+    _idx: { prompt: number; completion: number },
+    runId: string,
+  ) {
+    this.streamedRuns.add(runId);
   }
 
   async handleLLMEnd(
@@ -272,9 +243,15 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       attributes.extraParams,
     );
     setBaseResponseAttributes(span, response);
+    // Streaming TTFT is captured by the underlying provider instrumentation
+    // (e.g. OpenAI, Anthropic). We only record timing for non-streaming calls.
+    if (attributes.startTimeMs && !this.streamedRuns.has(runId)) {
+      recordNonStreamingTimingAttributes(span, attributes.startTimeMs, Date.now());
+    }
     span.end();
 
     this.nodeAttributes.delete(runId);
+    this.streamedRuns.delete(runId);
   }
 
   async handleLLMError(
@@ -302,6 +279,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     span.end();
 
     this.nodeAttributes.delete(runId);
+    this.streamedRuns.delete(runId);
   }
 
   async handleToolStart(
@@ -411,14 +389,19 @@ class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
     config?: RunnableConfig,
     ...rest: any[]
   ) {
-    this.iterable = await originalFunc.call(instance, input, config, ...rest);
+    const spanContext = trace.setSpan(this.rootContext, this.rootSpan);
+    this.iterable = await context.with(spanContext, () =>
+      originalFunc.call(instance, input, config, ...rest),
+    );
     return this;
   }
 
   async *[Symbol.asyncIterator]() {
     const spanContext = trace.setSpan(this.rootContext, this.rootSpan);
     try {
-      const iterator = await this.iterable[Symbol.asyncIterator]();
+      const iterator = await context.with(spanContext, () =>
+        this.iterable[Symbol.asyncIterator](),
+      );
       while (true) {
         let result: any;
         await context.with(spanContext, async () => {
@@ -427,7 +410,7 @@ class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
         if (result.done) break;
         const value = result?.value ?? {};
         this.output = { ...this.output, ...value };
-        yield result;
+        yield value;
       }
       this.rootSpan.setAttribute(
         NetraLanggraphAttributes.entityOutput,
@@ -502,7 +485,6 @@ export class LanggraphWrapper {
     // Set the active flag to prevent nested instrumentation (e.g., when invoke calls stream internally)
     const ctxWithSpan = trace.setSpan(context.active(), span);
     const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
-    enterWithContext(ctxWithFlag);
 
     return context.with(ctxWithFlag, async () => {
       {
@@ -561,18 +543,20 @@ export class LanggraphWrapper {
     try {
       const ctxWithSpan = trace.setSpan(context.active(), span);
       const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
-      enterWithContext(ctxWithFlag);
       const streamingWrapper = new LanggraphStreamingWrapper(span, ctxWithFlag);
-      return streamingWrapper.startStream(
-        originalFunc,
-        instance,
-        input,
-        updatedConfig,
-        ...rest,
+      return await context.with(ctxWithFlag, () =>
+        streamingWrapper.startStream(
+          originalFunc,
+          instance,
+          input,
+          updatedConfig,
+          ...rest,
+        ),
       );
     } catch (error) {
       span.recordException(error as Error);
       span.end();
+      throw error;
     }
   }
 }

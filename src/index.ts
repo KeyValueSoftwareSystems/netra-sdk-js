@@ -235,23 +235,6 @@ export class Netra {
     }
 
     this._initialized = true;
-    Logger.info("Netra successfully initialized.");
-
-    {
-      let pkgVersion = Config.LIBRARY_VERSION;
-      let pkgPath = "unknown";
-      try {
-        const req = createRequire(import.meta.url);
-        pkgPath = req.resolve("../package.json");
-        const pkg = req("../package.json");
-        pkgVersion = pkg?.version || pkgVersion;
-      } catch {
-        // keep defaults
-      }
-      Logger.debug(
-        `SDK version=${pkgVersion} libraryVersion=${Config.LIBRARY_VERSION} build=langgraph-parenting-v3 packageJson=${pkgPath}`,
-      );
-    }
 
     // Graceful shutdown logic
     const handleSignal = async (signal: string) => {
@@ -287,6 +270,7 @@ export class Netra {
 
     // Wait for all async instrumentations to be ready
     await instrumentationsReady;
+    Logger.info("Netra successfully initialized.");
   }
 
   static async shutdown(): Promise<void> {

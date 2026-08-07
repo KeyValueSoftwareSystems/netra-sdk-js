@@ -7,6 +7,10 @@ import {
 } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
+import {
   isPromise,
   modelAsDict,
   shouldSuppressInstrumentation,
@@ -99,12 +103,15 @@ function googleGenerativeAIWrapper(
                     const endTime = Date.now();
                     const responseDict = modelAsDict(value);
                     setResponseAttributes(span, responseDict);
-                    const duration = (endTime - startTime) / 1000;
-                    span.setAttribute("llm.response.duration", duration);
+                    span.setAttribute(
+                      "llm.response.duration",
+                      (endTime - startTime) / 1000,
+                    );
                     if (requestType !== "embedding") {
-                      span.setAttribute(
-                        "gen_ai.performance.time_to_first_token",
-                        duration,
+                      recordNonStreamingTimingAttributes(
+                        span,
+                        startTime,
+                        endTime,
                       );
                     }
                   } catch (e) {
@@ -133,6 +140,9 @@ function googleGenerativeAIWrapper(
                   "llm.response.duration",
                   (endTime - startTime) / 1000,
                 );
+                if (requestType !== "embedding") {
+                  recordNonStreamingTimingAttributes(span, startTime, endTime);
+                }
               } catch (e) {
                 Logger.error(`${LOG_PREFIX}:`, e);
               }
@@ -196,6 +206,8 @@ function googleGenerativeAIStreamWrapper(
               return response;
             }
 
+            const tokenTracker = new FirstTokenTracker(span, startTime);
+
             return (async () => {
               try {
                 const streamResult: any = await response;
@@ -210,11 +222,14 @@ function googleGenerativeAIStreamWrapper(
                     const endTime = Date.now();
                     const responseDict = modelAsDict(streamResult);
                     setResponseAttributes(span, responseDict);
-                    const duration = (endTime - startTime) / 1000;
-                    span.setAttribute("llm.response.duration", duration);
                     span.setAttribute(
-                      "gen_ai.performance.time_to_first_token",
-                      duration,
+                      "llm.response.duration",
+                      (endTime - startTime) / 1000,
+                    );
+                    recordNonStreamingTimingAttributes(
+                      span,
+                      startTime,
+                      endTime,
                     );
                   } catch (e) {
                     Logger.error(`${LOG_PREFIX}:`, e);
@@ -223,8 +238,6 @@ function googleGenerativeAIStreamWrapper(
                   span.end();
                   return streamResult;
                 }
-
-                let firstTokenRecorded = false;
 
                 const wrappedStream: AsyncIterable<any> = {
                   [Symbol.asyncIterator]() {
@@ -256,10 +269,9 @@ function googleGenerativeAIStreamWrapper(
                                 setResponseAttributes(span, responseDict);
                               }
 
-                              const duration = (endTime - startTime) / 1000;
                               span.setAttribute(
                                 "llm.response.duration",
-                                duration,
+                                (endTime - startTime) / 1000,
                               );
                             } catch (e) {
                               Logger.error(`${LOG_PREFIX}:`, e);
@@ -276,14 +288,8 @@ function googleGenerativeAIStreamWrapper(
                               typeof chunk?.text === "function"
                                 ? chunk.text()
                                 : chunk?.text;
-                            if (typeof t === "string") {
-                              if (t && !firstTokenRecorded) {
-                                span.setAttribute(
-                                  "gen_ai.performance.time_to_first_token",
-                                  (Date.now() - startTime) / 1000,
-                                );
-                                firstTokenRecorded = true;
-                              }
+                            if (typeof t === "string" && t) {
+                              tokenTracker.markFirstToken();
                             }
                           } catch {
                             // ignore chunk parsing issues
@@ -305,8 +311,10 @@ function googleGenerativeAIStreamWrapper(
                       },
                       async return(value?: any) {
                         const endTime = Date.now();
-                        const duration = (endTime - startTime) / 1000;
-                        span.setAttribute("llm.response.duration", duration);
+                        span.setAttribute(
+                          "llm.response.duration",
+                          (endTime - startTime) / 1000,
+                        );
                         span.setStatus({ code: SpanStatusCode.OK });
                         span.end();
                         return iterator.return?.(value) ?? { value: undefined, done: true as const };

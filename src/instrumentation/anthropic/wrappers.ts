@@ -10,6 +10,10 @@ import {
 import { Logger } from "../../logger";
 import { wrapResponse } from "../../utils/response-handler";
 import { safeStringify } from "../../utils/serialization";
+import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
 import { SpanAttributes } from "../span-attributes";
 import {
   defineHidden,
@@ -38,6 +42,8 @@ const WRAPPER_OWN_PROPS = new Set([
   "spanFinalized",
   "completionPending",
   "listenerMap",
+  "tokenTracker",
+  "ttftListener",
 ]);
 
 const EVENT_EMITTER_METHODS = new Set([
@@ -152,6 +158,8 @@ class MessageStreamWrapper {
   private spanFinalized = false;
   private completionPending = false;
   private listenerMap = new WeakMap<Function, Map<string, Function[]>>();
+  private tokenTracker!: FirstTokenTracker;
+  private ttftListener!: (data: any) => void;
 
   constructor(
     span: Span,
@@ -165,6 +173,7 @@ class MessageStreamWrapper {
     defineHidden(this, "messageStream", messageStream);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
     defineHidden(
       this,
       "spanContext",
@@ -238,7 +247,13 @@ class MessageStreamWrapper {
           if (prop === "removeAllListeners") {
             return function (event?: string) {
               target.listenerMap = new WeakMap();
-              return method.call(target.messageStream, event);
+              const result = method.call(target.messageStream, event);
+              if (!event) {
+                target.attachSafetyNetListeners();
+              } else if (event === "text") {
+                target.messageStream.on("text", target.ttftListener);
+              }
+              return result;
             };
           }
           return method.bind(target.messageStream);
@@ -254,12 +269,20 @@ class MessageStreamWrapper {
               const result = await method.call(target.messageStream, ...args);
 
               if (prop === "finalMessage" || prop === "done") {
+                if (result) {
+                  const hasText = Array.isArray(result.content) &&
+                    result.content.some((b: any) => b.type === "text" && b.text);
+                  if (hasText) {
+                    target.tokenTracker.markFirstToken();
+                  }
+                }
                 target.finalizeSpanFromMessage(result);
               } else if (prop === "finalText") {
                 if (typeof result === "string" && result.length > 0) {
                   target.completeResponse.content = [
                     { type: "text", text: result },
                   ];
+                  target.tokenTracker.markFirstToken();
                 } else {
                   target.flushCurrentText();
                 }
@@ -282,27 +305,35 @@ class MessageStreamWrapper {
     });
   }
 
+  private attachSafetyNetListeners(): void {
+    this.ttftListener = (data: any) => {
+      if (data) this.tokenTracker.markFirstToken();
+    };
+    this.messageStream.on("text", this.ttftListener);
+
+    this.messageStream.on("end", () => {
+      if (!this.completionPending) {
+        this.finalizeSpanOnce(SpanStatusCode.OK);
+      }
+    });
+    this.messageStream.on("error", (err: any) => {
+      if (err && !this.spanFinalized) {
+        this.span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        this.span.recordException(
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      }
+      this.finalizeSpanOnce(SpanStatusCode.ERROR);
+    });
+  }
+
   private registerSafetyNetListeners(): void {
     try {
       if (typeof this.messageStream?.on !== "function") return;
-
-      this.messageStream.on("end", () => {
-        if (!this.completionPending) {
-          this.finalizeSpanOnce(SpanStatusCode.OK);
-        }
-      });
-      this.messageStream.on("error", (err: any) => {
-        if (err && !this.spanFinalized) {
-          this.span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: err instanceof Error ? err.message : String(err),
-          });
-          this.span.recordException(
-            err instanceof Error ? err : new Error(String(err)),
-          );
-        }
-        this.finalizeSpanOnce(SpanStatusCode.ERROR);
-      });
+      this.attachSafetyNetListeners();
     } catch (e) {
       Logger.error(
         "netra.instrumentation.anthropic: safety net listener registration failed",
@@ -319,7 +350,12 @@ class MessageStreamWrapper {
     let errorOccurred = false;
     try {
       for await (const chunk of this.messageStream) {
-        processStreamChunk(this.completeResponse, chunk, this.span);
+        processStreamChunk(
+          this.completeResponse,
+          chunk,
+          this.span,
+          this.tokenTracker,
+        );
         yield chunk;
       }
     } catch (err) {
@@ -350,6 +386,7 @@ class MessageStreamWrapper {
           this.completeResponse.currentText = "";
         }
         this.completeResponse.currentText += data;
+        if (data) this.tokenTracker.markFirstToken();
         break;
 
       case "contentBlock":
@@ -444,13 +481,19 @@ function anthropicWrapper(
               model: "",
               usage: {},
             };
+            const tokenTracker = new FirstTokenTracker(span, startTime);
 
             return wrapResponse(
               response,
               {
                 withContext: (fn) => context.with(spanContext, fn),
                 onChunk: (chunk) =>
-                  processStreamChunk(completeResponse, chunk, span),
+                  processStreamChunk(
+                    completeResponse,
+                    chunk,
+                    span,
+                    tokenTracker,
+                  ),
                 onError: (error) => {
                   Logger.error("netra.instrumentation.anthropic:", error);
                   span.setStatus({
@@ -468,6 +511,9 @@ function anthropicWrapper(
                     "llm.response.duration",
                     (endTime - startTime) / 1000,
                   );
+                  if (requestType !== "batches") {
+                    recordNonStreamingTimingAttributes(span, startTime, endTime);
+                  }
                 },
                 finalize: (status) => {
                   const hasStreamData =

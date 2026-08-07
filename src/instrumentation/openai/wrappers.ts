@@ -8,6 +8,10 @@ import {
   trace,
 } from "@opentelemetry/api";
 import {
+  FirstTokenTracker,
+  recordNonStreamingTimingAttributes,
+} from "../../utils/span-timing";
+import {
   defineHidden,
   isPromise,
   modelAsDict,
@@ -15,6 +19,7 @@ import {
 } from "../utils";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import { OpenAIRequestType, StreamResponse, WrapperFn } from "./types";
+import { Logger } from "../../logger";
 
 const SPAN_NAMES: Record<OpenAIRequestType, string> = {
   chat: "openai.chat",
@@ -45,9 +50,14 @@ function finalizeSpanSuccess(
   span: Span,
   response: Record<string, unknown>,
   startTime: number,
+  requestType: OpenAIRequestType,
 ): void {
+  const endTime = Date.now();
   setResponseAttributes(span, response);
-  span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
+  span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
+  if (requestType !== "embedding") {
+    recordNonStreamingTimingAttributes(span, startTime, endTime);
+  }
   span.setStatus({ code: SpanStatusCode.OK });
   span.end();
 }
@@ -58,6 +68,7 @@ abstract class BaseStreamHandler {
   protected span!: Span;
   protected startTime!: number;
   protected requestKwargs!: Record<string, unknown>;
+  protected tokenTracker!: FirstTokenTracker;
 
   constructor(
     span: Span,
@@ -67,6 +78,7 @@ abstract class BaseStreamHandler {
     defineHidden(this, "span", span);
     defineHidden(this, "startTime", startTime);
     defineHidden(this, "requestKwargs", requestKwargs);
+    defineHidden(this, "tokenTracker", new FirstTokenTracker(span, startTime));
   }
 
   toJSON(): StreamResponse {
@@ -93,6 +105,7 @@ abstract class BaseStreamHandler {
           }
           const msg = entry.message as Record<string, unknown>;
           msg.content = String(msg.content ?? "") + String(delta.content);
+          this.tokenTracker.markFirstToken();
         }
         if (choice.finish_reason) {
           this.completeResponse.choices[index].finish_reason =
@@ -110,6 +123,7 @@ abstract class BaseStreamHandler {
       | Record<string, unknown>
       | undefined;
     if (responseChunk?.status === "completed") {
+      let hasText = false;
       const outputs = (responseChunk.output ?? []) as Array<
         Record<string, unknown>
       >;
@@ -119,6 +133,7 @@ abstract class BaseStreamHandler {
           | undefined;
         if (Array.isArray(content)) {
           for (const item of content) {
+            if (item.text) hasText = true;
             this.completeResponse.choices.push({
               message: { role: "assistant", content: String(item.text ?? "") },
             });
@@ -126,6 +141,7 @@ abstract class BaseStreamHandler {
         }
       }
       this.completeResponse.usage = responseChunk.usage ?? {};
+      if (hasText) this.tokenTracker.markFirstToken();
     }
 
     this.span.addEvent("llm.content.completion.chunk");
@@ -141,20 +157,20 @@ abstract class BaseStreamHandler {
   }
 
   protected finalizeSpan(code: SpanStatusCode): void {
-    if (code === SpanStatusCode.OK) {
-      finalizeSpanSuccess(
+    try {
+      setResponseAttributes(
         this.span,
         this.completeResponse as Record<string, unknown>,
-        this.startTime,
       );
-    } else {
-      this.span.setAttribute(
-        "llm.response.duration",
-        (Date.now() - this.startTime) / 1000,
-      );
-      this.span.setStatus({ code });
-      this.span.end();
+    } catch {
+      Logger.debug('Failed to set response attributes');
     }
+    this.span.setAttribute(
+      "llm.response.duration",
+      (Date.now() - this.startTime) / 1000,
+    );
+    this.span.setStatus({ code });
+    this.span.end();
   }
 }
 
@@ -317,7 +333,7 @@ function executeNonStreaming(
     if (isPromise(result)) {
       return result.then(
         (value) => {
-          finalizeSpanSuccess(span, modelAsDict(value), startTime);
+          finalizeSpanSuccess(span, modelAsDict(value), startTime, requestType);
           return value;
         },
         (error) => {
@@ -327,7 +343,7 @@ function executeNonStreaming(
       );
     }
 
-    finalizeSpanSuccess(span, modelAsDict(result), startTime);
+    finalizeSpanSuccess(span, modelAsDict(result), startTime, requestType);
     return result;
   } catch (error) {
     handleSpanError(span, error);
