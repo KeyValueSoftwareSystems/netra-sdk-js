@@ -32,48 +32,33 @@ function findModuleInCache(moduleName: string): any {
     }
     Logger.debug(
       `Module ${moduleName} not found in require.cache. Cache keys containing 'langgraph':`,
-      Object.keys(cache).filter(k => k.includes('langgraph')),
+      Object.keys(cache).filter((k) => k.includes('langgraph')),
     );
   }
   return null;
 }
 
 async function resolveLanggraph(): Promise<any> {
+  const moduleName = "@langchain/langgraph";
   if (LanggraphClass) return LanggraphClass;
   try {
     // First, try to find the module in require.cache (already loaded by the app)
     // This ensures we patch the same module instance the app is using
-    let langgraphModule = findModuleInCache('@langchain/langgraph');
+    let langgraphModule = findModuleInCache(moduleName);
 
-    if (langgraphModule) {
-      Logger.debug("Found @langchain/langgraph in require.cache (using app's module instance)");
-    } else {
+    if (!langgraphModule) {
       // Fallback to dynamic import if not in cache
-      langgraphModule = await import("@langchain/langgraph");
-      Logger.debug("Loaded @langchain/langgraph via dynamic import");
+      langgraphModule = await import(moduleName);
     }
 
-    Logger.debug("LangGraph Module Exports:", Object.keys(langgraphModule));
-    LanggraphClass = langgraphModule.CompiledStateGraph ?? langgraphModule.StateGraph;
-    Logger.debug("Resolved LanggraphClass:", !!LanggraphClass);
-    Logger.debug("LanggraphClass name:", LanggraphClass?.name);
-    Logger.debug(
-      "LanggraphClass.prototype keys:",
-      LanggraphClass?.prototype ? Object.getOwnPropertyNames(LanggraphClass.prototype) : "no prototype",
-    );
-    Logger.debug("Has invoke on prototype:", !!LanggraphClass?.prototype?.invoke);
-    Logger.debug("Has stream on prototype:", !!LanggraphClass?.prototype?.stream);
+    LanggraphClass =
+      langgraphModule.CompiledStateGraph ?? langgraphModule.StateGraph;
 
     // Check prototype chain to find where invoke is defined
-    Logger.debug("Checking prototype chain for invoke location:");
     let proto = LanggraphClass?.prototype;
     while (proto) {
-      const hasOwn = Object.getOwnPropertyNames(proto).includes('invoke');
-      Logger.debug(`  ${proto.constructor?.name}: hasOwnProperty('invoke')=${hasOwn}`);
-      if (hasOwn) {
-        Logger.debug(`  -> invoke is defined on: ${proto.constructor?.name}`);
-        break;
-      }
+      const hasOwn = Object.getOwnPropertyNames(proto).includes("invoke");
+      if (hasOwn) break;
       proto = Object.getPrototypeOf(proto);
     }
 
@@ -160,8 +145,6 @@ export class NetraLanggraphInstrumentor {
         return;
       }
 
-      Logger.debug(`Found invoke on prototype: ${targetProto.constructor?.name}`);
-
       const originalInvoke = targetProto.invoke;
       originalMethods.set("langgraph.graph.invoke", originalInvoke);
       // Store the target prototype for uninstrumentation
@@ -188,9 +171,6 @@ export class NetraLanggraphInstrumentor {
       // Add marker to identify patched method
       (patchedInvoke as any).__netra_patched = true;
       targetProto.invoke = patchedInvoke;
-
-      Logger.debug(`Successfully instrumented LangGraph invoke method on ${targetProto.constructor?.name}`);
-      Logger.debug(`Patched Pregel class identity:`, targetProto.constructor);
     } catch (error) {
       Logger.error(`Failed to instrument langgraph invoke: ${error}`);
     }
@@ -210,8 +190,6 @@ export class NetraLanggraphInstrumentor {
         Logger.error("Failed to find langgraph stream function to instrument");
         return;
       }
-
-      Logger.debug(`Found stream on prototype: ${targetProto.constructor?.name}`);
 
       const originalStream = targetProto.stream;
       originalMethods.set("langgraph.graph.stream", originalStream);
@@ -236,8 +214,6 @@ export class NetraLanggraphInstrumentor {
           ...rest,
         );
       };
-
-      Logger.debug(`Successfully instrumented LangGraph stream method on ${targetProto.constructor?.name}`);
     } catch (error) {
       Logger.error(`Failed to instrument langgraph stream: ${error}`);
     }

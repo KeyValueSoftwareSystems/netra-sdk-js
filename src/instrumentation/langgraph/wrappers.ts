@@ -377,14 +377,19 @@ class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
     config?: RunnableConfig,
     ...rest: any[]
   ) {
-    this.iterable = await originalFunc.call(instance, input, config, ...rest);
+    const spanContext = trace.setSpan(this.rootContext, this.rootSpan);
+    this.iterable = await context.with(spanContext, () =>
+      originalFunc.call(instance, input, config, ...rest),
+    );
     return this;
   }
 
   async *[Symbol.asyncIterator]() {
     const spanContext = trace.setSpan(this.rootContext, this.rootSpan);
     try {
-      const iterator = await this.iterable[Symbol.asyncIterator]();
+      const iterator = await context.with(spanContext, () =>
+        this.iterable[Symbol.asyncIterator](),
+      );
       while (true) {
         let result: any;
         await context.with(spanContext, async () => {
@@ -527,12 +532,14 @@ export class LanggraphWrapper {
       const ctxWithSpan = trace.setSpan(context.active(), span);
       const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
       const streamingWrapper = new LanggraphStreamingWrapper(span, ctxWithFlag);
-      return streamingWrapper.startStream(
-        originalFunc,
-        instance,
-        input,
-        updatedConfig,
-        ...rest,
+      return await context.with(ctxWithFlag, () =>
+        streamingWrapper.startStream(
+          originalFunc,
+          instance,
+          input,
+          updatedConfig,
+          ...rest,
+        ),
       );
     } catch (error) {
       span.recordException(error as Error);

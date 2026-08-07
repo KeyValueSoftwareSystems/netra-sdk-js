@@ -125,7 +125,7 @@ function patchTraceloopLangchainCallbackHandler(): void {
 
   try {
     const mod = require("@traceloop/instrumentation-langchain");
-    Logger.debug(`Loaded @traceloop/instrumentation-langchain via require from ${require.resolve("@traceloop/instrumentation-langchain")}`);
+    Logger.debug("Loaded @traceloop/instrumentation-langchain");
     applyPatch(mod, "require");
     return;
   } catch (e) {
@@ -395,8 +395,6 @@ export function initInstrumentations(
   Logger.debug(`  App Name: ${config.appName}`);
   Logger.debug(`  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`);
   Logger.debug(`  API Key: ${config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"}`);
-  Logger.debug(`  Trace Content: ${config.traceContent}`);
-  Logger.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
 
   // Initialize Traceloop SDK
   const traceloopOptions: InitializeOptions = {
