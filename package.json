@@ -88,9 +88,6 @@
     "@google/generative-ai": {
       "optional": true
     },
-    "@langchain/langchain": {
-      "optional": true
-    },
     "@langchain/langgraph": {
       "optional": true
     },

@@ -45,6 +45,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
   private nodeAttributes: Map<string, Record<string, any>> = new Map();
   private runStack: string[] = [];
   private inferredParents: Map<string, string> = new Map();
+  private streamedRuns: Set<string> = new Set();
 
   constructor(
     private tracer: Tracer,
@@ -208,6 +209,14 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     });
   }
 
+  async handleLLMNewToken(
+    _token: string,
+    _idx: { prompt: number; completion: number },
+    runId: string,
+  ) {
+    this.streamedRuns.add(runId);
+  }
+
   async handleLLMEnd(
     output: LLMResult,
     runId: string,
@@ -235,12 +244,13 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       attributes.extraParams,
     );
     setBaseResponseAttributes(span, response);
-    if (attributes.startTimeMs) {
+    if (attributes.startTimeMs && !this.streamedRuns.has(runId)) {
       recordNonStreamingTimingAttributes(span, attributes.startTimeMs, Date.now());
     }
     span.end();
 
     this.nodeAttributes.delete(runId);
+    this.streamedRuns.delete(runId);
   }
 
   async handleLLMError(
@@ -268,6 +278,7 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
     span.end();
 
     this.nodeAttributes.delete(runId);
+    this.streamedRuns.delete(runId);
   }
 
   async handleToolStart(
