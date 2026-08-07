@@ -410,7 +410,7 @@ class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
         if (result.done) break;
         const value = result?.value ?? {};
         this.output = { ...this.output, ...value };
-        yield result;
+        yield value;
       }
       this.rootSpan.setAttribute(
         NetraLanggraphAttributes.entityOutput,
