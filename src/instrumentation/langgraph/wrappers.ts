@@ -19,50 +19,12 @@ import {
   setResponseAttributes as setBaseResponseAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
+import { recordNonStreamingTimingAttributes } from "../../utils/span-timing";
 
 // Context key to track if we're inside a LangGraph instrumented call
 // This prevents double-instrumentation when invoke internally calls stream
 const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
 
-function getContextManager(): any {
-  try {
-    if ((context as any)._getContextManager) {
-      return (context as any)._getContextManager();
-    }
-
-    const globalSymbols = Object.getOwnPropertySymbols(global);
-    const otelSymbol = globalSymbols.find(s =>
-      s.toString().includes("opentelemetry.js.api"),
-    );
-    if (otelSymbol) {
-      const globalState = (global as any)[otelSymbol];
-      if (globalState?.contextManager) {
-        return globalState.contextManager;
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function enterWithContext(newContext: Context): void {
-  const contextManager = getContextManager();
-  if (!contextManager) return;
-
-  if (typeof contextManager.enterWith === "function") {
-    contextManager.enterWith(newContext);
-    return;
-  }
-
-  if (
-    contextManager._asyncLocalStorage &&
-    typeof contextManager._asyncLocalStorage.enterWith === "function"
-  ) {
-    contextManager._asyncLocalStorage.enterWith(newContext);
-  }
-}
 import {
   NetraLanggraphAttributes,
   setChainInputAttributes,
@@ -241,7 +203,8 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       metadata,
       prompts,
       extraParams,
-      parentRunId: effectiveParentRunId, // Store parent ID to link back
+      parentRunId: effectiveParentRunId,
+      startTimeMs: Date.now(),
     });
   }
 
@@ -272,6 +235,9 @@ class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
       attributes.extraParams,
     );
     setBaseResponseAttributes(span, response);
+    if (attributes.startTimeMs) {
+      recordNonStreamingTimingAttributes(span, attributes.startTimeMs, Date.now());
+    }
     span.end();
 
     this.nodeAttributes.delete(runId);
@@ -502,7 +468,6 @@ export class LanggraphWrapper {
     // Set the active flag to prevent nested instrumentation (e.g., when invoke calls stream internally)
     const ctxWithSpan = trace.setSpan(context.active(), span);
     const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
-    enterWithContext(ctxWithFlag);
 
     return context.with(ctxWithFlag, async () => {
       {
@@ -561,7 +526,6 @@ export class LanggraphWrapper {
     try {
       const ctxWithSpan = trace.setSpan(context.active(), span);
       const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
-      enterWithContext(ctxWithFlag);
       const streamingWrapper = new LanggraphStreamingWrapper(span, ctxWithFlag);
       return streamingWrapper.startStream(
         originalFunc,

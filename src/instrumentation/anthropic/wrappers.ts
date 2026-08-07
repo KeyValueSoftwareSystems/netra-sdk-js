@@ -43,6 +43,7 @@ const WRAPPER_OWN_PROPS = new Set([
   "completionPending",
   "listenerMap",
   "tokenTracker",
+  "ttftListener",
 ]);
 
 const EVENT_EMITTER_METHODS = new Set([
@@ -158,6 +159,7 @@ class MessageStreamWrapper {
   private completionPending = false;
   private listenerMap = new WeakMap<Function, Map<string, Function[]>>();
   private tokenTracker!: FirstTokenTracker;
+  private ttftListener!: (data: any) => void;
 
   constructor(
     span: Span,
@@ -245,7 +247,11 @@ class MessageStreamWrapper {
           if (prop === "removeAllListeners") {
             return function (event?: string) {
               target.listenerMap = new WeakMap();
-              return method.call(target.messageStream, event);
+              const result = method.call(target.messageStream, event);
+              if (!event || event === "text") {
+                target.messageStream.on("text", target.ttftListener);
+              }
+              return result;
             };
           }
           return method.bind(target.messageStream);
@@ -303,10 +309,12 @@ class MessageStreamWrapper {
 
       // Capture TTFT directly from the raw stream so it is recorded
       // even when the consumer (e.g. tool runner) never registers its
-      // own "text" listener through our proxy.
-      this.messageStream.on("text", (data: any) => {
+      // own "text" listener through our proxy. Stored on the instance
+      // so removeAllListeners can re-attach it.
+      this.ttftListener = (data: any) => {
         if (data) this.tokenTracker.markFirstToken();
-      });
+      };
+      this.messageStream.on("text", this.ttftListener);
 
       this.messageStream.on("end", () => {
         if (!this.completionPending) {
