@@ -6,7 +6,7 @@
 
 import { trace } from "@opentelemetry/api";
 import { createRequire } from "module";
-import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
+import { Prompts, Dashboard, Evaluation, Usage, Models, Redteam } from "./api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Logger } from "./logger";
@@ -72,6 +72,14 @@ export {
   // Models API
   Models,
   MODEL_PRICING_CACHE_TTL_SECONDS,
+  // Red-team API
+  Redteam,
+  RedteamAuthError,
+  RedteamConfigError,
+  RedteamGenerationError,
+  RedteamGenerationTimeoutError,
+  RedteamHttpClient,
+  RedteamRunError,
 } from "./api";
 
 export type {
@@ -118,6 +126,22 @@ export type {
   GetModelPricingParams,
   ModelPrice,
   ModelPricing,
+  // Red-team API
+  RedteamAgentHandler,
+  RedteamAgentResponse,
+  RedteamConversationTurn,
+  RedteamCreateRunResponse,
+  RedteamResult,
+  RedteamRiskScore,
+  RedteamRunOptions,
+  RedteamRunProgress,
+  RedteamRunPromptItem,
+  RedteamRunPromptsResponse,
+  RedteamRunResultItem,
+  RedteamRunResultsPage,
+  RedteamRunStatus,
+  RedteamTaskResult,
+  RedteamTurnType,
 } from "./api";
 
 // Export simulation types and classes
@@ -159,6 +183,7 @@ export class Netra {
   static simulation: Simulation;
   static prompts: Prompts;
   static models: Models;
+  static redteam: Redteam;
 
   static getConfig(): Config {
     if (!this._config) {
@@ -232,6 +257,12 @@ export class Netra {
       this.models = new Models(cfg);
     } catch (e) {
       Logger.warn("Netra: failed to initialize models client:", e);
+    }
+
+    try {
+      this.redteam = new Redteam(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize redteam client:", e);
     }
 
     this._initialized = true;

@@ -79,3 +79,32 @@ export type {
   ModelPrice,
   ModelPricing,
 } from "./models";
+
+// Red-team API
+export {
+  Redteam,
+  RedteamAuthError,
+  RedteamConfigError,
+  RedteamGenerationError,
+  RedteamGenerationTimeoutError,
+  RedteamHttpClient,
+  RedteamRunError,
+  executeHandler as executeRedteamHandler,
+} from "./redteam";
+export type {
+  ConversationTurn as RedteamConversationTurn,
+  CreateRunResponse as RedteamCreateRunResponse,
+  RedteamAgentHandler,
+  RedteamAgentResponse,
+  RedteamResult,
+  RedteamRunOptions,
+  RedteamRunStatus,
+  RedteamTaskResult,
+  RedteamTurnType,
+  RiskScore as RedteamRiskScore,
+  RunProgress as RedteamRunProgress,
+  RunPromptItem as RedteamRunPromptItem,
+  RunPromptsResponse as RedteamRunPromptsResponse,
+  RunResultItem as RedteamRunResultItem,
+  RunResultsPage as RedteamRunResultsPage,
+} from "./redteam";
