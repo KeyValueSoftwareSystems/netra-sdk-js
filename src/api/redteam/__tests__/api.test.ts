@@ -21,6 +21,7 @@ vi.mock("../client", () => {
 
 import { Redteam } from "../api";
 import { RedteamRunOptions } from "../models";
+import { _hookCountForTests } from "../../../utils/shutdown-hooks";
 
 const fakeConfig = {} as any;
 
@@ -30,7 +31,7 @@ function resetMocks() {
   }
   mockClient.isInitialized.mockReturnValue(true);
   mockClient.cancel.mockResolvedValue({ status: "cancelled" });
-  mockClient.getProgress.mockResolvedValue({ completedSessions: 1 });
+  mockClient.getProgress.mockResolvedValue({ completedSessions: 1, runNumber: 3 });
   mockClient.getRiskScore.mockResolvedValue({ latestSafetyScore: 95 });
 }
 
@@ -86,9 +87,36 @@ describe("Redteam", () => {
     expect(result!.success).toBe(true);
     expect(result!.status).toBe("completed");
     expect(result!.results).toHaveLength(1);
-    expect(result!.progress).toEqual({ completedSessions: 1 });
+    expect(result!.progress).toEqual({ completedSessions: 1, runNumber: 3 });
     expect(result!.riskScore).toEqual({ latestSafetyScore: 95 });
     expect(mockClient.getPrompts).toHaveBeenCalledTimes(2);
+    expect(result!.runNumber).toBe(3);
+  });
+
+  it("runNumber is undefined when the progress fetch fails, instead of throwing", async () => {
+    mockClient.createRun.mockResolvedValueOnce({ runId: "run-2", configId: "cfg-2", status: "running" });
+    mockClient.getPrompts
+      .mockResolvedValueOnce({
+        runId: "run-2",
+        status: "running",
+        turnType: "single",
+        multiTurnCount: 5,
+        prompts: [{ id: "p1", prompt: "attack", evaluatorId: "ev-1", evaluatorSlug: "harmful-hate" }],
+      })
+      .mockResolvedValueOnce({ runId: "run-2", status: "completed", turnType: "single", multiTurnCount: 5, prompts: [] });
+    mockClient.submitTurn.mockResolvedValueOnce({ done: true });
+    mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
+    mockClient.getProgress.mockRejectedValueOnce(new Error("progress endpoint down"));
+
+    const handler = vi.fn(async () => "ok");
+    const redteam = new Redteam(fakeConfig);
+    const options: RedteamRunOptions = { configId: "cfg-2", handler, maxConcurrency: 1 };
+
+    const result = await redteam.runRedteam(options);
+
+    expect(result!.progress).toBeUndefined();
+    expect(result!.runNumber).toBeUndefined();
+    expect(result!.status).toBe("completed");
   });
 
   it("still generating after create: retries createRun with {configId} on an interval until running", async () => {
@@ -373,10 +401,9 @@ describe("Redteam", () => {
     });
     mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
 
-    const sigintBefore = process.listenerCount("SIGINT");
-    const sigtermBefore = process.listenerCount("SIGTERM");
     const exceptionBefore = process.listenerCount("uncaughtException");
     const rejectionBefore = process.listenerCount("unhandledRejection");
+    const hooksBefore = _hookCountForTests();
 
     const handler = vi.fn(async () => "ok");
     const redteam = new Redteam(fakeConfig);
@@ -389,18 +416,17 @@ describe("Redteam", () => {
     // unrelated error elsewhere in the host process must not be able to cancel this run.
     expect(process.listenerCount("uncaughtException")).toBe(exceptionBefore);
     expect(process.listenerCount("unhandledRejection")).toBe(rejectionBefore);
-    // SIGINT/SIGTERM listeners ARE expected while the run is in flight.
-    expect(process.listenerCount("SIGINT")).toBe(sigintBefore + 1);
-    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore + 1);
+    // A shutdown hook IS registered while the run is in flight — checked via
+    // the hook count, not process.listenerCount() (see utils/shutdown-hooks.ts).
+    expect(_hookCountForTests()).toBe(hooksBefore + 1);
 
     mockClient.submitTurn.mockResolvedValue({ done: true });
     const result = await runPromise;
 
     expect(mockClient.cancel).not.toHaveBeenCalled();
     expect(result!.status).toBe("completed");
-    // Listeners must be removed once the run settles normally (no leak).
-    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
-    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
+    // The hook must be unregistered once the run settles normally (no leak).
+    expect(_hookCountForTests()).toBe(hooksBefore);
   });
 
   it("getResults pages until a short page, concatenating all items", async () => {

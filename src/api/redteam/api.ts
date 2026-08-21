@@ -6,6 +6,8 @@
 import pLimit from "p-limit";
 import { Config } from "../../config";
 import { Logger } from "../../logger";
+import { RootSpanProcessor } from "../../processors/root-span-processor";
+import { SpanWrapper } from "../../span-wrapper";
 import { RedteamHttpClient } from "./client";
 import {
   CreateRunResponse,
@@ -20,9 +22,17 @@ import {
 } from "./models";
 import { executeHandler, RedteamAgentHandler } from "./task";
 import { buildCreateRunBody, getGenerationPollIntervalMs, getGenerationTimeoutMs, validateRedteamInputs } from "./utils";
+import { registerShutdownHook } from "../../utils/shutdown-hooks";
 
 const LOG_PREFIX = "netra.redteam";
 const MAX_AGENT_RESPONSE_CHARS = 5000;
+const TURN_SPAN_NAME = "Netra.Redteam.Turn";
+// Same attribute/value the backend already sets on its own redteam-originated
+// spans and already filters on for Insights/auto-eval — stamping it here too
+// so traces produced by the developer's own instrumented handler get excluded
+// the same way.
+const TRACE_ORIGIN_ATTRIBUTE = "netra.trace.origin";
+const TRACE_ORIGIN_REDTEAM = "redteam";
 const RESULTS_PAGE_LIMIT = 200;
 
 /** Shared stop flag every in-flight session-drive checks between turns, so an interrupt or a fatal sibling error halts the whole run promptly. */
@@ -83,54 +93,25 @@ export class Redteam {
 
     const stopSignal: StopSignal = { stopped: false };
     let interrupted = false;
-    const proc = typeof process !== "undefined" ? process : undefined;
-
-    const removeListeners = () => {
-      if (proc && typeof proc.removeListener === "function") {
-        proc.removeListener("SIGINT", handleSigint);
-        proc.removeListener("SIGTERM", handleSigterm);
-      }
-    };
 
     /**
-     * Single-fire interrupt finalizer: cancel the run server-side, then
-     * re-deliver the signal so the process's default
-     * disposition still applies once our listener is gone (matching
-     * `Simulation.finalizeFailure`) — Ctrl-C still terminates the process.
-     *
-     * Deliberately scoped to SIGINT/SIGTERM only — NOT `uncaughtException`/
-     * `unhandledRejection`. Those are process-wide events with no way to
-     * tell whether the error came from this run's own session-drive loop or
-     * from unrelated code elsewhere in the host process; a global listener
-     * here would let any unrelated error silently cancel this run server-side
-     * (and, since every concurrent `runRedteam()` call registers its own
-     * listener, cancel every other in-flight run too). This run's own fatal
-     * errors are already surfaced through the normal awaited chain in
-     * `_driveSession`/`_driveAllSessions` — no gap this would need to fill.
+     * Cancels the run server-side on shutdown — see ../../utils/shutdown-hooks.ts.
+     * Deliberately not hooked into uncaughtException/unhandledRejection: those
+     * are process-wide, so reacting to them here could cancel unrelated
+     * concurrent runs too. This run's own errors already surface through
+     * _driveSession/_driveAllSessions.
      */
-    const finalizeCancel = (signal: NodeJS.Signals) => {
+    const unregisterShutdownHook = registerShutdownHook(async () => {
       if (interrupted) return;
       interrupted = true;
       stopSignal.stopped = true;
-      removeListeners();
-      void this._client
-        .cancel(runId)
-        .catch((e) => {
-          Logger.error(`${LOG_PREFIX}: interrupt cancel failed:`, e instanceof Error ? e.message : e);
-        })
-        .finally(() => {
-          if (proc && typeof proc.kill === "function" && proc.pid !== undefined) {
-            proc.kill(proc.pid, signal);
-          }
-        });
-    };
-    const handleSigint = () => finalizeCancel("SIGINT");
-    const handleSigterm = () => finalizeCancel("SIGTERM");
-
-    if (proc && typeof proc.once === "function") {
-      proc.once("SIGINT", handleSigint);
-      proc.once("SIGTERM", handleSigterm);
-    }
+      try {
+        await this._client.cancel(runId);
+        Logger.debug(`${LOG_PREFIX}: run ${runId} cancelled server-side`);
+      } catch (e) {
+        Logger.error(`${LOG_PREFIX}: interrupt cancel failed:`, e instanceof Error ? e.message : e);
+      }
+    });
 
     const promptsResp = await this._client.getPrompts(runId);
     if (promptsResp.prompts.length === 0) {
@@ -140,7 +121,7 @@ export class Redteam {
     try {
       await this._driveAllSessions(runId, options.handler, promptsResp.prompts, maxConcurrency, stopSignal);
     } finally {
-      removeListeners();
+      unregisterShutdownHook();
     }
 
     const results = await this.getResults(runId);
@@ -167,11 +148,14 @@ export class Redteam {
     // — this is just a fresh read, not a wait).
     const status: RedteamRunStatus = interrupted ? "cancelled" : await this._finalStatus(runId);
 
+    const runNumber = typeof progress?.runNumber === "number" ? progress.runNumber : undefined;
+
     return {
       success: status === "completed",
       status,
       runId,
       configId,
+      runNumber,
       results,
       progress,
       riskScore,
@@ -285,8 +269,17 @@ export class Redteam {
         output?: string;
         error?: string;
       };
+      // Wrap the handler call in its own span (mirroring simulation's per-turn
+      // span) so there's always a root span to tag — the developer's own
+      // instrumentation may not start one on its own (e.g. a plain fetch to
+      // their agent with no outer span active).
+      const turnSpan = new SpanWrapper(TURN_SPAN_NAME, {}, LOG_PREFIX);
+      turnSpan.start();
       try {
-        const { output, sessionId: overrideSessionId } = await executeHandler(handler, promptText, sessionId, turnIndex);
+        const { output, sessionId: overrideSessionId } = await turnSpan.withActive(() => {
+          RootSpanProcessor.setAttributeOnRootSpan(TRACE_ORIGIN_ATTRIBUTE, TRACE_ORIGIN_REDTEAM);
+          return executeHandler(handler, promptText, sessionId, turnIndex);
+        });
         const truncated = this._truncateOutput(output);
         sessionId = overrideSessionId ?? sessionId;
         submitBody = { promptId: prompt.id, sessionId, turnIndex, promptText, output: truncated };
@@ -294,6 +287,8 @@ export class Redteam {
         const message = error instanceof Error ? error.message : String(error);
         Logger.error(`${LOG_PREFIX}: handler failed for session ${sessionId}, turn ${turnIndex}:`, message);
         submitBody = { promptId: prompt.id, sessionId, turnIndex, promptText, error: message };
+      } finally {
+        turnSpan.end();
       }
 
       let result;

@@ -140,6 +140,8 @@ export interface RedteamResult {
   status: RedteamRunStatus;
   runId: string;
   configId: string;
+  /** Matches the dashboard's "Run #N" (oldest = 1). Undefined if the progress fetch failed. */
+  runNumber?: number;
   results: RunResultItem[];
   progress?: RunProgress;
   riskScore?: RiskScore;

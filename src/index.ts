@@ -17,6 +17,7 @@ import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
 import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
 import { wrapResponse } from "./utils/response-handler";
+import { registerShutdownHook, runShutdownHooks } from "./utils/shutdown-hooks";
 
 export {
   Config,
@@ -285,12 +286,6 @@ export class Netra {
     }
 
     // Graceful shutdown logic
-    const handleSignal = async (signal: string) => {
-      Logger.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
-      await this.shutdown();
-      process.exit(0);
-    };
-
     const handleUncaughtException = async (error: Error) => {
       Logger.error("Uncaught exception:", error);
       Logger.error("Shutting down Netra SDK due to crash...");
@@ -309,9 +304,9 @@ export class Netra {
       await this.shutdown();
     });
 
-    // Handle termination signals
-    process.once("SIGINT", () => handleSignal("SIGINT"));
-    process.once("SIGTERM", () => handleSignal("SIGTERM"));
+    // SIGINT/SIGTERM go through the shared shutdown-hook registry, not a
+    // listener here — see ./utils/shutdown-hooks.ts.
+    registerShutdownHook(() => this.shutdown());
 
     // Handle crashes
     process.once("uncaughtException", handleUncaughtException);
@@ -324,6 +319,10 @@ export class Netra {
     if (!this._initialized) {
       return;
     }
+
+    // Runs other registered hooks (e.g. an in-flight redteam run's cancel).
+    // No-op if we're already inside a signal-triggered pass (re-entrancy guard).
+    await runShutdownHooks();
 
     // Unpatch any monkey-patched instrumentations first
     try {
@@ -556,6 +555,9 @@ export class Netra {
   }
 
   static withBlockedSpansLocal = withBlockedSpansLocal;
+
+  /** @internal Not a stable public API — see ./utils/shutdown-hooks.ts. */
+  static registerShutdownHook = registerShutdownHook;
 }
 
 export default Netra;

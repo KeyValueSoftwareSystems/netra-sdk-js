@@ -219,11 +219,14 @@ export class RedteamHttpClient {
 
   /** `POST /redteam/sdk/runs/{runId}/cancel` */
   async cancel(runId: string): Promise<{ status: "cancelled" }> {
+    Logger.debug(`${LOG_PREFIX}: POST ${BASE_PATH}/runs/${runId}/cancel`);
     try {
       const client = this._ensureClient();
       const response: AxiosResponse = await client.post(`${BASE_PATH}/runs/${runId}/cancel`);
+      Logger.debug(`${LOG_PREFIX}: cancel response status=${response.status}`, response.data);
       return unwrapEnvelope(response.data);
     } catch (error) {
+      Logger.debug(`${LOG_PREFIX}: cancel request failed:`, error instanceof Error ? error.message : error);
       throw this._toTypedError(error);
     }
   }
