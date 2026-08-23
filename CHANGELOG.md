@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-08-23
+
+### Added
+
+- **Session Details API**: Added `Netra.dashboard.getSessionDetails(sessionId)`, returning a per-trace breakdown for a session — start/end times, latency, input/output, token counts (prompt, completion, cached, cache-creation, total), the matching cost breakdown, models used, and per-tool call counts. Returns `null` and logs an error when `sessionId` is empty. New exported types: `SessionDetailsResponse`, `SessionDetailsTrace`, `SessionDetailsToolCall`.
+- **Trace Origin Label**: Root spans created by evaluation test runs (`Evaluation`) and multi-turn simulations (`Simulation`) now carry `netra.trace.origin = "evaluation"`, so the backend can distinguish them from normal production traces and exclude them from online evaluation, auto-evaluation, and insights enrichment. Exposed as `Config.TRACE_ORIGIN_KEY` and `Config.TRACE_ORIGIN_EVALUATION`.
+- **OpenAI Cache-Write Tokens**: `setUsageAttributes` now falls back to `prompt_tokens_details.cache_write_tokens` (or `input_tokens_details.cache_write_tokens`) when the Anthropic-style `cache_creation_input_tokens` is absent, so cache-write usage is captured for OpenAI-shaped usage payloads instead of being dropped.
+
+### Fixed
+
+- **`db.statement` Mapped to Span Input**: `SpanIOProcessor` now maps `db.statement` onto the span's `input` attribute for DB instrumentations (TypeORM and other OTel dbapi-style instrumentations), which previously produced spans with empty Input/Output in the UI even when SQL was present. `db.statement` itself is preserved, `input` is written only when it is currently empty and not locked by root/user ownership, and `output` is never populated from DB attributes since query parameters and result rows are user data.
+
+### Removed
+
+- **`enableRootSpan` Configuration** (**breaking**): Removed the `enableRootSpan` init option, the `NETRA_ENABLE_ROOT_SPAN` environment variable, and the `Netra.runWithRootSpan()` helper. OpenTelemetry for JavaScript has no equivalent of Python's persistent `context.attach()` — `context.with()` is callback-scoped — so the Netra root span could never parent the inbound HTTP span, which is created before any handler callback runs. With Express instrumentation this produced split traces (the handler subtree and the Express span exported as separate traces). Use `rootInstruments` to control which instrumentations are allowed to produce root spans.
+
 ## [1.8.0] - 2026-08-03
 
 ### Added
