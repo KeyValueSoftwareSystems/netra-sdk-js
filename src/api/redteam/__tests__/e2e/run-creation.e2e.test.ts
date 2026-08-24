@@ -8,7 +8,7 @@ import { MockRedteamBackend } from "./mock-backend";
 import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
 import { RedteamConfigError, RedteamRunError } from "../../models";
 
-describe("TC-01..TC-04 — Run creation", () => {
+describe("Run creation", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -20,7 +20,7 @@ describe("TC-01..TC-04 — Run creation", () => {
     resetRedteamEnv();
   });
 
-  it("TC-01: trigger an existing config, single-turn, happy path", async () => {
+  it("trigger an existing config, single-turn, happy path", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator({ slug: "harmful-content" });
@@ -100,7 +100,7 @@ describe("TC-01..TC-04 — Run creation", () => {
     expect(seenTurnIndexes).toEqual([...seenTurnIndexes].sort((a, b) => a - b));
   });
 
-  it("TC-02: config still generating — SDK retries createRun transparently, no caller-visible error", async () => {
+  it("config still generating — SDK retries createRun transparently, no caller-visible error", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -132,7 +132,7 @@ describe("TC-01..TC-04 — Run creation", () => {
     }
   });
 
-  it("TC-03: a config belonging to another tenant/project — 404, RedteamConfigError, no turn loop starts", async () => {
+  it("a config belonging to another tenant/project — 404, RedteamConfigError, no turn loop starts", async () => {
     const tenantA = backend.addTenant();
     const tenantB = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenantB.projectId });
@@ -153,7 +153,7 @@ describe("TC-01..TC-04 — Run creation", () => {
     expect(promptsCalls).toHaveLength(0);
   });
 
-  it("TC-04: a config with an already-active run — 409, RedteamRunError", async () => {
+  it("a config with an already-active run — 409, RedteamRunError", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();

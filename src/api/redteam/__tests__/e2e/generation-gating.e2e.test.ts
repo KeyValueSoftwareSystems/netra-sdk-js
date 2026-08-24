@@ -6,7 +6,7 @@ import { MockRedteamBackend } from "./mock-backend";
 import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
 import { RedteamGenerationError, RedteamGenerationTimeoutError } from "../../models";
 
-describe("TC-34..TC-36 — Prompt generation gating", () => {
+describe("Prompt generation gating", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -18,7 +18,7 @@ describe("TC-34..TC-36 — Prompt generation gating", () => {
     resetRedteamEnv();
   });
 
-  it("TC-34: generation completes within the poll budget — SDK transparently waits (retrying create-run) then proceeds", async () => {
+  it("generation completes within the poll budget — SDK transparently waits (retrying create-run) then proceeds", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -36,7 +36,7 @@ describe("TC-34..TC-36 — Prompt generation gating", () => {
     expect(result!.success).toBe(true);
   });
 
-  it("TC-35: generation fails (promptsGenerationFailedAt) — 502, RedteamGenerationError", async () => {
+  it("generation fails (promptsGenerationFailedAt) — 502, RedteamGenerationError", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -54,7 +54,7 @@ describe("TC-34..TC-36 — Prompt generation gating", () => {
     ).rejects.toBeInstanceOf(RedteamGenerationError);
   });
 
-  it("TC-36: generation worker unavailable / poll budget exhausted with no progress — 503, RedteamGenerationTimeoutError", async () => {
+  it("generation worker unavailable / poll budget exhausted with no progress — 503, RedteamGenerationTimeoutError", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();

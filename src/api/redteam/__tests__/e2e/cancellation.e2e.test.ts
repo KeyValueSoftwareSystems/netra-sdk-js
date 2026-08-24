@@ -7,7 +7,7 @@ import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
 import { Config } from "../../../../config";
 import { RedteamHttpClient } from "../../client";
 
-describe("TC-46..TC-48 — Cancellation and interruption", () => {
+describe("Cancellation and interruption", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -34,7 +34,7 @@ describe("TC-46..TC-48 — Cancellation and interruption", () => {
     return { tenant, config };
   }
 
-  it("TC-46: explicit cancel mid-run — run transitions to cancelled, pollers stop, result reflects status:cancelled", async () => {
+  it("explicit cancel mid-run — run transitions to cancelled, pollers stop, result reflects status:cancelled", async () => {
     const { tenant, config } = seed();
     process.env.NETRA_OTLP_ENDPOINT = backend.url;
     process.env.NETRA_API_KEY = tenant.apiKey;
@@ -61,7 +61,7 @@ describe("TC-46..TC-48 — Cancellation and interruption", () => {
     expect(backend.getRun(created.runId)!.status).toBe("cancelled");
   });
 
-  it("TC-46b (public-API path): Netra.redteam.cancel(runId) reaches the real backend and marks the run cancelled", async () => {
+  it("Netra.redteam.cancel(runId) reaches the real backend and marks the run cancelled", async () => {
     const { tenant, config } = seed();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -76,7 +76,7 @@ describe("TC-46..TC-48 — Cancellation and interruption", () => {
     expect(backend.getRun(created.runId)!.status).toBe("cancelled");
   });
 
-  it("TC-47: process interrupt (SIGINT) mid-run — SDK issues a single cancel call before exiting; no orphaned RUNNING run", async () => {
+  it("process interrupt (SIGINT) mid-run — SDK issues a single cancel call before exiting; no orphaned RUNNING run", async () => {
     // The real SDK's interrupt handler re-delivers the signal via
     // `process.kill(process.pid, signal)` once it's done cancelling, so that
     // Ctrl-C still terminates the developer's process normally. Sending a
@@ -144,7 +144,7 @@ describe("TC-46..TC-48 — Cancellation and interruption", () => {
     }
   });
 
-  it("TC-48: cancel an already-finished run — 409, no state corruption", async () => {
+  it("cancel an already-finished run — 409, no state corruption", async () => {
     const { tenant, config } = seed();
     config.turnType = "single";
     process.env.NETRA_OTLP_ENDPOINT = backend.url;

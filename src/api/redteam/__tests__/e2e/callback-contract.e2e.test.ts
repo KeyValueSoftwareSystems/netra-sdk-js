@@ -6,7 +6,7 @@ import { MockRedteamBackend } from "./mock-backend";
 import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
 import type { RedteamRunOptions } from "../../models";
 
-describe("TC-15..TC-23 — Callback contract", () => {
+describe("Callback contract", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -32,7 +32,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     return { tenant, config };
   }
 
-  it("TC-15: handler is a plain arrow function (no class) — accepted, called successfully", async () => {
+  it("handler is a plain arrow function (no class) — accepted, called successfully", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
     let called = false;
@@ -52,7 +52,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(result!.success).toBe(true);
   });
 
-  it("TC-16: handler is not a function — rejected client-side before any network call", async () => {
+  it("handler is not a function — rejected client-side before any network call", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -65,7 +65,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(backend.requestLog).toHaveLength(0);
   });
 
-  it("TC-17: handler returns a bare string — treated as the agent's message with no sessionId override", async () => {
+  it("handler returns a bare string — treated as the agent's message with no sessionId override", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -80,7 +80,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(submitCall!.body.sessionId).toBeDefined(); // the session it was polled for, not an override
   });
 
-  it("TC-18: handler returns {message, sessionId} — overriding sessionId forwarded on turns", async () => {
+  it("handler returns {message, sessionId} — overriding sessionId forwarded on turns", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -95,7 +95,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(submitCall!.body.sessionId).toBe("custom-session-override");
   });
 
-  it("TC-19: handler returns an unsupported shape — treated as a handler error, submitted as {error}, run continues to finalize", async () => {
+  it("handler returns an unsupported shape — treated as a handler error, submitted as {error}, run continues to finalize", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -111,7 +111,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(result!.results[0].status).toBe("error");
   });
 
-  it("TC-20: handler throws synchronously or rejects — caught by SDK, submitted as {error}, run continues with partial results", async () => {
+  it("handler throws synchronously or rejects — caught by SDK, submitted as {error}, run continues with partial results", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -128,7 +128,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(result!.results[0].status).toBe("error");
   });
 
-  it("TC-21: handler receives correct turnIndex sequence — single-turn (turnIndex===1)", async () => {
+  it("handler receives correct turnIndex sequence — single-turn (turnIndex===1)", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -144,7 +144,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(seen).toEqual([1]);
   });
 
-  it("TC-22: handler receives correct turnIndex sequence — multi-turn 1,2,3 in order for a given session", async () => {
+  it("handler receives correct turnIndex sequence — multi-turn 1,2,3 in order for a given session", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator({ slug: "harmful-content" });
@@ -170,7 +170,7 @@ describe("TC-15..TC-23 — Callback contract", () => {
     expect(seen).toEqual([1, 2, 3]);
   });
 
-  it("TC-23: handler receives correct turnIndex sequence — iterative jailbreak, increasing up to the cap or an early stop", async () => {
+  it("handler receives correct turnIndex sequence — iterative jailbreak, increasing up to the cap or an early stop", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const jailbreakEvaluator = backend.addEvaluator({ slug: "jailbreak-eval", isJailbreak: true });

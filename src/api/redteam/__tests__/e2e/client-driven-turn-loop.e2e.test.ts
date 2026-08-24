@@ -19,7 +19,7 @@ function newRawClient(backend: MockRedteamBackend, apiKey: string): RedteamHttpC
   return new RedteamHttpClient(new Config({}));
 }
 
-describe("TC-24..TC-33h — Client-driven turn loop (revision 7 architecture)", () => {
+describe("Client-driven turn loop (revision 7 architecture)", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -47,7 +47,7 @@ describe("TC-24..TC-33h — Client-driven turn loop (revision 7 architecture)", 
     return { tenant, config };
   }
 
-  it("TC-24: GET .../prompts returns the whole list in one call, immediately — no polling of any kind", async () => {
+  it("GET .../prompts returns the whole list in one call, immediately — no polling of any kind", async () => {
     const { tenant, config } = seedRun({ sessionsPerEvaluator: 3 });
     const raw = newRawClient(backend, tenant.apiKey);
     const created = await raw.createRun({ configId: config.id });
@@ -64,7 +64,7 @@ describe("TC-24..TC-33h — Client-driven turn loop (revision 7 architecture)", 
     expect(second.prompts.map((p) => p.id).sort()).toEqual(resp.prompts.map((p) => p.id).sort());
   });
 
-  it("TC-27/TC-28: submitTurn reflects done correctly mid-run and at run end", async () => {
+  it("submitTurn reflects done correctly mid-run and at run end", async () => {
     const { tenant, config } = seedRun({ turnType: "multi", multiTurnCount: 3 });
     const raw = newRawClient(backend, tenant.apiKey);
     const created = await raw.createRun({ configId: config.id });
@@ -106,7 +106,7 @@ describe("TC-24..TC-33h — Client-driven turn loop (revision 7 architecture)", 
     expect(afterDone.status).toBe("completed");
   });
 
-  it("TC-30/TC-31: duplicate (run, promptId, turnIndex) submission — 409, not a silent overwrite or double-count", async () => {
+  it("duplicate (run, promptId, turnIndex) submission — 409, not a silent overwrite or double-count", async () => {
     const { tenant, config } = seedRun();
     const raw = newRawClient(backend, tenant.apiKey);
     const created = await raw.createRun({ configId: config.id });
@@ -129,7 +129,7 @@ describe("TC-24..TC-33h — Client-driven turn loop (revision 7 architecture)", 
     expect(run.results).toHaveLength(1); // not double-counted
   });
 
-  it("TC-32/TC-33a: multiple sessions on one run advance independently, no lost turns, no cross-talk", async () => {
+  it("multiple sessions on one run advance independently, no lost turns, no cross-talk", async () => {
     const { tenant, config } = seedRun({ sessionsPerEvaluator: 3, turnType: "multi", multiTurnCount: 2 });
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -149,7 +149,7 @@ describe("TC-24..TC-33h — Client-driven turn loop (revision 7 architecture)", 
     expect(run.results).toHaveLength(6); // 3 sessions * 2 turns each
   });
 
-  it("TC-33f: promptId from a different run is rejected — 404", async () => {
+  it("promptId from a different run is rejected — 404", async () => {
     const { tenant, config } = seedRun();
     const raw = newRawClient(backend, tenant.apiKey);
     const created1 = await raw.createRun({ configId: config.id });
@@ -177,7 +177,7 @@ describe("TC-24..TC-33h — Client-driven turn loop (revision 7 architecture)", 
     ).rejects.toThrow();
   });
 
-  it("TC-45: zero prompts (empty run) — completes immediately with no turns to drive", async () => {
+  it("zero prompts (empty run) — completes immediately with no turns to drive", async () => {
     const { tenant, config } = seedRun({ sessionsPerEvaluator: 0 });
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 

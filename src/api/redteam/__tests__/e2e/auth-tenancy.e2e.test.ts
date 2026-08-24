@@ -1,7 +1,7 @@
 /**
  * E2E: auth, tenancy, and entitlement.
  *
- * TC-40 (SDK-triggered run attribution / `triggered_by`) is a backend/DB
+ * SDK-triggered run attribution (`triggered_by`) is a backend/DB
  * column not exposed on any SDK-facing response shape (`RunProgress`/
  * `RiskScore` are opaque, backend-defined shapes, and `triggered_by` is not
  * part of the SDK's contract at all). It is therefore not observable through
@@ -14,7 +14,7 @@ import { MockRedteamBackend } from "./mock-backend";
 import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
 import { RedteamAuthError } from "../../models";
 
-describe("TC-37..TC-39 — Auth, tenancy, and entitlement", () => {
+describe("Auth, tenancy, and entitlement", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -26,7 +26,7 @@ describe("TC-37..TC-39 — Auth, tenancy, and entitlement", () => {
     resetRedteamEnv();
   });
 
-  it("TC-37: missing or invalid API key — 401, RedteamAuthError", async () => {
+  it("missing or invalid API key — 401, RedteamAuthError", async () => {
     backend.addTenant({ apiKey: "the-real-key" });
     const client = newClient(backend, "garbage-key-not-registered", FAST_POLL_ENV);
 
@@ -35,7 +35,7 @@ describe("TC-37..TC-39 — Auth, tenancy, and entitlement", () => {
     ).rejects.toBeInstanceOf(RedteamAuthError);
   });
 
-  it("TC-38: feature flag disabled for the org — 403, RedteamAuthError", async () => {
+  it("feature flag disabled for the org — 403, RedteamAuthError", async () => {
     const tenant = backend.addTenant({ featureFlagEnabled: false });
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -52,7 +52,7 @@ describe("TC-37..TC-39 — Auth, tenancy, and entitlement", () => {
     ).rejects.toBeInstanceOf(RedteamAuthError);
   });
 
-  it("TC-39: cross-tenant run/result access — 404 on every read endpoint, no data leaks across tenants", async () => {
+  it("cross-tenant run/result access — 404 on every read endpoint, no data leaks across tenants", async () => {
     const tenantA = backend.addTenant();
     const tenantB = backend.addTenant();
     const agentA = backend.addAgent({ projectId: tenantA.projectId });

@@ -202,7 +202,7 @@ export class MockRedteamBackend {
     return this.configs.get(configId);
   }
 
-  /** Directly seed a run's persisted result rows, bypassing the turn loop (QA-fixture-only; used for pagination-boundary testing, TC-42). */
+  /** Directly seed a run's persisted result rows, bypassing the turn loop (QA-fixture-only; used for pagination-boundary testing). */
   seedRunDone(runId: string, items: any[]): void {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`seedRunDone: no such run ${runId}`);
@@ -365,7 +365,7 @@ export class MockRedteamBackend {
     this.runs.set(run.id, run);
     this._seedPromptsForRun(run, config);
     if (run.promptIds.length === 0) {
-      // Empty run (zero prompts, TC-45): nothing to service — finalize immediately.
+      // Empty run (zero prompts): nothing to service — finalize immediately.
       run.status = "completed";
     }
     return h.accepted({ runId: run.id, configId: config.id, status: "running" });
@@ -374,7 +374,7 @@ export class MockRedteamBackend {
   private _runFullyDone(runId: string): boolean {
     const records = [...this.promptRecords.values()].filter((r) => r.runId === runId);
     if (records.length === 0) {
-      // No prompts were ever seeded for this run (TC-45, empty run) — done
+      // No prompts were ever seeded for this run (empty run) — done
       // iff the run itself was already finalized at creation time.
       const run = this.runs.get(runId);
       return !!run && run.status !== "running";

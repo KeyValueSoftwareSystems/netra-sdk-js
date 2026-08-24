@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MockRedteamBackend } from "./mock-backend";
 import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
 
-describe("TC-41..TC-45 — Results, progress, and risk score", () => {
+describe("Results, progress, and risk score", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -42,7 +42,7 @@ describe("TC-41..TC-45 — Results, progress, and risk score", () => {
     return { tenant, config };
   }
 
-  it("TC-41 (partial / contract-shape parity — see file docstring for full-parity scope note): SDK-triggered results carry no SDK-specific labeling and match the documented RunResultItem shape", async () => {
+  it("SDK-triggered results carry no SDK-specific labeling and match the documented RunResultItem shape", async () => {
     const { tenant, config } = seed();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
     const result = await client.runRedteam({ configId: config.id, handler: async () => "reply" });
@@ -55,7 +55,7 @@ describe("TC-41..TC-45 — Results, progress, and risk score", () => {
     );
   });
 
-  it("TC-42: results pagination — a run with >200 result rows pages via page/limit, SDK aggregates with no gaps/duplicates", async () => {
+  it("results pagination — a run with >200 result rows pages via page/limit, SDK aggregates with no gaps/duplicates", async () => {
     const { tenant, config } = seed();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -92,7 +92,7 @@ describe("TC-41..TC-45 — Results, progress, and risk score", () => {
     expect(resultsPageCalls.length).toBeGreaterThanOrEqual(2); // at least 2 pages (200 + 5)
   });
 
-  it("TC-43: partial results after some errored turns — final result includes all turns with individual statuses; success reflects overall completion not per-turn pass rate", async () => {
+  it("partial results after some errored turns — final result includes all turns with individual statuses; success reflects overall completion not per-turn pass rate", async () => {
     const { tenant, config } = seed();
     config.sessionsPerEvaluator = 2;
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
@@ -113,7 +113,7 @@ describe("TC-41..TC-45 — Results, progress, and risk score", () => {
     expect(statuses).toEqual(["error", "pass"]);
   });
 
-  it("TC-44: risk score reflects the run's config — aggregate safety score/change/history", async () => {
+  it("risk score reflects the run's config — aggregate safety score/change/history", async () => {
     const { tenant, config } = seed();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
     const result = await client.runRedteam({ configId: config.id, handler: async () => "reply" });
@@ -124,7 +124,7 @@ describe("TC-41..TC-45 — Results, progress, and risk score", () => {
     expect(result!.riskScore).toHaveProperty("history");
   });
 
-  it("TC-45: empty run (zero prompts generated) finalizes immediately as done with an empty results[]; SDK does not throw", async () => {
+  it("empty run (zero prompts generated) finalizes immediately as done with an empty results[]; SDK does not throw", async () => {
     const { tenant, config } = seed();
     config.sessionsPerEvaluator = 0; // config that produces zero adversarial prompts/sessions
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);

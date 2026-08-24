@@ -9,7 +9,7 @@ import { MockRedteamBackend } from "./mock-backend";
 import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
 import type { RedteamRunOptions } from "../../models";
 
-describe("TC-11..TC-14 — Input validation", () => {
+describe("Input validation", () => {
   let backend: MockRedteamBackend;
 
   beforeEach(async () => {
@@ -21,7 +21,7 @@ describe("TC-11..TC-14 — Input validation", () => {
     resetRedteamEnv();
   });
 
-  it("TC-12: configId missing — rejected client-side, no network call", async () => {
+  it("configId missing — rejected client-side, no network call", async () => {
     const tenant = backend.addTenant();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
@@ -32,7 +32,7 @@ describe("TC-11..TC-14 — Input validation", () => {
     expect(backend.requestLog).toHaveLength(0);
   });
 
-  it("TC-14: unknown extra fields on the options object are not forwarded to the wire", async () => {
+  it("unknown extra fields on the options object are not forwarded to the wire", async () => {
     // A caller who bypasses TypeScript (plain JS, or an `as any` cast) must
     // not get any of these forwarded — `buildCreateRunBody` keys only on
     // `configId`.
