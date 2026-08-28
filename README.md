@@ -262,6 +262,9 @@ You can configure the SDK using environment variables:
 | `NETRA_APP_NAME` | Name of your application |
 | `NETRA_ENV` | Environment (e.g., prod, dev) |
 | `NETRA_TRACE_CONTENT` | Capture prompt/completion content (default: true) |
+| `NETRA_REDTEAM_TIMEOUT` | Red-team API request timeout in seconds — an ordinary, bounded REST timeout (default: `20`) |
+| `NETRA_REDTEAM_GENERATION_POLL_INTERVAL` | Interval in seconds between `createRun` retries while prompts are still generating (default: `2`) |
+| `NETRA_REDTEAM_GENERATION_TIMEOUT` | Deadline in seconds to wait for prompt generation to finish before failing (default: `300`) |
 
 ## 🤝 License
 

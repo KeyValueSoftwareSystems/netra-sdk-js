@@ -6,7 +6,7 @@
 
 import { trace } from "@opentelemetry/api";
 import { createRequire } from "module";
-import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
+import { Prompts, Dashboard, Evaluation, Usage, Models, RedTeam } from "./api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Logger } from "./logger";
@@ -17,6 +17,7 @@ import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
 import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
 import { wrapResponse } from "./utils/response-handler";
+import { registerShutdownHook, runShutdownHooks } from "./utils/shutdown-hooks";
 
 export {
   Config,
@@ -72,6 +73,14 @@ export {
   // Models API
   Models,
   MODEL_PRICING_CACHE_TTL_SECONDS,
+  // Red-team API
+  RedTeam,
+  RedTeamAuthError,
+  RedTeamConfigError,
+  RedTeamGenerationError,
+  RedTeamGenerationTimeoutError,
+  RedTeamHttpClient,
+  RedTeamRunError,
 } from "./api";
 
 export type {
@@ -118,6 +127,22 @@ export type {
   GetModelPricingParams,
   ModelPrice,
   ModelPricing,
+  // Red-team API
+  RedTeamAgentHandler,
+  RedTeamAgentResponse,
+  RedTeamConversationTurn,
+  RedTeamCreateRunResponse,
+  RedTeamResult,
+  RedTeamRiskScore,
+  RedTeamRunOptions,
+  RedTeamRunProgress,
+  RedTeamRunPromptItem,
+  RedTeamRunPromptsResponse,
+  RedTeamRunResultItem,
+  RedTeamRunResultsPage,
+  RedTeamRunStatus,
+  RedTeamTaskResult,
+  RedTeamTurnType,
 } from "./api";
 
 // Export simulation types and classes
@@ -152,6 +177,11 @@ export class Netra {
   private static _config: Config | undefined;
   private static _tracer: any;
   private static _metricsEnabled = false;
+  // Set only while a shutdown() call is in flight — `beforeExit`'s direct call and a
+  // SIGINT-triggered call through the shutdown-hook registry can otherwise both pass the
+  // `_initialized` check and run the body concurrently, since that flag only flips false at
+  // the very end.
+  private static _shutdownPromise: Promise<void> | undefined;
 
   static usage: Usage;
   static evaluation: Evaluation;
@@ -159,6 +189,7 @@ export class Netra {
   static simulation: Simulation;
   static prompts: Prompts;
   static models: Models;
+  static redTeam: RedTeam;
 
   static getConfig(): Config {
     if (!this._config) {
@@ -234,6 +265,12 @@ export class Netra {
       Logger.warn("Netra: failed to initialize models client:", e);
     }
 
+    try {
+      this.redTeam = new RedTeam(cfg);
+    } catch (e) {
+      Logger.warn("Netra: failed to initialize redteam client:", e);
+    }
+
     this._initialized = true;
     Logger.info("Netra successfully initialized.");
 
@@ -254,12 +291,6 @@ export class Netra {
     }
 
     // Graceful shutdown logic
-    const handleSignal = async (signal: string) => {
-      Logger.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
-      await this.shutdown();
-      process.exit(0);
-    };
-
     const handleUncaughtException = async (error: Error) => {
       Logger.error("Uncaught exception:", error);
       Logger.error("Shutting down Netra SDK due to crash...");
@@ -278,9 +309,9 @@ export class Netra {
       await this.shutdown();
     });
 
-    // Handle termination signals
-    process.once("SIGINT", () => handleSignal("SIGINT"));
-    process.once("SIGTERM", () => handleSignal("SIGTERM"));
+    // SIGINT/SIGTERM go through the shared shutdown-hook registry, not a
+    // listener here — see ./utils/shutdown-hooks.ts.
+    registerShutdownHook(() => this.shutdown());
 
     // Handle crashes
     process.once("uncaughtException", handleUncaughtException);
@@ -293,6 +324,23 @@ export class Netra {
     if (!this._initialized) {
       return;
     }
+    // `beforeExit` and a SIGINT-triggered hook can both call shutdown() around the same
+    // time; join the in-flight call instead of running the body twice.
+    if (this._shutdownPromise) {
+      return this._shutdownPromise;
+    }
+    this._shutdownPromise = this._doShutdown();
+    try {
+      await this._shutdownPromise;
+    } finally {
+      this._shutdownPromise = undefined;
+    }
+  }
+
+  private static async _doShutdown(): Promise<void> {
+    // Runs other registered hooks (e.g. an in-flight redteam run's cancel).
+    // No-op if we're already inside a signal-triggered pass (re-entrancy guard).
+    await runShutdownHooks();
 
     // Unpatch any monkey-patched instrumentations first
     try {
@@ -525,6 +573,9 @@ export class Netra {
   }
 
   static withBlockedSpansLocal = withBlockedSpansLocal;
+
+  /** @internal Not a stable public API — see ./utils/shutdown-hooks.ts. */
+  static registerShutdownHook = registerShutdownHook;
 }
 
 export default Netra;

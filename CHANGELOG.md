@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Opt-in prompt caching** — `Netra.prompts.getPrompt()` accepts `useCache` and `cacheTtl`. When `useCache` is true, responses are served from an in-memory TTL cache (default TTL: `PROMPT_CACHE_TTL_SECONDS` = 60). Caching is off by default.
+- **Models API** — `Netra.models.getModelPricing()` fetches model pricing (optional `name` filter) with the same opt-in cache pattern (`useCache`, `cacheTtl`; default TTL: `MODEL_PRICING_CACHE_TTL_SECONDS` = 300).
+- **Cache lifecycle** — `Netra.shutdown()` clears prompts and models in-memory caches. `clearCache()` is also available on each client.
+- **Exported cache constants** — `PROMPT_CACHE_TTL_SECONDS` and `MODEL_PRICING_CACHE_TTL_SECONDS` are public exports.
+- **Red-team SDK (`Netra.redTeam`, beta)**: Trigger a red-team evaluation against a developer's local agent function via `Netra.redTeam.runRedTeam({ configId, task, maxConcurrency? })`. `configId` identifies a red-team config created ahead of time (e.g. in the dashboard) — the config's agent, evaluators, and attack settings are decided there; the SDK only drives the run. `task` is a plain callback `(prompt, sessionId, turnIndex) => Promise<string | {message, sessionId?}>`, called once per turn — no class to extend. The client fetches the run's whole generated prompt list once, then drives every session's turns itself (bounded local concurrency via `maxConcurrency`, default/cap 5), submitting each turn's result directly. Returns a `RedTeamResult` with `results`, `progress`, `riskScore`, and `runNumber` (matches the dashboard's "Run #N"). `Ctrl-C` (SIGINT/SIGTERM) reliably cancels any in-flight run server-side before the process exits — a single shared shutdown-hook registry replaces two independent signal listeners that could previously race each other.
+- **Trace Origin Label for Red-Team Runs**: Each red-team turn is now wrapped in its own span, with the root span carrying `netra.trace.origin = "redteam"` — the same mechanism already used for evaluation and simulation traces — so the backend can exclude red-team-originated traces from online evaluation, auto-evaluation, and insights enrichment.
+
+### Changed
+
+- **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
+
 ## [1.9.0] - 2026-08-23
 
 ### Added
@@ -32,19 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Simulation Lifecycle Hooks**: Added prescript/postscript support for multi-turn simulations via `SimulationHooks` (`beforeAll`, `beforeEach`, `before`, `after`, `afterEach`, `afterAll`). Hooks can return setup context passed into `BaseTask.run`, and the run uses a two-phase initialize / first-turn flow so hooks execute before any LLM spend. Execution order is `beforeAll` → `beforeEach` → item-specific `before` → task → item-specific `after` → `afterEach` → `afterAll`. `beforeAll` failure aborts the run as `prescript_failed`; item `before` failure marks only that scenario; `after`, `afterEach`, and `afterAll` failures are logged and do not affect status.
-
-## [Unreleased]
-
-### Added
-
-- **Opt-in prompt caching** — `Netra.prompts.getPrompt()` accepts `useCache` and `cacheTtl`. When `useCache` is true, responses are served from an in-memory TTL cache (default TTL: `PROMPT_CACHE_TTL_SECONDS` = 60). Caching is off by default.
-- **Models API** — `Netra.models.getModelPricing()` fetches model pricing (optional `name` filter) with the same opt-in cache pattern (`useCache`, `cacheTtl`; default TTL: `MODEL_PRICING_CACHE_TTL_SECONDS` = 300).
-- **Cache lifecycle** — `Netra.shutdown()` clears prompts and models in-memory caches. `clearCache()` is also available on each client.
-- **Exported cache constants** — `PROMPT_CACHE_TTL_SECONDS` and `MODEL_PRICING_CACHE_TTL_SECONDS` are public exports.
-
-### Changed
-
-- **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
 
 ## [1.6.0] - 2026-07-17
 
