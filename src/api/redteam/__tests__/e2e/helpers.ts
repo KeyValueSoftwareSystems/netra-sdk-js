@@ -1,26 +1,26 @@
 /**
  * QA fixture — NOT product source. Shared setup helpers for the red-team SDK
- * E2E suite. Constructs the REAL `Redteam` client (real `RedteamHttpClient`/
+ * E2E suite. Constructs the REAL `RedTeam` client (real `RedTeamHttpClient`/
  * axios, no mocking of the client itself) wired at a real HTTP loopback
- * connection to `MockRedteamBackend`.
+ * connection to `MockRedTeamBackend`.
  */
 import { Config } from "../../../../config";
-import { Redteam } from "../../api";
-import { MockRedteamBackend } from "./mock-backend";
+import { RedTeam } from "../../api";
+import { MockRedTeamBackend } from "./mock-backend";
 
-/** Build a real `Redteam` client pointed at `backend.url`, authenticated as `apiKey`. */
-export function newClient(backend: MockRedteamBackend, apiKey: string, extraEnv: Record<string, string> = {}): Redteam {
+/** Build a real `RedTeam` client pointed at `backend.url`, authenticated as `apiKey`. */
+export function newClient(backend: MockRedTeamBackend, apiKey: string, extraEnv: Record<string, string> = {}): RedTeam {
   process.env.NETRA_OTLP_ENDPOINT = backend.url;
   process.env.NETRA_API_KEY = apiKey;
   for (const [k, v] of Object.entries(extraEnv)) {
     process.env[k] = v;
   }
   const config = new Config({});
-  return new Redteam(config);
+  return new RedTeam(config);
 }
 
 /** Reset the subset of env vars this suite touches, so tests don't leak config into each other. */
-export function resetRedteamEnv(): void {
+export function resetRedTeamEnv(): void {
   delete process.env.NETRA_OTLP_ENDPOINT;
   delete process.env.NETRA_API_KEY;
   delete process.env.NETRA_REDTEAM_GENERATION_POLL_INTERVAL;

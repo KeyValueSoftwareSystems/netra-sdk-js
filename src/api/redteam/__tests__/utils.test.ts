@@ -1,73 +1,73 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RedteamRunOptions } from "../models";
+import type { RedTeamRunOptions } from "../models";
 import {
   buildCreateRunBody,
   getGenerationPollIntervalMs,
   getGenerationTimeoutMs,
-  getRedteamTimeoutMs,
+  getRedTeamTimeoutMs,
   mapResultsPage,
   mapRiskScore,
   unwrapEnvelope,
-  validateRedteamInputs,
+  validateRedTeamInputs,
 } from "../utils";
 
 const noop = async () => "ok";
 
-describe("validateRedteamInputs", () => {
-  it("rejects a non-function handler", () => {
-    const options = { configId: "cfg-1", handler: "not-a-fn" } as unknown as RedteamRunOptions;
-    expect(validateRedteamInputs(options)).toBeNull();
+describe("validateRedTeamInputs", () => {
+  it("rejects a non-function task", () => {
+    const options = { configId: "cfg-1", task: "not-a-fn" } as unknown as RedTeamRunOptions;
+    expect(validateRedTeamInputs(options)).toBeNull();
   });
 
-  it("accepts a plain arrow function handler", () => {
-    const options = { configId: "cfg-1", handler: noop } as RedteamRunOptions;
-    expect(validateRedteamInputs(options)).toBe(true);
+  it("accepts a plain arrow function task", () => {
+    const options = { configId: "cfg-1", task: noop } as RedTeamRunOptions;
+    expect(validateRedTeamInputs(options)).toBe(true);
   });
 
   it("rejects a missing configId", () => {
-    const options = { handler: noop } as unknown as RedteamRunOptions;
-    expect(validateRedteamInputs(options)).toBeNull();
+    const options = { task: noop } as unknown as RedTeamRunOptions;
+    expect(validateRedTeamInputs(options)).toBeNull();
   });
 
   it("rejects an empty-string configId", () => {
-    const options = { configId: "", handler: noop } as RedteamRunOptions;
-    expect(validateRedteamInputs(options)).toBeNull();
+    const options = { configId: "", task: noop } as RedTeamRunOptions;
+    expect(validateRedTeamInputs(options)).toBeNull();
   });
 
   it("accepts a valid options object", () => {
-    const options: RedteamRunOptions = { configId: "cfg-1", handler: noop };
-    expect(validateRedteamInputs(options)).toBe(true);
+    const options: RedTeamRunOptions = { configId: "cfg-1", task: noop };
+    expect(validateRedTeamInputs(options)).toBe(true);
   });
 
   it("rejects maxConcurrency: 0 (would silently produce zero pollers)", () => {
-    const options = { configId: "cfg-1", handler: noop, maxConcurrency: 0 } as RedteamRunOptions;
-    expect(validateRedteamInputs(options)).toBeNull();
+    const options = { configId: "cfg-1", task: noop, maxConcurrency: 0 } as RedTeamRunOptions;
+    expect(validateRedTeamInputs(options)).toBeNull();
   });
 
   it("rejects a negative maxConcurrency", () => {
-    const options = { configId: "cfg-1", handler: noop, maxConcurrency: -1 } as RedteamRunOptions;
-    expect(validateRedteamInputs(options)).toBeNull();
+    const options = { configId: "cfg-1", task: noop, maxConcurrency: -1 } as RedTeamRunOptions;
+    expect(validateRedTeamInputs(options)).toBeNull();
   });
 
   it("rejects a non-integer maxConcurrency", () => {
-    const options = { configId: "cfg-1", handler: noop, maxConcurrency: 2.5 } as RedteamRunOptions;
-    expect(validateRedteamInputs(options)).toBeNull();
+    const options = { configId: "cfg-1", task: noop, maxConcurrency: 2.5 } as RedTeamRunOptions;
+    expect(validateRedTeamInputs(options)).toBeNull();
   });
 
   it("accepts a valid positive integer maxConcurrency", () => {
-    const options: RedteamRunOptions = { configId: "cfg-1", handler: noop, maxConcurrency: 3 };
-    expect(validateRedteamInputs(options)).toBe(true);
+    const options: RedTeamRunOptions = { configId: "cfg-1", task: noop, maxConcurrency: 3 };
+    expect(validateRedTeamInputs(options)).toBe(true);
   });
 
   it("accepts an unset maxConcurrency (defaults elsewhere)", () => {
-    const options: RedteamRunOptions = { configId: "cfg-1", handler: noop };
-    expect(validateRedteamInputs(options)).toBe(true);
+    const options: RedTeamRunOptions = { configId: "cfg-1", task: noop };
+    expect(validateRedTeamInputs(options)).toBe(true);
   });
 });
 
 describe("buildCreateRunBody", () => {
   it("emits only {configId}", () => {
-    const options: RedteamRunOptions = { configId: "cfg-123", handler: noop };
+    const options: RedTeamRunOptions = { configId: "cfg-123", task: noop };
     expect(buildCreateRunBody(options)).toEqual({ configId: "cfg-123" });
   });
 });
@@ -95,18 +95,18 @@ describe("env parsing", () => {
     vi.restoreAllMocks();
   });
 
-  it("getRedteamTimeoutMs: unset -> default (20s -> 20000ms)", () => {
-    expect(getRedteamTimeoutMs()).toBe(20000);
+  it("getRedTeamTimeoutMs: unset -> default (20s -> 20000ms)", () => {
+    expect(getRedTeamTimeoutMs()).toBe(20000);
   });
 
-  it("getRedteamTimeoutMs: valid value is honored (seconds -> ms)", () => {
+  it("getRedTeamTimeoutMs: valid value is honored (seconds -> ms)", () => {
     process.env.NETRA_REDTEAM_TIMEOUT = "10";
-    expect(getRedteamTimeoutMs()).toBe(10000);
+    expect(getRedTeamTimeoutMs()).toBe(10000);
   });
 
-  it("getRedteamTimeoutMs: NaN -> default + warn", () => {
+  it("getRedTeamTimeoutMs: NaN -> default + warn", () => {
     process.env.NETRA_REDTEAM_TIMEOUT = "not-a-number";
-    expect(getRedteamTimeoutMs()).toBe(20000);
+    expect(getRedTeamTimeoutMs()).toBe(20000);
   });
 
   it("getGenerationPollIntervalMs: unset -> default (2s -> 2000ms)", () => {

@@ -1,6 +1,6 @@
 /**
  * Public API for running a red-team evaluation against a developer's local
- * agent function. Exposed as `Netra.redteam`.
+ * agent function. Exposed as `Netra.redTeam`.
  */
 
 import pLimit from "p-limit";
@@ -8,25 +8,28 @@ import { Config } from "../../config";
 import { Logger } from "../../logger";
 import { RootSpanProcessor } from "../../processors/root-span-processor";
 import { SpanWrapper } from "../../span-wrapper";
-import { RedteamHttpClient } from "./client";
+import { RedTeamHttpClient } from "./client";
 import {
   CreateRunResponse,
-  RedteamGenerationTimeoutError,
-  RedteamResult,
-  RedteamRunOptions,
-  RedteamRunStatus,
+  RedTeamGenerationTimeoutError,
+  RedTeamResult,
+  RedTeamRunOptions,
+  RedTeamRunStatus,
   RiskScore,
   RunProgress,
   RunPromptItem,
   RunResultItem,
 } from "./models";
-import { executeHandler, RedteamAgentHandler } from "./task";
-import { buildCreateRunBody, getGenerationPollIntervalMs, getGenerationTimeoutMs, validateRedteamInputs } from "./utils";
+import { executeTask, RedTeamAgentHandler } from "./task";
+import { buildCreateRunBody, getGenerationPollIntervalMs, getGenerationTimeoutMs, validateRedTeamInputs } from "./utils";
 import { registerShutdownHook } from "../../utils/shutdown-hooks";
 
 const LOG_PREFIX = "netra.redteam";
+// Bounds the request payload sent to the backend, which caps `output`/`error` at 100k chars
+// anyway (SubmitRedteamTurnDto) — truncating client-side avoids sending bytes the backend
+// would just reject or discard.
 const MAX_AGENT_RESPONSE_CHARS = 5000;
-const TURN_SPAN_NAME = "Netra.Redteam.Turn";
+const TURN_SPAN_NAME = "Netra.RedTeam.Turn";
 // Same attribute/value the backend already sets on its own redteam-originated
 // spans and already filters on for Insights/auto-eval — stamping it here too
 // so traces produced by the developer's own instrumented handler get excluded
@@ -34,6 +37,8 @@ const TURN_SPAN_NAME = "Netra.Redteam.Turn";
 const TRACE_ORIGIN_ATTRIBUTE = "netra.trace.origin";
 const TRACE_ORIGIN_REDTEAM = "redteam";
 const RESULTS_PAGE_LIMIT = 200;
+// Matches SubmitRedteamTurnDto's `@Max(1000)` on turnIndex.
+const MAX_TURN_INDEX = 1000;
 
 /** Shared stop flag every in-flight session-drive checks between turns, so an interrupt or a fatal sibling error halts the whole run promptly. */
 interface StopSignal {
@@ -46,13 +51,13 @@ interface StopSignal {
  * (no per-turn polling, no server-side turn-state of any kind) ->
  * results/progress/risk-score aggregation.
  */
-export class Redteam {
+export class RedTeam {
   private _config: Config;
-  private _client: RedteamHttpClient;
+  private _client: RedTeamHttpClient;
 
   constructor(config: Config) {
     this._config = config;
-    this._client = new RedteamHttpClient(config);
+    this._client = new RedTeamHttpClient(config);
   }
 
   /**
@@ -61,14 +66,14 @@ export class Redteam {
    * completion itself (own local concurrency via `maxConcurrency`), then
    * fetch results + progress + risk score.
    *
-   * @param options - `{configId, handler}` — `configId` identifies a
+   * @param options - `{configId, task}` — `configId` identifies a
    *                  red-team config already created (e.g. in the dashboard);
-   *                  `handler` is the developer's local agent callback.
-   * @returns The aggregated `RedteamResult`, or `null` on invalid input /
+   *                  `task` is the developer's local agent callback.
+   * @returns The aggregated `RedTeamResult`, or `null` on invalid input /
    *          uninitialized client (logged, not thrown).
    */
-  async runRedteam(options: RedteamRunOptions): Promise<RedteamResult | null> {
-    if (!validateRedteamInputs(options)) {
+  async runRedTeam(options: RedTeamRunOptions): Promise<RedTeamResult | null> {
+    if (!validateRedTeamInputs(options)) {
       return null;
     }
     if (!this._client.isInitialized()) {
@@ -113,13 +118,24 @@ export class Redteam {
       }
     });
 
-    const promptsResp = await this._client.getPrompts(runId);
-    if (promptsResp.prompts.length === 0) {
-      Logger.warn(`${LOG_PREFIX}: run ${runId} has zero generated prompts — nothing to drive`);
-    }
-
     try {
-      await this._driveAllSessions(runId, options.handler, promptsResp.prompts, maxConcurrency, stopSignal);
+      const promptsResp = await this._client.getPrompts(runId);
+      if (promptsResp.prompts.length === 0) {
+        Logger.warn(`${LOG_PREFIX}: run ${runId} has zero generated prompts — nothing to drive`);
+      }
+      await this._driveAllSessions(runId, options.task, promptsResp.prompts, maxConcurrency, stopSignal);
+    } catch (error) {
+      // A fatal error here (including a failed getPrompts) would otherwise leave the run
+      // orphaned as "running" server-side with no caller left in a position to cancel it.
+      try {
+        await this._client.cancel(runId);
+      } catch (cancelError) {
+        Logger.error(
+          `${LOG_PREFIX}: best-effort cancel failed for run ${runId}:`,
+          cancelError instanceof Error ? cancelError.message : cancelError,
+        );
+      }
+      throw error;
     } finally {
       unregisterShutdownHook();
     }
@@ -146,7 +162,7 @@ export class Redteam {
     // An interrupt always wins; otherwise re-read the run's own final status
     // (every session's last submitTurn call already finalized it server-side
     // — this is just a fresh read, not a wait).
-    const status: RedteamRunStatus = interrupted ? "cancelled" : await this._finalStatus(runId);
+    const status: RedTeamRunStatus = interrupted ? "cancelled" : await this._finalStatus(runId);
 
     const runNumber = typeof progress?.runNumber === "number" ? progress.runNumber : undefined;
 
@@ -163,8 +179,9 @@ export class Redteam {
   }
 
   /**
-   * Fetch all paginated per-turn results for a run, looping pages until a
-   * short page (< limit items) is returned.
+   * Fetch all paginated per-turn results for a run, looping pages until the backend's own
+   * `hasNextPage` says there are no more (the same field the dashboard's paginated list
+   * endpoints already return — not inferred from a short page).
    */
   async getResults(runId: string): Promise<RunResultItem[]> {
     const items: RunResultItem[] = [];
@@ -173,7 +190,7 @@ export class Redteam {
     while (true) {
       const pageResult = await this._client.getResultsPage(runId, { page, limit: RESULTS_PAGE_LIMIT });
       items.push(...pageResult.items);
-      if (pageResult.items.length < RESULTS_PAGE_LIMIT) {
+      if (!pageResult.hasNextPage) {
         break;
       }
       page++;
@@ -200,7 +217,7 @@ export class Redteam {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       if (Date.now() - start > deadlineMs) {
-        throw new RedteamGenerationTimeoutError();
+        throw new RedTeamGenerationTimeoutError();
       }
 
       Logger.info(`${LOG_PREFIX}: waiting on prompt generation for config ${configId}...`);
@@ -214,7 +231,7 @@ export class Redteam {
   }
 
   /** Re-reads the run's own status once every session has been driven to completion. */
-  private async _finalStatus(runId: string): Promise<RedteamRunStatus> {
+  private async _finalStatus(runId: string): Promise<RedTeamRunStatus> {
     const resp = await this._client.getPrompts(runId);
     return resp.status === "generating" ? "completed" : resp.status;
   }
@@ -228,13 +245,13 @@ export class Redteam {
    */
   private async _driveAllSessions(
     runId: string,
-    handler: RedteamAgentHandler,
+    task: RedTeamAgentHandler,
     prompts: RunPromptItem[],
     maxConcurrency: number,
     stopSignal: StopSignal,
   ): Promise<void> {
     const limit = pLimit(maxConcurrency);
-    const drives = prompts.map((prompt) => limit(() => this._driveSession(runId, handler, prompt, stopSignal)));
+    const drives = prompts.map((prompt) => limit(() => this._driveSession(runId, task, prompt, stopSignal)));
     await Promise.all(drives);
   }
 
@@ -245,7 +262,7 @@ export class Redteam {
    */
   private async _driveSession(
     runId: string,
-    handler: RedteamAgentHandler,
+    task: RedTeamAgentHandler,
     prompt: RunPromptItem,
     stopSignal: StopSignal,
   ): Promise<void> {
@@ -261,6 +278,15 @@ export class Redteam {
         return;
       }
 
+      // Matches SubmitRedteamTurnDto's `@Max(1000)` on turnIndex — fail fast client-side
+      // instead of spending a turn on a submit the backend would just 400 on anyway.
+      if (turnIndex > MAX_TURN_INDEX) {
+        stopSignal.stopped = true;
+        throw new Error(
+          `${LOG_PREFIX}: session ${sessionId} exceeded the ${MAX_TURN_INDEX}-turn limit without finishing`,
+        );
+      }
+
       let submitBody: {
         promptId: string;
         sessionId: string;
@@ -269,7 +295,7 @@ export class Redteam {
         output?: string;
         error?: string;
       };
-      // Wrap the handler call in its own span (mirroring simulation's per-turn
+      // Wrap the task call in its own span (mirroring simulation's per-turn
       // span) so there's always a root span to tag — the developer's own
       // instrumentation may not start one on its own (e.g. a plain fetch to
       // their agent with no outer span active).
@@ -278,14 +304,14 @@ export class Redteam {
       try {
         const { output, sessionId: overrideSessionId } = await turnSpan.withActive(() => {
           RootSpanProcessor.setAttributeOnRootSpan(TRACE_ORIGIN_ATTRIBUTE, TRACE_ORIGIN_REDTEAM);
-          return executeHandler(handler, promptText, sessionId, turnIndex);
+          return executeTask(task, promptText, sessionId, turnIndex);
         });
         const truncated = this._truncateOutput(output);
         sessionId = overrideSessionId ?? sessionId;
         submitBody = { promptId: prompt.id, sessionId, turnIndex, promptText, output: truncated };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        Logger.error(`${LOG_PREFIX}: handler failed for session ${sessionId}, turn ${turnIndex}:`, message);
+        Logger.error(`${LOG_PREFIX}: task failed for session ${sessionId}, turn ${turnIndex}:`, message);
         submitBody = { promptId: prompt.id, sessionId, turnIndex, promptText, error: message };
       } finally {
         turnSpan.end();

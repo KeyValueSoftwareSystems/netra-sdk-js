@@ -2,20 +2,20 @@
  * E2E: the local-agent callback contract.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
-import type { RedteamRunOptions } from "../../models";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
+import type { RedTeamRunOptions } from "../../models";
 
 describe("Callback contract", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
   function seedSingleTurnConfig(sessionsPerEvaluator = 1) {
@@ -32,14 +32,14 @@ describe("Callback contract", () => {
     return { tenant, config };
   }
 
-  it("handler is a plain arrow function (no class) — accepted, called successfully", async () => {
+  it("task is a plain arrow function (no class) — accepted, called successfully", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
     let called = false;
 
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async (prompt, sessionId, turnIndex) => {
+      task: async (prompt, sessionId, turnIndex) => {
         called = true;
         expect(typeof prompt).toBe("string");
         expect(typeof sessionId).toBe("string");
@@ -52,26 +52,26 @@ describe("Callback contract", () => {
     expect(result!.success).toBe(true);
   });
 
-  it("handler is not a function — rejected client-side before any network call", async () => {
+  it("task is not a function — rejected client-side before any network call", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const withObject = { configId: config.id, handler: {} } as unknown as RedteamRunOptions;
-    expect(await client.runRedteam(withObject)).toBeNull();
+    const withObject = { configId: config.id, task: {} } as unknown as RedTeamRunOptions;
+    expect(await client.runRedTeam(withObject)).toBeNull();
 
-    const withUndefined = { configId: config.id, handler: undefined } as unknown as RedteamRunOptions;
-    expect(await client.runRedteam(withUndefined)).toBeNull();
+    const withUndefined = { configId: config.id, task: undefined } as unknown as RedTeamRunOptions;
+    expect(await client.runRedTeam(withUndefined)).toBeNull();
 
     expect(backend.requestLog).toHaveLength(0);
   });
 
-  it("handler returns a bare string — treated as the agent's message with no sessionId override", async () => {
+  it("task returns a bare string — treated as the agent's message with no sessionId override", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async () => "my reply",
+      task: async () => "my reply",
     });
 
     expect(result!.success).toBe(true);
@@ -80,13 +80,13 @@ describe("Callback contract", () => {
     expect(submitCall!.body.sessionId).toBeDefined(); // the session it was polled for, not an override
   });
 
-  it("handler returns {message, sessionId} — overriding sessionId forwarded on turns", async () => {
+  it("task returns {message, sessionId} — overriding sessionId forwarded on turns", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async () => ({ message: "x", sessionId: "custom-session-override" }),
+      task: async () => ({ message: "x", sessionId: "custom-session-override" }),
     });
 
     expect(result!.success).toBe(true);
@@ -95,13 +95,13 @@ describe("Callback contract", () => {
     expect(submitCall!.body.sessionId).toBe("custom-session-override");
   });
 
-  it("handler returns an unsupported shape — treated as a handler error, submitted as {error}, run continues to finalize", async () => {
+  it("task returns an unsupported shape — treated as a task error, submitted as {error}, run continues to finalize", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async () => 42 as unknown as string,
+      task: async () => 42 as unknown as string,
     });
 
     expect(result!.success).toBe(true); // run still finalizes
@@ -111,13 +111,13 @@ describe("Callback contract", () => {
     expect(result!.results[0].status).toBe("error");
   });
 
-  it("handler throws synchronously or rejects — caught by SDK, submitted as {error}, run continues with partial results", async () => {
+  it("task throws synchronously or rejects — caught by SDK, submitted as {error}, run continues with partial results", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async () => {
+      task: async () => {
         throw new Error("boom");
       },
     });
@@ -128,14 +128,14 @@ describe("Callback contract", () => {
     expect(result!.results[0].status).toBe("error");
   });
 
-  it("handler receives correct turnIndex sequence — single-turn (turnIndex===1)", async () => {
+  it("task receives correct turnIndex sequence — single-turn (turnIndex===1)", async () => {
     const { tenant, config } = seedSingleTurnConfig();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     const seen: number[] = [];
-    await client.runRedteam({
+    await client.runRedTeam({
       configId: config.id,
-      handler: async (_p, _s, turnIndex) => {
+      task: async (_p, _s, turnIndex) => {
         seen.push(turnIndex);
         return "reply";
       },
@@ -144,7 +144,7 @@ describe("Callback contract", () => {
     expect(seen).toEqual([1]);
   });
 
-  it("handler receives correct turnIndex sequence — multi-turn 1,2,3 in order for a given session", async () => {
+  it("task receives correct turnIndex sequence — multi-turn 1,2,3 in order for a given session", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator({ slug: "harmful-content" });
@@ -159,9 +159,9 @@ describe("Callback contract", () => {
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     const seen: number[] = [];
-    await client.runRedteam({
+    await client.runRedTeam({
       configId: config.id,
-      handler: async (_p, _s, turnIndex) => {
+      task: async (_p, _s, turnIndex) => {
         seen.push(turnIndex);
         return "reply";
       },
@@ -170,7 +170,7 @@ describe("Callback contract", () => {
     expect(seen).toEqual([1, 2, 3]);
   });
 
-  it("handler receives correct turnIndex sequence — iterative jailbreak, increasing up to the cap or an early stop", async () => {
+  it("task receives correct turnIndex sequence — iterative jailbreak, increasing up to the cap or an early stop", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const jailbreakEvaluator = backend.addEvaluator({ slug: "jailbreak-eval", isJailbreak: true });
@@ -183,9 +183,9 @@ describe("Callback contract", () => {
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     const seen: number[] = [];
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async (_p, _s, turnIndex) => {
+      task: async (_p, _s, turnIndex) => {
         seen.push(turnIndex);
         return "reply";
       },
@@ -204,9 +204,9 @@ describe("Callback contract", () => {
       agentId: agent.id,
       evaluatorIds: [jailbreakEvaluator.id],
     });
-    const result2 = await client.runRedteam({
+    const result2 = await client.runRedTeam({
       configId: config2.id,
-      handler: async (_p, _s, turnIndex) => {
+      task: async (_p, _s, turnIndex) => {
         seenEarly.push(turnIndex);
         return turnIndex === 2 ? "STOP_EARLY now" : "reply";
       },

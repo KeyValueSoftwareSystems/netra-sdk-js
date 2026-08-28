@@ -1,7 +1,7 @@
 import { Logger } from "../../logger";
 import {
   CreateRunRequestBody,
-  RedteamRunOptions,
+  RedTeamRunOptions,
   RiskScore,
   RunResultItem,
   RunResultsPage,
@@ -14,28 +14,28 @@ const LOG_PREFIX = "netra.redteam";
 // ---------------------------------------------------------------------------
 
 /**
- * Validate a `RedteamRunOptions` object before any network call.
+ * Validate a `RedTeamRunOptions` object before any network call.
  *
  * Rules:
- *  1. `typeof handler === "function"`.
+ *  1. `typeof task === "function"`.
  *  2. `configId` must be present.
  *  3. `maxConcurrency`, if given, must be a positive integer — 0/negative/non-integer would
  *     silently produce zero pollers (`_runSessionsAsync` resolves immediately with no work done),
- *     which `runRedteam` would otherwise report as a misleading `{success:true, results:[]}`.
+ *     which `runRedTeam` would otherwise report as a misleading `{success:true, results:[]}`.
  *
  * @returns `true` when valid; `null` when invalid (after logging the reason).
  */
-export function validateRedteamInputs(
-  options: RedteamRunOptions | null | undefined,
+export function validateRedTeamInputs(
+  options: RedTeamRunOptions | null | undefined,
 ): true | null {
   if (!options || typeof options !== "object") {
     Logger.error(`${LOG_PREFIX}: options object is required`);
     return null;
   }
 
-  if (typeof options.handler !== "function") {
+  if (typeof options.task !== "function") {
     Logger.error(
-      `${LOG_PREFIX}: handler must be a function (prompt, sessionId, turnIndex) => Promise<string>`,
+      `${LOG_PREFIX}: task must be a function (prompt, sessionId, turnIndex) => Promise<string>`,
     );
     return null;
   }
@@ -60,9 +60,9 @@ export function validateRedteamInputs(
 // Wire body builder
 // ---------------------------------------------------------------------------
 
-/** Build the create-run request body from public `RedteamRunOptions`. */
+/** Build the create-run request body from public `RedTeamRunOptions`. */
 export function buildCreateRunBody(
-  options: RedteamRunOptions,
+  options: RedTeamRunOptions,
 ): CreateRunRequestBody {
   return { configId: options.configId };
 }
@@ -94,7 +94,7 @@ function parseNumericEnv(
 }
 
 /** `NETRA_REDTEAM_TIMEOUT` (seconds) -> ms. Ordinary REST timeout, not a long-poll wait. */
-export function getRedteamTimeoutMs(): number {
+export function getRedTeamTimeoutMs(): number {
   return parseNumericEnv("NETRA_REDTEAM_TIMEOUT", DEFAULT_REDTEAM_TIMEOUT_S) * 1000;
 }
 
@@ -150,6 +150,11 @@ export function mapResultsPage(raw: any): RunResultsPage {
     page: raw?.page ?? 1,
     limit: raw?.limit ?? items.length,
     total: raw?.total ?? items.length,
+    // Backend's own field for "is there another page" (PaginatedResponseDto convention) — read
+    // directly rather than inferring from a short page, which breaks if total is an exact
+    // multiple of the page size. The length-based fallback only matters for a response that
+    // predates this field.
+    hasNextPage: raw?.hasNextPage ?? items.length >= (raw?.limit ?? 200),
   };
 }
 

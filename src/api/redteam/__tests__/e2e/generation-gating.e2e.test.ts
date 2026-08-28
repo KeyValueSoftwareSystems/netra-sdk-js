@@ -2,20 +2,20 @@
  * E2E: prompt generation gating.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
-import { RedteamGenerationError, RedteamGenerationTimeoutError } from "../../models";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
+import { RedTeamGenerationError, RedTeamGenerationTimeoutError } from "../../models";
 
 describe("Prompt generation gating", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
   it("generation completes within the poll budget — SDK transparently waits (retrying create-run) then proceeds", async () => {
@@ -32,11 +32,11 @@ describe("Prompt generation gating", () => {
     });
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const result = await client.runRedteam({ configId: config.id, handler: async () => "reply" });
+    const result = await client.runRedTeam({ configId: config.id, task: async () => "reply" });
     expect(result!.success).toBe(true);
   });
 
-  it("generation fails (promptsGenerationFailedAt) — 502, RedteamGenerationError", async () => {
+  it("generation fails (promptsGenerationFailedAt) — 502, RedTeamGenerationError", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -50,11 +50,11 @@ describe("Prompt generation gating", () => {
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     await expect(
-      client.runRedteam({ configId: config.id, handler: async () => "reply" }),
-    ).rejects.toBeInstanceOf(RedteamGenerationError);
+      client.runRedTeam({ configId: config.id, task: async () => "reply" }),
+    ).rejects.toBeInstanceOf(RedTeamGenerationError);
   });
 
-  it("generation worker unavailable / poll budget exhausted with no progress — 503, RedteamGenerationTimeoutError", async () => {
+  it("generation worker unavailable / poll budget exhausted with no progress — 503, RedTeamGenerationTimeoutError", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -68,7 +68,7 @@ describe("Prompt generation gating", () => {
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     await expect(
-      client.runRedteam({ configId: config.id, handler: async () => "reply" }),
-    ).rejects.toBeInstanceOf(RedteamGenerationTimeoutError);
+      client.runRedTeam({ configId: config.id, task: async () => "reply" }),
+    ).rejects.toBeInstanceOf(RedTeamGenerationTimeoutError);
   });
 });

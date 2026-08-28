@@ -5,11 +5,11 @@ import { injectTraceContextHeaders } from "../../utils/context-propagation";
 import {
   CreateRunRequestBody,
   CreateRunResponse,
-  RedteamAuthError,
-  RedteamConfigError,
-  RedteamGenerationError,
-  RedteamGenerationTimeoutError,
-  RedteamRunError,
+  RedTeamAuthError,
+  RedTeamConfigError,
+  RedTeamGenerationError,
+  RedTeamGenerationTimeoutError,
+  RedTeamRunError,
   RiskScore,
   RunProgress,
   RunPromptsResponse,
@@ -18,7 +18,7 @@ import {
   SubmitTurnResult,
 } from "./models";
 import {
-  getRedteamTimeoutMs,
+  getRedTeamTimeoutMs,
   mapResultsPage,
   mapRiskScore,
   unwrapEnvelope,
@@ -37,7 +37,7 @@ const RETRY_BASE_DELAY_MS = 200;
  * backend call is fast and bounded, there is no server-held-open wait to
  * accommodate.
  */
-export class RedteamHttpClient {
+export class RedTeamHttpClient {
   private client: AxiosInstance | null = null;
 
   constructor(config: Config) {
@@ -57,7 +57,7 @@ export class RedteamHttpClient {
 
     const baseURL = this._resolveBaseUrl(endpoint);
     const headers = this._buildHeaders(config);
-    const timeout = getRedteamTimeoutMs();
+    const timeout = getRedTeamTimeoutMs();
 
     try {
       const instance = axios.create({ baseURL, headers, timeout });
@@ -97,7 +97,7 @@ export class RedteamHttpClient {
 
   private _ensureClient(): AxiosInstance {
     if (!this.client) {
-      throw new RedteamAuthError("Netra red-team client is not initialized (NETRA_OTLP_ENDPOINT required)");
+      throw new RedTeamAuthError("Netra red-team client is not initialized (NETRA_OTLP_ENDPOINT required)");
     }
     return this.client;
   }
@@ -178,7 +178,7 @@ export class RedteamHttpClient {
 
   /**
    * `GET /redteam/sdk/runs/{runId}/results?page&limit&evaluatorId` — one page.
-   * Callers loop pages until `items.length < limit` (see `Redteam.getResults`
+   * Callers loop pages until `items.length < limit` (see `RedTeam.getResults`
    * in `api.ts`).
    */
   async getResultsPage(
@@ -299,23 +299,23 @@ export class RedteamHttpClient {
 
     switch (status) {
       case 400:
-        return new RedteamConfigError(message || "invalid request: configId is required");
+        return new RedTeamConfigError(message || "invalid request: configId is required");
       case 401:
-        return new RedteamAuthError(message || "check NETRA_API_KEY");
+        return new RedTeamAuthError(message || "check NETRA_API_KEY");
       case 403:
-        return new RedteamAuthError(message || "red-teaming not enabled for this org");
+        return new RedTeamAuthError(message || "red-teaming not enabled for this org");
       case 404:
-        return new RedteamConfigError(message || "config not found or not in this project");
+        return new RedTeamConfigError(message || "config not found or not in this project");
       case 409:
-        return new RedteamRunError(message || "a run is already active for this config");
+        return new RedTeamRunError(message || "a run is already active for this config");
       case 422:
-        return new RedteamConfigError(
+        return new RedTeamConfigError(
           message || "agent is missing application details (systemPrompt)",
         );
       case 502:
-        return new RedteamGenerationError(message || "prompt generation failed");
+        return new RedTeamGenerationError(message || "prompt generation failed");
       case 503:
-        return new RedteamGenerationTimeoutError(
+        return new RedTeamGenerationTimeoutError(
           message || "generation did not complete (worker unavailable?)",
         );
       default:

@@ -6,7 +6,7 @@
 
 import { trace } from "@opentelemetry/api";
 import { createRequire } from "module";
-import { Prompts, Dashboard, Evaluation, Usage, Models, Redteam } from "./api";
+import { Prompts, Dashboard, Evaluation, Usage, Models, RedTeam } from "./api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Logger } from "./logger";
@@ -74,13 +74,13 @@ export {
   Models,
   MODEL_PRICING_CACHE_TTL_SECONDS,
   // Red-team API
-  Redteam,
-  RedteamAuthError,
-  RedteamConfigError,
-  RedteamGenerationError,
-  RedteamGenerationTimeoutError,
-  RedteamHttpClient,
-  RedteamRunError,
+  RedTeam,
+  RedTeamAuthError,
+  RedTeamConfigError,
+  RedTeamGenerationError,
+  RedTeamGenerationTimeoutError,
+  RedTeamHttpClient,
+  RedTeamRunError,
 } from "./api";
 
 export type {
@@ -128,21 +128,21 @@ export type {
   ModelPrice,
   ModelPricing,
   // Red-team API
-  RedteamAgentHandler,
-  RedteamAgentResponse,
-  RedteamConversationTurn,
-  RedteamCreateRunResponse,
-  RedteamResult,
-  RedteamRiskScore,
-  RedteamRunOptions,
-  RedteamRunProgress,
-  RedteamRunPromptItem,
-  RedteamRunPromptsResponse,
-  RedteamRunResultItem,
-  RedteamRunResultsPage,
-  RedteamRunStatus,
-  RedteamTaskResult,
-  RedteamTurnType,
+  RedTeamAgentHandler,
+  RedTeamAgentResponse,
+  RedTeamConversationTurn,
+  RedTeamCreateRunResponse,
+  RedTeamResult,
+  RedTeamRiskScore,
+  RedTeamRunOptions,
+  RedTeamRunProgress,
+  RedTeamRunPromptItem,
+  RedTeamRunPromptsResponse,
+  RedTeamRunResultItem,
+  RedTeamRunResultsPage,
+  RedTeamRunStatus,
+  RedTeamTaskResult,
+  RedTeamTurnType,
 } from "./api";
 
 // Export simulation types and classes
@@ -177,6 +177,11 @@ export class Netra {
   private static _config: Config | undefined;
   private static _tracer: any;
   private static _metricsEnabled = false;
+  // Set only while a shutdown() call is in flight — `beforeExit`'s direct call and a
+  // SIGINT-triggered call through the shutdown-hook registry can otherwise both pass the
+  // `_initialized` check and run the body concurrently, since that flag only flips false at
+  // the very end.
+  private static _shutdownPromise: Promise<void> | undefined;
 
   static usage: Usage;
   static evaluation: Evaluation;
@@ -184,7 +189,7 @@ export class Netra {
   static simulation: Simulation;
   static prompts: Prompts;
   static models: Models;
-  static redteam: Redteam;
+  static redTeam: RedTeam;
 
   static getConfig(): Config {
     if (!this._config) {
@@ -261,7 +266,7 @@ export class Netra {
     }
 
     try {
-      this.redteam = new Redteam(cfg);
+      this.redTeam = new RedTeam(cfg);
     } catch (e) {
       Logger.warn("Netra: failed to initialize redteam client:", e);
     }
@@ -319,7 +324,20 @@ export class Netra {
     if (!this._initialized) {
       return;
     }
+    // `beforeExit` and a SIGINT-triggered hook can both call shutdown() around the same
+    // time; join the in-flight call instead of running the body twice.
+    if (this._shutdownPromise) {
+      return this._shutdownPromise;
+    }
+    this._shutdownPromise = this._doShutdown();
+    try {
+      await this._shutdownPromise;
+    } finally {
+      this._shutdownPromise = undefined;
+    }
+  }
 
+  private static async _doShutdown(): Promise<void> {
     // Runs other registered hooks (e.g. an in-flight redteam run's cancel).
     // No-op if we're already inside a signal-triggered pass (re-entrancy guard).
     await runShutdownHooks();

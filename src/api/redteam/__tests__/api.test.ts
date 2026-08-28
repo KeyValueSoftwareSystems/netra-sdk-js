@@ -13,14 +13,14 @@ const mockClient = {
 
 vi.mock("../client", () => {
   return {
-    RedteamHttpClient: vi.fn().mockImplementation(function RedteamHttpClient() {
+    RedTeamHttpClient: vi.fn().mockImplementation(function RedTeamHttpClient() {
       return mockClient;
     }),
   };
 });
 
-import { Redteam } from "../api";
-import { RedteamRunOptions } from "../models";
+import { RedTeam } from "../api";
+import { RedTeamRunOptions } from "../models";
 import { _hookCountForTests } from "../../../utils/shutdown-hooks";
 
 const fakeConfig = {} as any;
@@ -35,7 +35,7 @@ function resetMocks() {
   mockClient.getRiskScore.mockResolvedValue({ latestSafetyScore: 95 });
 }
 
-describe("Redteam", () => {
+describe("RedTeam", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
@@ -69,13 +69,13 @@ describe("Redteam", () => {
       total: 1,
     });
 
-    const handler = vi.fn(async (prompt: string, _sessionId: string, _turnIndex: number) => `reply:${prompt}`);
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-1", handler, maxConcurrency: 1 };
+    const task = vi.fn(async (prompt: string, _sessionId: string, _turnIndex: number) => `reply:${prompt}`);
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-1", task, maxConcurrency: 1 };
 
-    const result = await redteam.runRedteam(options);
+    const result = await redTeam.runRedTeam(options);
 
-    expect(handler).toHaveBeenCalledWith("attack", "p1", 1);
+    expect(task).toHaveBeenCalledWith("attack", "p1", 1);
     expect(mockClient.submitTurn).toHaveBeenCalledWith("run-1", {
       promptId: "p1",
       sessionId: "p1",
@@ -108,11 +108,11 @@ describe("Redteam", () => {
     mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
     mockClient.getProgress.mockRejectedValueOnce(new Error("progress endpoint down"));
 
-    const handler = vi.fn(async () => "ok");
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-2", handler, maxConcurrency: 1 };
+    const task = vi.fn(async () => "ok");
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-2", task, maxConcurrency: 1 };
 
-    const result = await redteam.runRedteam(options);
+    const result = await redTeam.runRedTeam(options);
 
     expect(result!.progress).toBeUndefined();
     expect(result!.runNumber).toBeUndefined();
@@ -130,11 +130,11 @@ describe("Redteam", () => {
       .mockResolvedValueOnce({ runId: "run-2", status: "completed", turnType: "multi", multiTurnCount: 5, prompts: [] });
     mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
 
-    const handler = vi.fn(async () => "unused");
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-2", handler, maxConcurrency: 1 };
+    const task = vi.fn(async () => "unused");
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-2", task, maxConcurrency: 1 };
 
-    const result = await redteam.runRedteam(options);
+    const result = await redTeam.runRedTeam(options);
 
     expect(mockClient.createRun).toHaveBeenNthCalledWith(1, { configId: "cfg-2" });
     expect(mockClient.createRun).toHaveBeenNthCalledWith(2, { configId: "cfg-2" });
@@ -163,15 +163,15 @@ describe("Redteam", () => {
       .mockResolvedValueOnce({ done: true });
     mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
 
-    const handler = vi.fn(async (prompt: string, _sessionId: string, turnIndex: number) => `r${turnIndex}:${prompt}`);
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-3", handler, maxConcurrency: 1 };
+    const task = vi.fn(async (prompt: string, _sessionId: string, turnIndex: number) => `r${turnIndex}:${prompt}`);
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-3", task, maxConcurrency: 1 };
 
-    const result = await redteam.runRedteam(options);
+    const result = await redTeam.runRedTeam(options);
 
-    expect(handler).toHaveBeenNthCalledWith(1, "p0", "p1", 1);
-    expect(handler).toHaveBeenNthCalledWith(2, "p1", "p1", 2);
-    expect(handler).toHaveBeenNthCalledWith(3, "p2", "p1", 3);
+    expect(task).toHaveBeenNthCalledWith(1, "p0", "p1", 1);
+    expect(task).toHaveBeenNthCalledWith(2, "p1", "p1", 2);
+    expect(task).toHaveBeenNthCalledWith(3, "p2", "p1", 3);
     expect(mockClient.submitTurn).toHaveBeenNthCalledWith(1, "run-3", {
       promptId: "p1",
       sessionId: "p1",
@@ -203,11 +203,11 @@ describe("Redteam", () => {
       .mockResolvedValueOnce({ runId: "run-10", status: "failed", turnType: "single", multiTurnCount: 5, prompts: [] });
     mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
 
-    const handler = vi.fn(async () => "unused");
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-10", handler, maxConcurrency: 1 };
+    const task = vi.fn(async () => "unused");
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-10", task, maxConcurrency: 1 };
 
-    const result = await redteam.runRedteam(options);
+    const result = await redTeam.runRedTeam(options);
 
     expect(result).not.toBeNull();
     expect(result!.status).toBe("failed");
@@ -221,11 +221,11 @@ describe("Redteam", () => {
       .mockResolvedValueOnce({ runId: "run-11", status: "completed", turnType: "single", multiTurnCount: 5, prompts: [] });
     mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
 
-    const handler = vi.fn(async () => "unused");
-    const redteam = new Redteam(fakeConfig);
-    const result = await redteam.runRedteam({ configId: "cfg-11", handler, maxConcurrency: 1 });
+    const task = vi.fn(async () => "unused");
+    const redTeam = new RedTeam(fakeConfig);
+    const result = await redTeam.runRedTeam({ configId: "cfg-11", task, maxConcurrency: 1 });
 
-    expect(handler).not.toHaveBeenCalled();
+    expect(task).not.toHaveBeenCalled();
     expect(mockClient.submitTurn).not.toHaveBeenCalled();
     expect(result!.results).toHaveLength(0);
   });
@@ -257,11 +257,11 @@ describe("Redteam", () => {
       return { done: false, nextPrompt: "next", nextTurnIndex: body.turnIndex + 1 };
     });
 
-    const handler = vi.fn(async () => "unused");
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-13", handler, maxConcurrency: 2 };
+    const task = vi.fn(async () => "unused");
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-13", task, maxConcurrency: 2 };
 
-    await expect(redteam.runRedteam(options)).rejects.toThrow("503 exhausted");
+    await expect(redTeam.runRedTeam(options)).rejects.toThrow("503 exhausted");
 
     const callsAtRejection = submitCallsForB;
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -270,7 +270,7 @@ describe("Redteam", () => {
     expect(submitCallsForB).toBeLessThanOrEqual(callsAtRejection + 1);
   });
 
-  it("handler throws -> submits {error}, turn recorded error, run still finalizes", async () => {
+  it("task throws -> submits {error}, turn recorded error, run still finalizes", async () => {
     mockClient.createRun.mockResolvedValueOnce({ runId: "run-6", configId: "cfg-6", status: "running" });
     mockClient.getPrompts
       .mockResolvedValueOnce({
@@ -289,13 +289,13 @@ describe("Redteam", () => {
       total: 1,
     });
 
-    const handler = vi.fn(async () => {
+    const task = vi.fn(async () => {
       throw new Error("agent blew up");
     });
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-6", handler, maxConcurrency: 1 };
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-6", task, maxConcurrency: 1 };
 
-    const result = await redteam.runRedteam(options);
+    const result = await redTeam.runRedTeam(options);
 
     expect(mockClient.submitTurn).toHaveBeenCalledWith("run-6", {
       promptId: "p1",
@@ -326,14 +326,14 @@ describe("Redteam", () => {
     mockClient.getResultsPage.mockResolvedValueOnce({ items: [], page: 1, limit: 200, total: 0 });
 
     const seenSessions: string[] = [];
-    const handler = vi.fn(async (_prompt: string, sessionId: string) => {
+    const task = vi.fn(async (_prompt: string, sessionId: string) => {
       seenSessions.push(sessionId);
       return "ok";
     });
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-7", handler, maxConcurrency: 2 };
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-7", task, maxConcurrency: 2 };
 
-    await redteam.runRedteam(options);
+    await redTeam.runRedTeam(options);
 
     expect(seenSessions.sort()).toEqual(["pA", "pB"]);
     const submittedSessions = mockClient.submitTurn.mock.calls.map((call: any[]) => call[1].sessionId);
@@ -362,11 +362,11 @@ describe("Redteam", () => {
     // process while still letting us assert it fired (LLD §11).
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true as any);
 
-    const handler = vi.fn(async () => "ok");
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-8", handler, maxConcurrency: 1 };
+    const task = vi.fn(async () => "ok");
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-8", task, maxConcurrency: 1 };
 
-    const runPromise = redteam.runRedteam(options);
+    const runPromise = redTeam.runRedTeam(options);
 
     // Let a couple of turns happen, then interrupt.
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -405,14 +405,14 @@ describe("Redteam", () => {
     const rejectionBefore = process.listenerCount("unhandledRejection");
     const hooksBefore = _hookCountForTests();
 
-    const handler = vi.fn(async () => "ok");
-    const redteam = new Redteam(fakeConfig);
-    const options: RedteamRunOptions = { configId: "cfg-9", handler, maxConcurrency: 1 };
+    const task = vi.fn(async () => "ok");
+    const redTeam = new RedTeam(fakeConfig);
+    const options: RedTeamRunOptions = { configId: "cfg-9", task, maxConcurrency: 1 };
 
-    const runPromise = redteam.runRedteam(options);
+    const runPromise = redTeam.runRedTeam(options);
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    // runRedteam must never add its own uncaughtException/unhandledRejection listeners — an
+    // runRedTeam must never add its own uncaughtException/unhandledRejection listeners — an
     // unrelated error elsewhere in the host process must not be able to cancel this run.
     expect(process.listenerCount("uncaughtException")).toBe(exceptionBefore);
     expect(process.listenerCount("unhandledRejection")).toBe(rejectionBefore);
@@ -436,22 +436,25 @@ describe("Redteam", () => {
         page: 1,
         limit: 200,
         total: 401,
+        hasNextPage: true,
       })
       .mockResolvedValueOnce({
         items: Array.from({ length: 200 }, (_, i) => ({ evaluatorId: `ev-${200 + i}`, status: "pass" })),
         page: 2,
         limit: 200,
         total: 401,
+        hasNextPage: true,
       })
       .mockResolvedValueOnce({
         items: [{ evaluatorId: "ev-400", status: "pass" }],
         page: 3,
         limit: 200,
         total: 401,
+        hasNextPage: false,
       });
 
-    const redteam = new Redteam(fakeConfig);
-    const results = await redteam.getResults("run-9");
+    const redTeam = new RedTeam(fakeConfig);
+    const results = await redTeam.getResults("run-9");
 
     expect(results).toHaveLength(401);
     expect(mockClient.getResultsPage).toHaveBeenCalledTimes(3);
@@ -461,8 +464,8 @@ describe("Redteam", () => {
   });
 
   it("returns null for invalid input without any network call", async () => {
-    const redteam = new Redteam(fakeConfig);
-    const result = await redteam.runRedteam({ handler: "not-a-fn" } as any);
+    const redTeam = new RedTeam(fakeConfig);
+    const result = await redTeam.runRedTeam({ task: "not-a-fn" } as any);
     expect(result).toBeNull();
     expect(mockClient.createRun).not.toHaveBeenCalled();
   });

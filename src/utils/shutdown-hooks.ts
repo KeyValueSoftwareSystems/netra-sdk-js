@@ -2,7 +2,7 @@
  * Shared shutdown-hook registry — avoids multiple independent
  * process.once('SIGINT', ...) listeners racing each other to exit first.
  * Installs the SDK's one real signal listener lazily, on first registration,
- * so it works even for a standalone Redteam instance with no Netra.init().
+ * so it works even for a standalone RedTeam instance with no Netra.init().
  */
 
 export const SHUTDOWN_HOOK_TIMEOUT_MS = 5000;
@@ -49,10 +49,17 @@ export function registerShutdownHook(hook: ShutdownHook): () => void {
 export async function runShutdownHooks(): Promise<void> {
   if (running) return;
   running = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const settle = Promise.allSettled([...hooks].map((hook) => hook()));
-    await Promise.race([settle, new Promise((resolve) => setTimeout(resolve, SHUTDOWN_HOOK_TIMEOUT_MS))]);
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(resolve, SHUTDOWN_HOOK_TIMEOUT_MS);
+    });
+    await Promise.race([settle, timeout]);
   } finally {
+    // Otherwise a hook that finishes well within the timeout still leaves this timer
+    // pending, holding the event loop open for the remainder of SHUTDOWN_HOOK_TIMEOUT_MS.
+    clearTimeout(timer);
     running = false;
   }
 }

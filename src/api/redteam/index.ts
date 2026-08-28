@@ -2,20 +2,20 @@
  * Red-team SDK module exports.
  */
 
-export { Redteam } from "./api";
-export { RedteamHttpClient } from "./client";
-export { executeHandler } from "./task";
+export { RedTeam } from "./api";
+export { RedTeamHttpClient } from "./client";
+export { executeTask } from "./task";
 export type {
-  RedteamAgentHandler,
-  RedteamAgentResponse,
-  RedteamTaskResult,
+  RedTeamAgentHandler,
+  RedTeamAgentResponse,
+  RedTeamTaskResult,
 } from "./task";
 export {
-  RedteamAuthError,
-  RedteamConfigError,
-  RedteamGenerationError,
-  RedteamGenerationTimeoutError,
-  RedteamRunError,
+  RedTeamAuthError,
+  RedTeamConfigError,
+  RedTeamGenerationError,
+  RedTeamGenerationTimeoutError,
+  RedTeamRunError,
 } from "./models";
 export type {
   ConversationTurn,
@@ -23,10 +23,10 @@ export type {
   CreateRunRequestBody,
   CreateRunResponse,
   CreateRunRunningResponse,
-  RedteamResult,
-  RedteamRunOptions,
-  RedteamRunStatus,
-  RedteamTurnType,
+  RedTeamResult,
+  RedTeamRunOptions,
+  RedTeamRunStatus,
+  RedTeamTurnType,
   RiskScore,
   RunProgress,
   RunPromptItem,
@@ -40,9 +40,9 @@ export {
   buildCreateRunBody,
   getGenerationPollIntervalMs,
   getGenerationTimeoutMs,
-  getRedteamTimeoutMs,
+  getRedTeamTimeoutMs,
   mapResultsPage,
   mapRiskScore,
   unwrapEnvelope,
-  validateRedteamInputs,
+  validateRedTeamInputs,
 } from "./utils";

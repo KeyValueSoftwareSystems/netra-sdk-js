@@ -4,31 +4,31 @@
  * holding all "what's next" state in memory between `POST .../turns` calls —
  * there is no persisted turn-state, no server-side claim of any kind, no
  * polling for "not-ready". All requests go over a real HTTP loopback to the
- * mock backend, driven by the real SDK client (`Redteam`/`RedteamHttpClient`,
+ * mock backend, driven by the real SDK client (`RedTeam`/`RedTeamHttpClient`,
  * unmocked).
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
 import { Config } from "../../../../config";
-import { RedteamHttpClient } from "../../client";
+import { RedTeamHttpClient } from "../../client";
 
-function newRawClient(backend: MockRedteamBackend, apiKey: string): RedteamHttpClient {
+function newRawClient(backend: MockRedTeamBackend, apiKey: string): RedTeamHttpClient {
   process.env.NETRA_OTLP_ENDPOINT = backend.url;
   process.env.NETRA_API_KEY = apiKey;
-  return new RedteamHttpClient(new Config({}));
+  return new RedTeamHttpClient(new Config({}));
 }
 
 describe("Client-driven turn loop (revision 7 architecture)", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
   function seedRun(opts: { sessionsPerEvaluator?: number; turnType?: "single" | "multi"; multiTurnCount?: number } = {}) {
@@ -134,10 +134,10 @@ describe("Client-driven turn loop (revision 7 architecture)", () => {
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     const seenPromptIds = new Set<string>();
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
       maxConcurrency: 3,
-      handler: async (_prompt: string, sessionId: string) => {
+      task: async (_prompt: string, sessionId: string) => {
         seenPromptIds.add(sessionId);
         return "reply";
       },
@@ -181,8 +181,8 @@ describe("Client-driven turn loop (revision 7 architecture)", () => {
     const { tenant, config } = seedRun({ sessionsPerEvaluator: 0 });
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const handler = async () => "unused";
-    const result = await client.runRedteam({ configId: config.id, handler });
+    const task = async () => "unused";
+    const result = await client.runRedTeam({ configId: config.id, task });
 
     expect(result!.status).toBe("completed");
     expect(result!.results).toHaveLength(0);

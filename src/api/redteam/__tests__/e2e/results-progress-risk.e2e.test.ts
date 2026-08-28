@@ -14,19 +14,19 @@
  * rather than silently skipped.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
 
 describe("Results, progress, and risk score", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
   function seed() {
@@ -45,7 +45,7 @@ describe("Results, progress, and risk score", () => {
   it("SDK-triggered results carry no SDK-specific labeling and match the documented RunResultItem shape", async () => {
     const { tenant, config } = seed();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
-    const result = await client.runRedteam({ configId: config.id, handler: async () => "reply" });
+    const result = await client.runRedTeam({ configId: config.id, task: async () => "reply" });
 
     expect(result!.results).toHaveLength(1);
     const item = result!.results[0];
@@ -62,11 +62,11 @@ describe("Results, progress, and risk score", () => {
     // Seed the run directly (bypassing the turn loop) with 205 synthetic rows
     // to exercise the pagination boundary without driving 205 real turns.
     const created = await (async () => {
-      const { RedteamHttpClient } = await import("../../client");
+      const { RedTeamHttpClient } = await import("../../client");
       const { Config } = await import("../../../../config");
       process.env.NETRA_OTLP_ENDPOINT = backend.url;
       process.env.NETRA_API_KEY = tenant.apiKey;
-      const raw = new RedteamHttpClient(new Config({}));
+      const raw = new RedTeamHttpClient(new Config({}));
       return raw.createRun({ configId: config.id });
     })();
     if (created.status !== "running") throw new Error("expected running");
@@ -98,11 +98,11 @@ describe("Results, progress, and risk score", () => {
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     let call = 0;
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async () => {
+      task: async () => {
         call++;
-        if (call === 1) throw new Error("handler failure on this turn");
+        if (call === 1) throw new Error("task failure on this turn");
         return "ok reply";
       },
     });
@@ -116,7 +116,7 @@ describe("Results, progress, and risk score", () => {
   it("risk score reflects the run's config — aggregate safety score/change/history", async () => {
     const { tenant, config } = seed();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
-    const result = await client.runRedteam({ configId: config.id, handler: async () => "reply" });
+    const result = await client.runRedTeam({ configId: config.id, task: async () => "reply" });
 
     expect(result!.riskScore).toBeDefined();
     expect(result!.riskScore).toHaveProperty("latestSafetyScore");
@@ -129,9 +129,9 @@ describe("Results, progress, and risk score", () => {
     config.sessionsPerEvaluator = 0; // config that produces zero adversarial prompts/sessions
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    // Full end-to-end runRedteam(): create -> poll loop (immediately sees
+    // Full end-to-end runRedTeam(): create -> poll loop (immediately sees
     // scope:"run" done, since zero sessions were seeded) -> results/risk-score.
-    const result = await client.runRedteam({ configId: config.id, handler: async () => "unused" });
+    const result = await client.runRedTeam({ configId: config.id, task: async () => "unused" });
 
     expect(result).not.toBeNull(); // SDK does not throw
     expect(result!.success).toBe(true);

@@ -1,23 +1,23 @@
 /**
- * E2E (real SDK client `Netra.redteam.runRedteam` + real HTTP loopback to a
+ * E2E (real SDK client `Netra.redTeam.runRedTeam` + real HTTP loopback to a
  * contract-faithful mock backend — see mock-backend.ts for the feasibility
  * rationale): run creation, triggering an existing config.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
-import { RedteamConfigError, RedteamRunError } from "../../models";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
+import { RedTeamConfigError, RedTeamRunError } from "../../models";
 
 describe("Run creation", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
   it("trigger an existing config, single-turn, happy path", async () => {
@@ -33,9 +33,9 @@ describe("Run creation", () => {
     });
 
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async () => "my agent's reply",
+      task: async () => "my agent's reply",
     });
 
     expect(result).not.toBeNull();
@@ -60,9 +60,9 @@ describe("Run creation", () => {
 
     const seenTurnIndexes: number[] = [];
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async (_prompt, _sessionId, turnIndex) => {
+      task: async (_prompt, _sessionId, turnIndex) => {
         seenTurnIndexes.push(turnIndex);
         return "reply";
       },
@@ -87,9 +87,9 @@ describe("Run creation", () => {
 
     const seenTurnIndexes: number[] = [];
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async (_prompt, _sessionId, turnIndex) => {
+      task: async (_prompt, _sessionId, turnIndex) => {
         seenTurnIndexes.push(turnIndex);
         return "reply";
       },
@@ -114,9 +114,9 @@ describe("Run creation", () => {
     });
 
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
-    const result = await client.runRedteam({
+    const result = await client.runRedTeam({
       configId: config.id,
-      handler: async () => "reply",
+      task: async () => "reply",
     });
 
     expect(result).not.toBeNull();
@@ -132,7 +132,7 @@ describe("Run creation", () => {
     }
   });
 
-  it("a config belonging to another tenant/project — 404, RedteamConfigError, no turn loop starts", async () => {
+  it("a config belonging to another tenant/project — 404, RedTeamConfigError, no turn loop starts", async () => {
     const tenantA = backend.addTenant();
     const tenantB = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenantB.projectId });
@@ -146,14 +146,14 @@ describe("Run creation", () => {
 
     const client = newClient(backend, tenantA.apiKey, FAST_POLL_ENV);
     await expect(
-      client.runRedteam({ configId: foreignConfig.id, handler: async () => "x" }),
-    ).rejects.toBeInstanceOf(RedteamConfigError);
+      client.runRedTeam({ configId: foreignConfig.id, task: async () => "x" }),
+    ).rejects.toBeInstanceOf(RedTeamConfigError);
 
     const promptsCalls = backend.requestLog.filter((r) => r.path.includes("/prompts"));
     expect(promptsCalls).toHaveLength(0);
   });
 
-  it("a config with an already-active run — 409, RedteamRunError", async () => {
+  it("a config with an already-active run — 409, RedTeamRunError", async () => {
     const tenant = backend.addTenant();
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -167,7 +167,7 @@ describe("Run creation", () => {
 
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
     await expect(
-      client.runRedteam({ configId: config.id, handler: async () => "x" }),
-    ).rejects.toBeInstanceOf(RedteamRunError);
+      client.runRedTeam({ configId: config.id, task: async () => "x" }),
+    ).rejects.toBeInstanceOf(RedTeamRunError);
   });
 });

@@ -2,21 +2,21 @@
  * E2E: cancellation and interruption.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
 import { Config } from "../../../../config";
-import { RedteamHttpClient } from "../../client";
+import { RedTeamHttpClient } from "../../client";
 
 describe("Cancellation and interruption", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
   function seed() {
@@ -38,7 +38,7 @@ describe("Cancellation and interruption", () => {
     const { tenant, config } = seed();
     process.env.NETRA_OTLP_ENDPOINT = backend.url;
     process.env.NETRA_API_KEY = tenant.apiKey;
-    const raw = new RedteamHttpClient(new Config({}));
+    const raw = new RedTeamHttpClient(new Config({}));
     const created = await raw.createRun({ configId: config.id });
     if (created.status !== "running") throw new Error("expected running");
 
@@ -61,13 +61,13 @@ describe("Cancellation and interruption", () => {
     expect(backend.getRun(created.runId)!.status).toBe("cancelled");
   });
 
-  it("Netra.redteam.cancel(runId) reaches the real backend and marks the run cancelled", async () => {
+  it("Netra.redTeam.cancel(runId) reaches the real backend and marks the run cancelled", async () => {
     const { tenant, config } = seed();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     process.env.NETRA_OTLP_ENDPOINT = backend.url;
     process.env.NETRA_API_KEY = tenant.apiKey;
-    const raw = new RedteamHttpClient(new Config({}));
+    const raw = new RedTeamHttpClient(new Config({}));
     const created = await raw.createRun({ configId: config.id });
     if (created.status !== "running") throw new Error("expected running");
 
@@ -96,12 +96,12 @@ describe("Cancellation and interruption", () => {
       const { tenant, config } = seed();
       const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-      const runPromise = client.runRedteam({
+      const runPromise = client.runRedTeam({
         configId: config.id,
         maxConcurrency: 1,
         // A tiny per-turn delay keeps the (multiTurnCount=5) session from
         // completing naturally before the interrupt has a chance to land.
-        handler: async () => {
+        task: async () => {
           await new Promise((resolve) => setTimeout(resolve, 20));
           return "reply";
         },
@@ -124,7 +124,7 @@ describe("Cancellation and interruption", () => {
       expect(result!.status).toBe("cancelled");
 
       // The interrupt handler's own cancel() call is fire-and-forget from
-      // runRedteam's perspective — poll briefly for it to actually land.
+      // runRedTeam's perspective — poll briefly for it to actually land.
       const cancelDeadline = Date.now() + 2000;
       while (backend.requestLog.filter((r) => r.path.includes("/cancel")).length === 0) {
         if (Date.now() > cancelDeadline) throw new Error("timed out waiting for the interrupt's cancel() call");
@@ -149,7 +149,7 @@ describe("Cancellation and interruption", () => {
     config.turnType = "single";
     process.env.NETRA_OTLP_ENDPOINT = backend.url;
     process.env.NETRA_API_KEY = tenant.apiKey;
-    const raw = new RedteamHttpClient(new Config({}));
+    const raw = new RedTeamHttpClient(new Config({}));
     const created = await raw.createRun({ configId: config.id });
     if (created.status !== "running") throw new Error("expected running");
 

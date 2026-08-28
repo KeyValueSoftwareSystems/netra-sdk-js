@@ -32,13 +32,13 @@ vi.mock("axios", async (importOriginal) => {
 import axios from "axios";
 import { Config } from "../../../config";
 import {
-  RedteamAuthError,
-  RedteamConfigError,
-  RedteamGenerationError,
-  RedteamGenerationTimeoutError,
-  RedteamRunError,
+  RedTeamAuthError,
+  RedTeamConfigError,
+  RedTeamGenerationError,
+  RedTeamGenerationTimeoutError,
+  RedTeamRunError,
 } from "../models";
-import { RedteamHttpClient } from "../client";
+import { RedTeamHttpClient } from "../client";
 
 function buildConfig(otlpEndpoint: string): Config {
   process.env.NETRA_OTLP_ENDPOINT = otlpEndpoint;
@@ -46,7 +46,7 @@ function buildConfig(otlpEndpoint: string): Config {
   return new Config({});
 }
 
-describe("RedteamHttpClient", () => {
+describe("RedTeamHttpClient", () => {
   beforeAll(() => {
     propagation.setGlobalPropagator(
       new CompositePropagator({
@@ -71,7 +71,7 @@ describe("RedteamHttpClient", () => {
 
   it("strips a trailing /telemetry (and trailing slash) from the base URL", () => {
     const cfg = buildConfig("https://api.getnetra.ai/telemetry/");
-    new RedteamHttpClient(cfg);
+    new RedTeamHttpClient(cfg);
     expect(axios.create).toHaveBeenCalledWith(
       expect.objectContaining({ baseURL: "https://api.getnetra.ai" }),
     );
@@ -79,7 +79,7 @@ describe("RedteamHttpClient", () => {
 
   it("injects the x-api-key header from config.apiKey", () => {
     const cfg = buildConfig("https://api.getnetra.ai");
-    new RedteamHttpClient(cfg);
+    new RedTeamHttpClient(cfg);
     expect(axios.create).toHaveBeenCalledWith(
       expect.objectContaining({ headers: expect.objectContaining({ "x-api-key": "test-api-key" }) }),
     );
@@ -87,7 +87,7 @@ describe("RedteamHttpClient", () => {
 
   it("registers a request interceptor that injects traceparent headers", async () => {
     const cfg = buildConfig("https://api.getnetra.ai");
-    new RedteamHttpClient(cfg);
+    new RedTeamHttpClient(cfg);
 
     expect(mockInstance.interceptors.request.use).toHaveBeenCalled();
     const [onFulfilled] = mockInstance.interceptors.request.use.mock.calls[0];
@@ -108,7 +108,7 @@ describe("RedteamHttpClient", () => {
 
   it("unwraps a single {data} envelope on createRun", async () => {
     const cfg = buildConfig("https://api.getnetra.ai");
-    const client = new RedteamHttpClient(cfg);
+    const client = new RedTeamHttpClient(cfg);
     mockInstance.post.mockResolvedValueOnce({
       data: { success: true, data: { runId: "run-1", configId: "cfg-1", status: "running" } },
     });
@@ -119,7 +119,7 @@ describe("RedteamHttpClient", () => {
   describe("getPrompts", () => {
     it("fetches the run's whole prompt list in one call", async () => {
       const cfg = buildConfig("https://api.getnetra.ai");
-      const client = new RedteamHttpClient(cfg);
+      const client = new RedTeamHttpClient(cfg);
       mockInstance.get.mockResolvedValueOnce({
         data: {
           success: true,
@@ -147,7 +147,7 @@ describe("RedteamHttpClient", () => {
   describe("submitTurn", () => {
     it("posts the turn body and returns {done, nextPrompt?, nextTurnIndex?}", async () => {
       const cfg = buildConfig("https://api.getnetra.ai");
-      const client = new RedteamHttpClient(cfg);
+      const client = new RedTeamHttpClient(cfg);
       mockInstance.post.mockResolvedValueOnce({
         data: { success: true, data: { done: false, nextPrompt: "turn 2", nextTurnIndex: 2 } },
       });
@@ -161,7 +161,7 @@ describe("RedteamHttpClient", () => {
 
     it("surfaces an exact-duplicate-turn (409) submission as {done: true} instead of throwing", async () => {
       const cfg = buildConfig("https://api.getnetra.ai");
-      const client = new RedteamHttpClient(cfg);
+      const client = new RedTeamHttpClient(cfg);
       mockInstance.post.mockRejectedValueOnce({
         isAxiosError: true,
         response: { status: 409, data: { success: false, error: { message: "already submitted" } } },
@@ -180,20 +180,20 @@ describe("RedteamHttpClient", () => {
 
   describe("_extractErrorMessage / typed error mapping via createRun", () => {
     const cases: Array<[number, any]> = [
-      [400, RedteamConfigError],
-      [401, RedteamAuthError],
-      [403, RedteamAuthError],
-      [404, RedteamConfigError],
-      [409, RedteamRunError],
-      [422, RedteamConfigError],
-      [502, RedteamGenerationError],
-      [503, RedteamGenerationTimeoutError],
+      [400, RedTeamConfigError],
+      [401, RedTeamAuthError],
+      [403, RedTeamAuthError],
+      [404, RedTeamConfigError],
+      [409, RedTeamRunError],
+      [422, RedTeamConfigError],
+      [502, RedTeamGenerationError],
+      [503, RedTeamGenerationTimeoutError],
     ];
 
     for (const [status, ErrorClass] of cases) {
       it(`maps HTTP ${status} to ${ErrorClass.name}`, async () => {
         const cfg = buildConfig("https://api.getnetra.ai");
-        const client = new RedteamHttpClient(cfg);
+        const client = new RedTeamHttpClient(cfg);
         // Persistent (not "Once") since 502/503 are retried by the client's
         // bounded-retry wrapper before finally throwing.
         mockInstance.post.mockRejectedValue({
@@ -207,7 +207,7 @@ describe("RedteamHttpClient", () => {
 
     it("uses the response envelope's error.message when present", async () => {
       const cfg = buildConfig("https://api.getnetra.ai");
-      const client = new RedteamHttpClient(cfg);
+      const client = new RedTeamHttpClient(cfg);
       mockInstance.post.mockRejectedValue({
         isAxiosError: true,
         response: { status: 404, data: { success: false, error: { message: "config not found" } } },
@@ -218,7 +218,7 @@ describe("RedteamHttpClient", () => {
 
     it("passes through a non-axios Error unchanged", async () => {
       const cfg = buildConfig("https://api.getnetra.ai");
-      const client = new RedteamHttpClient(cfg);
+      const client = new RedTeamHttpClient(cfg);
       const boom = new Error("boom");
       mockInstance.post.mockRejectedValue(boom);
       await expect(client.createRun({ configId: "cfg-1" })).rejects.toBe(boom);
@@ -226,7 +226,7 @@ describe("RedteamHttpClient", () => {
 
     it("retries a network error (no response) up to MAX_RETRIES before throwing", async () => {
       const cfg = buildConfig("https://api.getnetra.ai");
-      const client = new RedteamHttpClient(cfg);
+      const client = new RedTeamHttpClient(cfg);
       const networkError = { isAxiosError: true, message: "Network Error" };
       mockInstance.post.mockRejectedValue(networkError);
       await expect(client.createRun({ configId: "cfg-1" })).rejects.toBeInstanceOf(Error);
@@ -236,20 +236,20 @@ describe("RedteamHttpClient", () => {
 
     it("does not retry a 400 (non-transient) error", async () => {
       const cfg = buildConfig("https://api.getnetra.ai");
-      const client = new RedteamHttpClient(cfg);
+      const client = new RedTeamHttpClient(cfg);
       mockInstance.post.mockRejectedValue({
         isAxiosError: true,
         response: { status: 400, data: { success: false, error: { message: "bad request" } } },
         message: "Request failed with status code 400",
       });
-      await expect(client.createRun({ configId: "cfg-1" })).rejects.toBeInstanceOf(RedteamConfigError);
+      await expect(client.createRun({ configId: "cfg-1" })).rejects.toBeInstanceOf(RedTeamConfigError);
       expect(mockInstance.post).toHaveBeenCalledTimes(1);
     });
   });
 
   it("getProgress returns the unwrapped envelope contents", async () => {
     const cfg = buildConfig("https://api.getnetra.ai");
-    const client = new RedteamHttpClient(cfg);
+    const client = new RedTeamHttpClient(cfg);
     mockInstance.get.mockResolvedValueOnce({ data: { success: true, data: { completedSessions: 3 } } });
     const result = await client.getProgress("run-1");
     expect(result).toEqual({ completedSessions: 3 });
@@ -257,7 +257,7 @@ describe("RedteamHttpClient", () => {
 
   it("getResultsPage sends page/limit/evaluatorId query params with defaults", async () => {
     const cfg = buildConfig("https://api.getnetra.ai");
-    const client = new RedteamHttpClient(cfg);
+    const client = new RedTeamHttpClient(cfg);
     mockInstance.get.mockResolvedValueOnce({
       data: { success: true, data: { data: [], page: 1, limit: 200, total: 0, hasNextPage: false } },
     });
@@ -269,7 +269,7 @@ describe("RedteamHttpClient", () => {
 
   it("getRiskScore hits the config-scoped endpoint and returns the raw payload", async () => {
     const cfg = buildConfig("https://api.getnetra.ai");
-    const client = new RedteamHttpClient(cfg);
+    const client = new RedTeamHttpClient(cfg);
     mockInstance.get.mockResolvedValueOnce({ data: { success: true, data: { latestSafetyScore: 77 } } });
     const result = await client.getRiskScore("cfg-1");
     expect(result).toEqual({ latestSafetyScore: 77 });
@@ -278,17 +278,17 @@ describe("RedteamHttpClient", () => {
 
   it("cancel posts to the cancel endpoint and returns the unwrapped status", async () => {
     const cfg = buildConfig("https://api.getnetra.ai");
-    const client = new RedteamHttpClient(cfg);
+    const client = new RedTeamHttpClient(cfg);
     mockInstance.post.mockResolvedValueOnce({ data: { success: true, data: { status: "cancelled" } } });
     const result = await client.cancel("run-1");
     expect(result).toEqual({ status: "cancelled" });
     expect(mockInstance.post).toHaveBeenCalledWith("/redteam/sdk/runs/run-1/cancel");
   });
 
-  it("throws RedteamAuthError when the client was never initialized (no endpoint)", async () => {
+  it("throws RedTeamAuthError when the client was never initialized (no endpoint)", async () => {
     const cfg = new Config({});
-    const client = new RedteamHttpClient(cfg);
+    const client = new RedTeamHttpClient(cfg);
     expect(client.isInitialized()).toBe(false);
-    await expect(client.createRun({ configId: "cfg-1" })).rejects.toBeInstanceOf(RedteamAuthError);
+    await expect(client.createRun({ configId: "cfg-1" })).rejects.toBeInstanceOf(RedTeamAuthError);
   });
 });

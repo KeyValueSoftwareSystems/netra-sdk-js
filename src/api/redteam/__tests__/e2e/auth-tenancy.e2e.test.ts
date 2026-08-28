@@ -10,32 +10,32 @@
  * unautomatable-here explicitly rather than silently dropped.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
-import { RedteamAuthError } from "../../models";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
+import { RedTeamAuthError } from "../../models";
 
 describe("Auth, tenancy, and entitlement", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
-  it("missing or invalid API key — 401, RedteamAuthError", async () => {
+  it("missing or invalid API key — 401, RedTeamAuthError", async () => {
     backend.addTenant({ apiKey: "the-real-key" });
     const client = newClient(backend, "garbage-key-not-registered", FAST_POLL_ENV);
 
     await expect(
-      client.runRedteam({ configId: "cfg-x", handler: async () => "reply" }),
-    ).rejects.toBeInstanceOf(RedteamAuthError);
+      client.runRedTeam({ configId: "cfg-x", task: async () => "reply" }),
+    ).rejects.toBeInstanceOf(RedTeamAuthError);
   });
 
-  it("feature flag disabled for the org — 403, RedteamAuthError", async () => {
+  it("feature flag disabled for the org — 403, RedTeamAuthError", async () => {
     const tenant = backend.addTenant({ featureFlagEnabled: false });
     const agent = backend.addAgent({ projectId: tenant.projectId });
     const evaluator = backend.addEvaluator();
@@ -48,8 +48,8 @@ describe("Auth, tenancy, and entitlement", () => {
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
     await expect(
-      client.runRedteam({ configId: config.id, handler: async () => "reply" }),
-    ).rejects.toBeInstanceOf(RedteamAuthError);
+      client.runRedTeam({ configId: config.id, task: async () => "reply" }),
+    ).rejects.toBeInstanceOf(RedTeamAuthError);
   });
 
   it("cross-tenant run/result access — 404 on every read endpoint, no data leaks across tenants", async () => {
@@ -65,7 +65,7 @@ describe("Auth, tenancy, and entitlement", () => {
     });
 
     const clientA = newClient(backend, tenantA.apiKey, FAST_POLL_ENV);
-    const result = await clientA.runRedteam({ configId: configA.id, handler: async () => "reply" });
+    const result = await clientA.runRedTeam({ configId: configA.id, task: async () => "reply" });
     expect(result!.success).toBe(true);
 
     const clientB = newClient(backend, tenantB.apiKey, FAST_POLL_ENV);
@@ -74,11 +74,11 @@ describe("Auth, tenancy, and entitlement", () => {
     await expect(clientB.cancel(result!.runId)).rejects.toThrow();
 
     const rawRiskCheck = async () => {
-      const { RedteamHttpClient } = await import("../../client");
+      const { RedTeamHttpClient } = await import("../../client");
       const { Config } = await import("../../../../config");
       process.env.NETRA_OTLP_ENDPOINT = backend.url;
       process.env.NETRA_API_KEY = tenantB.apiKey;
-      const raw = new RedteamHttpClient(new Config({}));
+      const raw = new RedTeamHttpClient(new Config({}));
       return raw.getRiskScore(configA.id);
     };
     await expect(rawRiskCheck()).rejects.toThrow();

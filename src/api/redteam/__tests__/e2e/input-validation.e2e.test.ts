@@ -5,29 +5,29 @@
  * fires.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MockRedteamBackend } from "./mock-backend";
-import { newClient, resetRedteamEnv, FAST_POLL_ENV } from "./helpers";
-import type { RedteamRunOptions } from "../../models";
+import { MockRedTeamBackend } from "./mock-backend";
+import { newClient, resetRedTeamEnv, FAST_POLL_ENV } from "./helpers";
+import type { RedTeamRunOptions } from "../../models";
 
 describe("Input validation", () => {
-  let backend: MockRedteamBackend;
+  let backend: MockRedTeamBackend;
 
   beforeEach(async () => {
-    backend = new MockRedteamBackend();
+    backend = new MockRedTeamBackend();
     await backend.start();
   });
   afterEach(async () => {
     await backend.stop();
-    resetRedteamEnv();
+    resetRedTeamEnv();
   });
 
   it("configId missing — rejected client-side, no network call", async () => {
     const tenant = backend.addTenant();
     const client = newClient(backend, tenant.apiKey, FAST_POLL_ENV);
 
-    const options = { handler: async () => "reply" } as unknown as RedteamRunOptions;
+    const options = { task: async () => "reply" } as unknown as RedTeamRunOptions;
 
-    const result = await client.runRedteam(options);
+    const result = await client.runRedTeam(options);
     expect(result).toBeNull();
     expect(backend.requestLog).toHaveLength(0);
   });
@@ -51,10 +51,10 @@ describe("Input validation", () => {
       configId: config.id,
       unknownField: "should-not-be-forwarded",
       multiTurnCount: 99,
-      handler: async () => "reply",
-    } as unknown as RedteamRunOptions;
+      task: async () => "reply",
+    } as unknown as RedTeamRunOptions;
 
-    const result = await client.runRedteam(bypassed);
+    const result = await client.runRedTeam(bypassed);
     expect(result!.success).toBe(true);
 
     const createRunCall = backend.requestLog.find((r) => r.method === "POST" && r.path === "/redteam/sdk/runs");

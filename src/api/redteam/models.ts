@@ -2,29 +2,30 @@
  * Public + wire types for the red-team SDK client.
  */
 
-import { RedteamAgentHandler } from "./task";
+import { RedTeamAgentHandler } from "./task";
 
 /** The attack style a run's underlying config was set up with. */
-export type RedteamTurnType = "single" | "multi";
+export type RedTeamTurnType = "single" | "multi";
 
 /** Server-side run lifecycle status. */
-export type RedteamRunStatus = "running" | "completed" | "failed" | "cancelled";
+export type RedTeamRunStatus = "running" | "completed" | "failed" | "cancelled";
 
 // ---------------------------------------------------------------------------
 // Public input
 // ---------------------------------------------------------------------------
 
 /**
- * Options for `Netra.redteam.runRedteam()` — triggers a red-team run against a
+ * Options for `Netra.redTeam.runRedTeam()` — triggers a red-team run against a
  * config that already exists (created ahead of time in the dashboard: agent,
  * evaluators, attack settings are all decided there). The SDK only drives the
  * run; it never creates or edits the config.
  */
-export interface RedteamRunOptions {
+export interface RedTeamRunOptions {
   /** The id of an existing red-team config to run. */
   configId: string;
-  /** The developer's local agent callback — a PLAIN function. */
-  handler: RedteamAgentHandler;
+  /** The developer's local agent callback — a PLAIN function. Named `task` to match the
+   * simulation/evaluation modules' callback naming convention. */
+  task: RedTeamAgentHandler;
   /** Client-side session concurrency; default 5, capped at 5. */
   maxConcurrency?: number;
 }
@@ -92,8 +93,8 @@ export interface RunPromptItem {
  */
 export interface RunPromptsResponse {
   runId: string;
-  status: RedteamRunStatus | "generating";
-  turnType: RedteamTurnType;
+  status: RedTeamRunStatus | "generating";
+  turnType: RedTeamTurnType;
   multiTurnCount: number;
   prompts: RunPromptItem[];
 }
@@ -126,6 +127,7 @@ export interface RunResultsPage {
   page: number;
   limit: number;
   total: number;
+  hasNextPage: boolean;
 }
 
 /** Reused `RiskScoreResponse` shape. */
@@ -135,9 +137,9 @@ export type RiskScore = Record<string, unknown>;
 // Public output — the developer-facing result
 // ---------------------------------------------------------------------------
 
-export interface RedteamResult {
+export interface RedTeamResult {
   success: boolean;
-  status: RedteamRunStatus;
+  status: RedTeamRunStatus;
   runId: string;
   configId: string;
   /** Matches the dashboard's "Run #N" (oldest = 1). Undefined if the progress fetch failed. */
@@ -152,41 +154,41 @@ export interface RedteamResult {
 // ---------------------------------------------------------------------------
 
 /** 401 — missing/invalid `x-api-key`. */
-export class RedteamAuthError extends Error {
+export class RedTeamAuthError extends Error {
   constructor(message = "check NETRA_API_KEY") {
     super(message);
-    this.name = "RedteamAuthError";
+    this.name = "RedTeamAuthError";
   }
 }
 
 /** 400/404/422 — bad/unknown config, agent, or evaluator ids. */
-export class RedteamConfigError extends Error {
+export class RedTeamConfigError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "RedteamConfigError";
+    this.name = "RedTeamConfigError";
   }
 }
 
 /** 502 — prompt generation failed. */
-export class RedteamGenerationError extends Error {
+export class RedTeamGenerationError extends Error {
   constructor(message = "prompt generation failed") {
     super(message);
-    this.name = "RedteamGenerationError";
+    this.name = "RedTeamGenerationError";
   }
 }
 
 /** Generation deadline exceeded / 503 poll-budget exhausted. */
-export class RedteamGenerationTimeoutError extends Error {
+export class RedTeamGenerationTimeoutError extends Error {
   constructor(message = "generation did not complete (worker unavailable?)") {
     super(message);
-    this.name = "RedteamGenerationTimeoutError";
+    this.name = "RedTeamGenerationTimeoutError";
   }
 }
 
 /** 409 — active-run conflict, or other run-level failure. */
-export class RedteamRunError extends Error {
+export class RedTeamRunError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "RedteamRunError";
+    this.name = "RedTeamRunError";
   }
 }

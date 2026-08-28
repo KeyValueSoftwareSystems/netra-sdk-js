@@ -3,7 +3,7 @@
  *
  * A contract-faithful in-process mock of the `/redteam/sdk/*` API surface.
  * It exists so the QA E2E suite can drive the REAL `netra-sdk-js` client
- * (`RedteamHttpClient` + `Redteam`, unmocked) over a real HTTP loopback
+ * (`RedTeamHttpClient` + `RedTeam`, unmocked) over a real HTTP loopback
  * connection, exercising the actual wire contract, the client-driven turn
  * loop, and error mapping end-to-end — without requiring the full backend
  * NestJS app (Postgres/ClickHouse/Redis/LLM credentials), which is
@@ -105,7 +105,7 @@ export interface LoggedRequest {
 const EARLY_STOP_SENTINEL = "STOP_EARLY";
 const JAILBREAK_CAP = 4;
 
-export class MockRedteamBackend {
+export class MockRedTeamBackend {
   tenants = new Map<string, MockTenant>(); // keyed by apiKey
   agents = new Map<string, MockAgent>();
   evaluators = new Map<string, MockEvaluator>();
@@ -446,7 +446,7 @@ export class MockRedteamBackend {
       evaluatorSlug: record.evaluatorSlug,
       status: body.error !== undefined ? "error" : "pass",
       score: body.error !== undefined ? null : 1,
-      judgeOutput: body.error !== undefined ? `handler error: ${body.error}` : "no leak detected",
+      judgeOutput: body.error !== undefined ? `task error: ${body.error}` : "no leak detected",
       sessionId: body.sessionId,
       turnIndex: body.turnIndex,
       conversationHistory: [
