@@ -25,10 +25,10 @@ import { buildCreateRunBody, getGenerationPollIntervalMs, getGenerationTimeoutMs
 import { registerShutdownHook } from "../../utils/shutdown-hooks";
 
 const LOG_PREFIX = "netra.redteam";
-// Bounds the request payload sent to the backend, which caps `output`/`error` at 100k chars
-// anyway (SubmitRedteamTurnDto) — truncating client-side avoids sending bytes the backend
-// would just reject or discard.
-const MAX_AGENT_RESPONSE_CHARS = 5000;
+// Matches SubmitRedteamTurnDto's `@MaxLength(100000)` on output/error exactly — a hard backstop
+// against a pathological agent response (not a product-level content cap), so it never trims
+// real content the backend would otherwise accept.
+const MAX_AGENT_RESPONSE_CHARS = 100000;
 const TURN_SPAN_NAME = "Netra.RedTeam.Turn";
 // Same attribute/value the backend already sets on its own redteam-originated
 // spans and already filters on for Insights/auto-eval — stamping it here too
