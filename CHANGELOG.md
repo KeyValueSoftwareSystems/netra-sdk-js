@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-09-21
+
+### Added
+
+- **Models API**: New `Netra.models` client. `Netra.models.getModelPricing({ name?, useCache?, cacheTtl? })` fetches model pricing from `/sdk/models` (optional `name` filter), returning `ModelPricing[]` or `null` on failure. Request timeout is configurable via `NETRA_MODELS_TIMEOUT` (default 10s). New exported surface: `Models`, `MODEL_PRICING_CACHE_TTL_SECONDS`, and the types `ModelPricing`, `ModelPrice`, `GetModelPricingParams`.
+- **Opt-in Prompt Caching**: `Netra.prompts.getPrompt()` accepts `useCache` and `cacheTtl`. When `useCache` is true, responses are served from an in-memory TTL cache keyed by prompt name and label; default TTL is `PROMPT_CACHE_TTL_SECONDS` (60 seconds). Caching stays off unless `useCache` is set, so existing callers are unaffected.
+- **Opt-in Model Pricing Caching**: `getModelPricing()` uses the same opt-in pattern, with default TTL `MODEL_PRICING_CACHE_TTL_SECONDS` (300 seconds). Only successful responses are cached; `null` results are not.
+- **Cache Lifecycle**: `Netra.shutdown()` clears the prompts and models in-memory caches, and `clearCache()` is available on each client for manual invalidation.
+- **Exported Cache Constants**: `PROMPT_CACHE_TTL_SECONDS` and `MODEL_PRICING_CACHE_TTL_SECONDS` are public exports, so callers can reason about default TTLs without hardcoding them.
+
+### Changed
+
+- **Test Runner**: `npm test` now runs `vitest run` (previously a placeholder that exited 1), with unit coverage for the TTL cache, the prompts and models clients, and cache clearing on shutdown. Dev-only change — the published package still ships `dist/` alone.
+
 ## [1.9.0] - 2026-08-23
 
 ### Added
@@ -32,19 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Simulation Lifecycle Hooks**: Added prescript/postscript support for multi-turn simulations via `SimulationHooks` (`beforeAll`, `beforeEach`, `before`, `after`, `afterEach`, `afterAll`). Hooks can return setup context passed into `BaseTask.run`, and the run uses a two-phase initialize / first-turn flow so hooks execute before any LLM spend. Execution order is `beforeAll` → `beforeEach` → item-specific `before` → task → item-specific `after` → `afterEach` → `afterAll`. `beforeAll` failure aborts the run as `prescript_failed`; item `before` failure marks only that scenario; `after`, `afterEach`, and `afterAll` failures are logged and do not affect status.
-
-## [Unreleased]
-
-### Added
-
-- **Opt-in prompt caching** — `Netra.prompts.getPrompt()` accepts `useCache` and `cacheTtl`. When `useCache` is true, responses are served from an in-memory TTL cache (default TTL: `PROMPT_CACHE_TTL_SECONDS` = 60). Caching is off by default.
-- **Models API** — `Netra.models.getModelPricing()` fetches model pricing (optional `name` filter) with the same opt-in cache pattern (`useCache`, `cacheTtl`; default TTL: `MODEL_PRICING_CACHE_TTL_SECONDS` = 300).
-- **Cache lifecycle** — `Netra.shutdown()` clears prompts and models in-memory caches. `clearCache()` is also available on each client.
-- **Exported cache constants** — `PROMPT_CACHE_TTL_SECONDS` and `MODEL_PRICING_CACHE_TTL_SECONDS` are public exports.
-
-### Changed
-
-- **Prompt cache TTL** — Default TTL is the module constant `PROMPT_CACHE_TTL_SECONDS` (60). Override per call with `cacheTtl`. Removed unused `cacheTtlSeconds` init config and `NETRA_CACHE_TTL_SECONDS` env var.
 
 ## [1.6.0] - 2026-07-17
 
