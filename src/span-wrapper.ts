@@ -151,8 +151,8 @@ export class SpanWrapper {
       this.span.end();
     }
 
-    // Pop entity from session stack so nested spans get correct parentage
-    if (this._entityType) {
+    // Pop only if this wrapper pushed a frame (avoids double-end / end-without-start)
+    if (this._entityType && this._entityFrame) {
       SessionManager.popEntity(this._entityType, this._entityFrame);
       this._entityFrame = undefined;
     }
