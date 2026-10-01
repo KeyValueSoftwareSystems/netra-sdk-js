@@ -25,6 +25,16 @@ const SPAN_TYPE_TO_ENTITY_TYPE: Partial<Record<SpanType, string>> = {
   [SpanType.TOOL]: "task",
 };
 
+/**
+ * Maps entity type to the `netra.<suffix>` attribute key that carries
+ * its name onto spans. Used to set the entity attribute directly on the
+ * span without pushing to the global entity stack.
+ */
+const ENTITY_TYPE_ATTR_SUFFIX: Record<string, string> = {
+  agent: "agent.name",
+  task: "task.name",
+};
+
 export class SpanWrapper {
   private name: string;
   private attributes: SpanAttributes;
@@ -63,9 +73,11 @@ export class SpanWrapper {
   start(): this {
     this.startTime = Date.now();
 
-    // Push entity before span starts so SessionSpanProcessor captures the name
+    // Create entity frame for rename support (bindSpanToEntity) without
+    // pushing to the global entity stack. Pushing would leak the entry to
+    // concurrent requests and persist indefinitely if .end() is never called.
     if (this._entityType) {
-      this._entityFrame = SessionManager.pushEntity(this._entityType, this.name);
+      this._entityFrame = new EntityFrame(this.name);
     }
 
     const tracer = this.tracer || trace.getTracer(this.moduleName);
@@ -111,6 +123,12 @@ export class SpanWrapper {
       this._registeredName = this.name;
       if (this._entityType && this._entityFrame) {
         SessionManager.bindSpanToEntity(this.span, this._entityType, this._entityFrame);
+        // Set the entity attribute directly on the span (e.g. netra.agent.name)
+        // instead of relying on the entity stack, which is shared globally.
+        const suffix = ENTITY_TYPE_ATTR_SUFFIX[this._entityType];
+        if (suffix) {
+          this.span.setAttribute(`${Config.LIBRARY_NAME}.${suffix}`, this.name);
+        }
       }
     }
 
@@ -151,11 +169,8 @@ export class SpanWrapper {
       this.span.end();
     }
 
-    // Pop only if this wrapper pushed a frame (avoids double-end / end-without-start)
-    if (this._entityType && this._entityFrame) {
-      SessionManager.popEntity(this._entityType, this._entityFrame);
-      this._entityFrame = undefined;
-    }
+    // Clear the entity frame reference so double-end is harmless.
+    this._entityFrame = undefined;
 
     // Release the stored context so it can be GC'd
     this.activeContext = undefined;

@@ -208,11 +208,17 @@ export class SessionManager {
   /**
    * Rename `span`, keeping its entity name in sync.
    *
-   * Always updates the OpenTelemetry span name and `netra.span.name`. If the
-   * span is an entity span (bound via `bindSpanToEntity`), also re-stamps its
-   * `netra.<entity>.name` attribute and renames the entity frame so child
-   * spans started after this call inherit the new name. Already-started child
-   * spans keep the old name.
+   * Always updates the OpenTelemetry span name. If the span is an entity span
+   * (bound via `bindSpanToEntity`), also re-stamps its `netra.<entity>.name`
+   * attribute and renames the entity frame so child spans started after this
+   * call inherit the new name. Already-started child spans keep the old name.
+   *
+   * `netra.span.name` is only updated for "span" entities or unbound spans.
+   * For agent/task/workflow entities it is left untouched so it continues to
+   * reflect the enclosing `@span` context rather than the entity's own name.
+   *
+   * Clears `netra.local_blocked` so a span whose old name matched a blocking
+   * pattern is not silently dropped after being renamed to a non-blocked name.
    */
   static updateSpanName(span: Span, newName: string): void {
     const entry = spanEntityFrames.get(span);
@@ -223,9 +229,16 @@ export class SessionManager {
         span.setAttribute(`${Config.LIBRARY_NAME}.${suffix}`, newName);
       }
     }
-    // SpanWrapper / SessionSpanProcessor stamp this at start; keep it in sync
-    // even for non-entity spans (plain SPAN) where no entity suffix applies.
-    span.setAttribute(`${Config.LIBRARY_NAME}.span.name`, newName);
+    // Only update netra.span.name when the span IS a "span" entity or has no
+    // entity binding (plain SPAN). For agent/task/workflow entities,
+    // netra.span.name reflects the enclosing @span context they are inside and
+    // must not be overwritten by the entity rename.
+    if (!entry || entry.entityType === "span") {
+      span.setAttribute(`${Config.LIBRARY_NAME}.span.name`, newName);
+    }
+    // Clear the local-blocked flag so a span renamed away from a blocked
+    // pattern is not silently dropped at export time (Issue 3).
+    span.setAttribute("netra.local_blocked", false);
     span.updateName(newName);
   }
 
