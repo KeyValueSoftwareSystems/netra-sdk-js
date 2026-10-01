@@ -208,10 +208,11 @@ export class SessionManager {
   /**
    * Rename `span`, keeping its entity name in sync.
    *
-   * Always updates the OpenTelemetry span name. If the span is an entity span
-   * (bound via `bindSpanToEntity`), also re-stamps its `netra.<entity>.name`
-   * attribute and renames the entity frame so child spans started after this
-   * call inherit the new name. Already-started child spans keep the old name.
+   * Always updates the OpenTelemetry span name and `netra.span.name`. If the
+   * span is an entity span (bound via `bindSpanToEntity`), also re-stamps its
+   * `netra.<entity>.name` attribute and renames the entity frame so child
+   * spans started after this call inherit the new name. Already-started child
+   * spans keep the old name.
    */
   static updateSpanName(span: Span, newName: string): void {
     const entry = spanEntityFrames.get(span);
@@ -222,6 +223,9 @@ export class SessionManager {
         span.setAttribute(`${Config.LIBRARY_NAME}.${suffix}`, newName);
       }
     }
+    // SpanWrapper / SessionSpanProcessor stamp this at start; keep it in sync
+    // even for non-entity spans (plain SPAN) where no entity suffix applies.
+    span.setAttribute(`${Config.LIBRARY_NAME}.span.name`, newName);
     span.updateName(newName);
   }
 

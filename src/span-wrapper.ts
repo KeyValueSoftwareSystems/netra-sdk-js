@@ -195,6 +195,8 @@ export class SpanWrapper {
       SessionManager.updateSpanName(this.span, newName);
     }
     this.name = newName;
+    // Keep wrapper attrs in sync so end() does not re-stamp the old name.
+    this.attributes["netra.span.name"] = newName;
     return this;
   }
 
