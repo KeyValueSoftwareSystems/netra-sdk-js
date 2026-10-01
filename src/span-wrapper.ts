@@ -11,9 +11,29 @@ import {
   trace,
 } from "@opentelemetry/api";
 import { Config } from "./config";
+import { Logger } from "./logger";
 import { LOCAL_BLOCKED_SPANS_BAGGAGE_KEY } from "./processors/localfiltering-span-processor";
-import { SessionManager } from "./session-manager";
+import { EntityFrame, SessionManager } from "./session-manager";
 import { ActionModel, SpanAttributes, SpanType, UsageModel } from "./types";
+
+/**
+ * Maps SpanType to the entity type used by SessionManager for entity stacks.
+ * Only AGENT and TOOL span types have entity semantics.
+ */
+const SPAN_TYPE_TO_ENTITY_TYPE: Partial<Record<SpanType, string>> = {
+  [SpanType.AGENT]: "agent",
+  [SpanType.TOOL]: "task",
+};
+
+/**
+ * Maps entity type to the `netra.<suffix>` attribute key that carries
+ * its name onto spans. Used to set the entity attribute directly on the
+ * span without pushing to the global entity stack.
+ */
+const ENTITY_TYPE_ATTR_SUFFIX: Record<string, string> = {
+  agent: "agent.name",
+  task: "task.name",
+};
 
 export class SpanWrapper {
   private name: string;
@@ -27,6 +47,11 @@ export class SpanWrapper {
   private activeContext?: ReturnType<typeof context.active>;
   private tracer?: any;
   private blockedSpanPatterns?: string[];
+  private _entityType?: string;
+  private _entityFrame?: EntityFrame;
+  /** Name the span was registered under at start(); end() unregisters
+   *  under it because updateSpanName changes this.name, not the registry key. */
+  private _registeredName?: string;
 
   constructor(
     name: string,
@@ -42,10 +67,18 @@ export class SpanWrapper {
     this.attributes["netra.span.type"] = asType;
     this.tracer = tracer;
     this.blockedSpanPatterns = blockedSpanPatterns;
+    this._entityType = SPAN_TYPE_TO_ENTITY_TYPE[asType];
   }
 
   start(): this {
     this.startTime = Date.now();
+
+    // Create entity frame for rename support (bindSpanToEntity) without
+    // pushing to the global entity stack. Pushing would leak the entry to
+    // concurrent requests and persist indefinitely if .end() is never called.
+    if (this._entityType) {
+      this._entityFrame = new EntityFrame(this.name);
+    }
 
     const tracer = this.tracer || trace.getTracer(this.moduleName);
 
@@ -87,6 +120,16 @@ export class SpanWrapper {
     if (this.span) {
       this.activeContext = trace.setSpan(ctx, this.span);
       SessionManager.registerSpan(this.name, this.span);
+      this._registeredName = this.name;
+      if (this._entityType && this._entityFrame) {
+        SessionManager.bindSpanToEntity(this.span, this._entityType, this._entityFrame);
+        // Set the entity attribute directly on the span (e.g. netra.agent.name)
+        // instead of relying on the entity stack, which is shared globally.
+        const suffix = ENTITY_TYPE_ATTR_SUFFIX[this._entityType];
+        if (suffix) {
+          this.span.setAttribute(`${Config.LIBRARY_NAME}.${suffix}`, this.name);
+        }
+      }
     }
 
     return this;
@@ -122,9 +165,12 @@ export class SpanWrapper {
         }
       }
 
-      SessionManager.unregisterSpan(this.name, this.span);
+      SessionManager.unregisterSpan(this._registeredName ?? this.name, this.span);
       this.span.end();
     }
+
+    // Clear the entity frame reference so double-end is harmless.
+    this._entityFrame = undefined;
 
     // Release the stored context so it can be GC'd
     this.activeContext = undefined;
@@ -137,6 +183,35 @@ export class SpanWrapper {
     if (this.span) {
       this.span.setAttribute(key, value);
     }
+    return this;
+  }
+
+  /**
+   * Rename this span, keeping its entity name in sync.
+   *
+   * Use this when a span is opened under a placeholder (e.g. an id) and the
+   * human-readable name only becomes known later. For AGENT / TOOL spans it
+   * also updates `netra.agent.name` / `netra.task.name` on this span and on
+   * child spans started *after* this call.
+   *
+   * Child spans that already started keep the old entity name (it was stamped
+   * at their start). Called before the span is started, it changes the name
+   * the span will start with.
+   *
+   * @param newName - The new span name. A non-string or empty value is ignored.
+   * @returns The span wrapper (for chaining).
+   */
+  updateSpanName(newName: string): this {
+    if (typeof newName !== "string" || !newName) {
+      Logger.warn("updateSpanName: newName must be a non-empty string; ignoring");
+      return this;
+    }
+    if (this.span) {
+      SessionManager.updateSpanName(this.span, newName);
+    }
+    this.name = newName;
+    // Keep wrapper attrs in sync so end() does not re-stamp the old name.
+    this.attributes["netra.span.name"] = newName;
     return this;
   }
 

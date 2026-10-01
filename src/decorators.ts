@@ -5,7 +5,7 @@
 import { context, trace, Span, SpanStatusCode } from "@opentelemetry/api";
 import { Config } from "./config";
 import { Logger } from "./logger";
-import { SessionManager } from "./session-manager";
+import { EntityFrame, SessionManager } from "./session-manager";
 import { SpanType, DecoratorOptions } from "./types";
 import { wrapResponse } from "./utils/response-handler";
 import { safeStringify } from "./utils/serialization";
@@ -78,9 +78,12 @@ function createFunctionWrapper<T extends AnyFunction>(
   const spanName = name || func.name || "anonymous";
   const isAsync = func.constructor.name === "AsyncFunction";
 
-  const initSpan = (span: Span): void => {
+  const initSpan = (span: Span, entityFrame?: EntityFrame): void => {
     span.setAttribute("netra.span.type", asType);
     SessionManager.registerSpan(spanName, span);
+    if (entityFrame) {
+      SessionManager.bindSpanToEntity(span, entityType, entityFrame);
+    }
   };
 
   const recordError = (span: Span, e: any) => {
@@ -92,19 +95,19 @@ function createFunctionWrapper<T extends AnyFunction>(
     span.recordException(e);
   };
 
-  const cleanup = (span: Span) => {
+  const cleanup = (span: Span, entityFrame?: EntityFrame) => {
     span.end();
     SessionManager.unregisterSpan(spanName, span);
-    SessionManager.popEntity(entityType);
+    SessionManager.popEntity(entityType, entityFrame);
   };
 
   const wrapperFn = isAsync
     ? async function (this: any, ...args: any[]) {
-        SessionManager.pushEntity(entityType, spanName);
+        const entityFrame = SessionManager.pushEntity(entityType, spanName);
         const tracer = trace.getTracer(moduleName);
         return tracer.startActiveSpan(spanName, async (span) => {
           try {
-            initSpan(span);
+            initSpan(span, entityFrame);
             addInputAttributes(span, args, entityType);
             const result = await (func as AsyncFunction).call(this, ...args);
             const spanCtx = trace.setSpan(context.active(), span);
@@ -112,21 +115,21 @@ function createFunctionWrapper<T extends AnyFunction>(
               withContext: (fn) => context.with(spanCtx, fn),
               onError: (e) => recordError(span, e),
               onSuccess: (value) => addOutputAttributes(span, value),
-              finalize: () => cleanup(span),
+              finalize: () => cleanup(span, entityFrame),
             });
           } catch (e: any) {
             recordError(span, e);
-            cleanup(span);
+            cleanup(span, entityFrame);
             throw e;
           }
         });
       }
     : function (this: any, ...args: any[]) {
-        SessionManager.pushEntity(entityType, spanName);
+        const entityFrame = SessionManager.pushEntity(entityType, spanName);
         const tracer = trace.getTracer(moduleName);
         return tracer.startActiveSpan(spanName, (span) => {
           try {
-            initSpan(span);
+            initSpan(span, entityFrame);
             addInputAttributes(span, args, entityType);
             const result = (func as AnyFunction).call(this, ...args);
             const spanCtx = trace.setSpan(context.active(), span);
@@ -134,11 +137,11 @@ function createFunctionWrapper<T extends AnyFunction>(
               withContext: (fn) => context.with(spanCtx, fn),
               onError: (e) => recordError(span, e),
               onSuccess: (value) => addOutputAttributes(span, value),
-              finalize: () => cleanup(span),
+              finalize: () => cleanup(span, entityFrame),
             });
           } catch (e: any) {
             recordError(span, e);
-            cleanup(span);
+            cleanup(span, entityFrame);
             throw e;
           }
         });
