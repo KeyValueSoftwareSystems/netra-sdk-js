@@ -499,10 +499,10 @@ export function setResponseAttributes(
     span.setAttribute(SpanAttributes.LLM_RESPONSE_MODEL, String(model));
   }
 
-  // Tokenusage
+  // Token usage
   setUsageAttributes(span, response);
 
-  // Finish reason (from firstchoice)
+  // Finish reason (from first choice)
   setFinishReason(span, response);
 
   // Embeddingmetadata
