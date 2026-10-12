@@ -1,8 +1,11 @@
-import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
-import { Serialized } from "@langchain/core/load/serializable";
-import { LLMResult } from "@langchain/core/outputs";
-import { RunnableConfig } from "@langchain/core/runnables";
-import { ChainValues } from "@langchain/core/utils/types";
+// Type-only imports: @langchain/core is an optional peer dependency and must
+// not be bundled. BaseCallbackHandler is resolved from the app's own copy at
+// instrument time (see loadLanggraphCallbackHandler).
+import type { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import type { Serialized } from "@langchain/core/load/serializable";
+import type { LLMResult } from "@langchain/core/outputs";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import type { ChainValues } from "@langchain/core/utils/types";
 import {
   Span,
   SpanKind,
@@ -12,6 +15,8 @@ import {
   trace,
   createContextKey,
 } from "@opentelemetry/api";
+
+import { createRequire } from "module";
 
 import { Logger } from "../../logger";
 import {
@@ -76,311 +81,349 @@ import {
 type AnyFunc = (...args: any[]) => any;
 type AsyncIterableFunc = (...args: any[]) => Promise<AsyncIterable<any>>;
 
-class NetraLanggraphCallbackHandler extends BaseCallbackHandler {
-  name = "netra-langgraph-callback-handler";
-  // Map runId -> Span for explicit parenting
-  private spans: Map<string, Span> = new Map();
-  private nodeAttributes: Map<string, Record<string, any>> = new Map();
-  private runStack: string[] = [];
-  private inferredParents: Map<string, string> = new Map();
+type CallbackHandlerClass = new (tracer: Tracer, rootSpan: Span) => BaseCallbackHandler;
 
-  constructor(
-    private tracer: Tracer,
-    private rootSpan: Span,
-  ) {
-    super();
+let NetraLanggraphCallbackHandler: CallbackHandlerClass | null = null;
+
+/**
+ * Resolve `BaseCallbackHandler` from the application's `@langchain/core`
+ * (ESM first, CJS fallback) and build the Netra callback handler on top of it.
+ * Returns false if `@langchain/core` is not available.
+ */
+export async function loadLanggraphCallbackHandler(): Promise<boolean> {
+  if (NetraLanggraphCallbackHandler) return true;
+
+  let Base: typeof BaseCallbackHandler | undefined;
+  try {
+    Base = (await import("@langchain/core/callbacks/base")).BaseCallbackHandler;
+  } catch {
+    Logger.debug("@langchain/core: ESM import not available");
   }
-
-  private getParentSpan(parentRunId?: string): Span {
-    if (parentRunId && this.spans.has(parentRunId)) {
-      return this.spans.get(parentRunId)!;
-    }
-    return this.rootSpan;
-  }
-
-  private addNodeAttributes(runId: string, attributes: Record<string, any>) {
-    const current = this.nodeAttributes.get(runId) || {};
-    this.nodeAttributes.set(runId, { ...current, ...attributes });
-  }
-
-  private inferParentRunId(parentRunId?: string): string | undefined {
-    if (parentRunId) return parentRunId;
-    return this.runStack.length > 0
-      ? this.runStack[this.runStack.length - 1]
-      : undefined;
-  }
-
-  private pushRun(runId: string): void {
-    this.runStack.push(runId);
-  }
-
-  private popRun(runId: string): void {
-    const last = this.runStack[this.runStack.length - 1];
-    if (last === runId) {
-      this.runStack.pop();
-      return;
-    }
-    const idx = this.runStack.lastIndexOf(runId);
-    if (idx >= 0) {
-      this.runStack.splice(idx, 1);
-    }
-  }
-
-  async handleChainStart(
-    chain: Serialized,
-    inputs: ChainValues,
-    runId: string,
-    parentRunId?: string,
-    tags?: string[],
-    metadata?: Record<string, unknown>,
-    runName?: string,
-    runType?: string,
-  ) {
-    const metadataNodeName =
-      typeof metadata?.langgraph_node === "string"
-        ? (metadata.langgraph_node as string)
-        : "";
-    const runNameValue = typeof runName === "string" ? runName : "";
-    const chainIdName =
-      Array.isArray(chain.id) && chain.id.length > 0
-        ? chain.id[chain.id.length - 1]
-        : "";
-    const nodeName = metadataNodeName || runNameValue || chainIdName || "Chain";
-    const nodeType = chainIdName || "Unknown";
-
-    const metadataKeys =
-      metadata && typeof metadata === "object"
-        ? Object.keys(metadata as Record<string, unknown>).join(",")
-        : "n/a";
-    Logger.debug(
-      `NetraLanggraph handleChainStart: runId=${runId} parentRunId=${parentRunId} nodeName=${nodeName} nodeType=${nodeType} runName=${runNameValue || "n/a"} metadataKeys=${metadataKeys}`,
-    );
-
-    if (
-      !nodeName ||
-      ["__start__"].includes(nodeName.toLowerCase())
-    ) {
-      return;
-    }
-
-    const effectiveParentRunId = this.inferParentRunId(parentRunId);
-    if (
-      !parentRunId &&
-      effectiveParentRunId &&
-      effectiveParentRunId !== runId
-    ) {
-      this.inferredParents.set(runId, effectiveParentRunId);
-      Logger.debug(`NetraLanggraph inferred parent: runId=${runId} parentRunId=${effectiveParentRunId}`);
-    }
-
-    const parentSpan = this.getParentSpan(effectiveParentRunId);
-
-    // Create span parented to the correct node/workflow
-    const ctx = trace.setSpan(context.active(), parentSpan);
-    const span = this.tracer.startSpan(`${nodeName}.task`, undefined, ctx);
-
-    setChainInputAttributes(span, inputs, tags, metadata);
-
-    this.spans.set(runId, span);
-    this.pushRun(runId);
-  }
-
-  async handleChainEnd(
-    outputs: ChainValues,
-    runId: string,
-    parentRunId?: string,
-    tags?: string[],
-    kwargs?: { inputs?: Record<string, unknown> },
-  ) {
-    const span = this.spans.get(runId);
-    if (!span) return;
-
-    setChainOutputAttributes(span, outputs, tags);
-    span.end();
-    this.spans.delete(runId);
-    this.nodeAttributes.delete(runId);
-    this.inferredParents.delete(runId);
-    this.popRun(runId);
-  }
-
-  async handleChainError(
-    err: any,
-    runId: string,
-    parentRunId?: string,
-    tags?: string[],
-    kwargs?: { inputs?: Record<string, unknown> },
-  ) {
-    const span = this.spans.get(runId);
-    if (!span) return;
-    span.recordException(err);
-    span.end();
-    this.spans.delete(runId);
-    this.nodeAttributes.delete(runId);
-    this.inferredParents.delete(runId);
-    this.popRun(runId);
-  }
-
-  async handleLLMStart(
-    llm: Serialized,
-    prompts: string[],
-    runId: string,
-    parentRunId?: string,
-    extraParams?: Record<string, unknown>,
-    tags?: string[],
-    metadata?: Record<string, unknown>,
-    runName?: string,
-  ) {
-    const effectiveParentRunId =
-      parentRunId ?? this.inferParentRunId(parentRunId);
-    {
-      const llmId = llm.id?.[llm.id.length - 1] || "llm";
-      Logger.debug(`NetraLanggraph handleLLMStart: runId=${runId} parentRunId=${effectiveParentRunId} llmId=${llmId}`);
-    }
-    this.addNodeAttributes(runId, {
-      llmIds: llm.id,
-      metadata,
-      prompts,
-      extraParams,
-      parentRunId: effectiveParentRunId, // Store parent ID to link back
-    });
-  }
-
-  async handleLLMEnd(
-    output: LLMResult,
-    runId: string,
-    parentRunId?: string,
-  ): Promise<void> {
-    const attributes = this.nodeAttributes.get(runId);
-    if (!attributes) return;
-
-    const response = (output?.generations?.[0]?.[0] as any)?.message;
-    const llmIds = attributes.llmIds ?? [];
-    const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
-
-    const effectiveParentRunId =
-      parentRunId ??
-      attributes.parentRunId ??
-      this.inferredParents.get(runId);
-    const parentSpan = this.getParentSpan(effectiveParentRunId);
-    const ctx = trace.setSpan(context.active(), parentSpan);
-
-    const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
-    setLlmRequestAttributes(
-      span,
-      attributes.metadata,
-      attributes.prompts,
-      attributes.extraParams,
-    );
-    setBaseResponseAttributes(span, response);
-    span.end();
-
-    this.nodeAttributes.delete(runId);
-  }
-
-  async handleLLMError(
-    err: any,
-    runId: string,
-    parentRunId?: string,
-    tags?: string[],
-    extraParams?: Record<string, unknown>,
-  ) {
-    const attributes = this.nodeAttributes.get(runId);
-    if (!attributes) return;
-
-    const llmIds = attributes.llmIds ?? [];
-    const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
-
-    const effectiveParentRunId =
-      parentRunId ??
-      attributes.parentRunId ??
-      this.inferredParents.get(runId);
-    const parentSpan = this.getParentSpan(effectiveParentRunId);
-    const ctx = trace.setSpan(context.active(), parentSpan);
-
-    const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
-    span.recordException(err);
-    span.end();
-
-    this.nodeAttributes.delete(runId);
-  }
-
-  async handleToolStart(
-    tool: Serialized,
-    input: string,
-    runId: string,
-    parentRunId?: string,
-    tags?: string[],
-    metadata?: Record<string, unknown>,
-    runName?: string,
-  ) {
-    let parsedInput: Record<string | number, any>;
+  if (!Base) {
     try {
-      parsedInput = JSON.parse(input);
+      const req = createRequire(import.meta.url);
+      Base = req("@langchain/core/callbacks/base").BaseCallbackHandler;
     } catch {
-      parsedInput = {};
+      Logger.debug("@langchain/core: CJS require not available");
     }
-
-    const effectiveParentRunId =
-      parentRunId ?? this.inferParentRunId(parentRunId);
-    {
-      const toolName = tool.id?.[tool.id.length - 1] || "tool";
-      Logger.debug(`NetraLanggraph handleToolStart: runId=${runId} parentRunId=${effectiveParentRunId} tool=${toolName}`);
-    }
-    this.addNodeAttributes(runId, {
-      input: parsedInput,
-      metadata,
-      tags,
-      parentRunId: effectiveParentRunId,
-    });
+  }
+  if (!Base) {
+    return false;
   }
 
-  async handleToolEnd(
-    output: any,
-    runId: string,
-    parentRunId?: string,
-    tags?: string[],
-  ) {
-    const attributes = this.nodeAttributes.get(runId);
-    if (!attributes) return;
+  NetraLanggraphCallbackHandler = createCallbackHandlerClass(Base);
+  return true;
+}
 
-    const toolName = attributes?.input?.name ?? "custom";
-    const { input, metadata } = attributes;
+function createCallbackHandlerClass(
+  Base: typeof BaseCallbackHandler,
+): CallbackHandlerClass {
+  return class NetraLanggraphCallbackHandler extends Base {
+    name = "netra-langgraph-callback-handler";
+    // Map runId -> Span for explicit parenting
+    private spans: Map<string, Span> = new Map();
+    private nodeAttributes: Map<string, Record<string, any>> = new Map();
+    private runStack: string[] = [];
+    private inferredParents: Map<string, string> = new Map();
 
-    const effectiveParentRunId =
-      parentRunId ??
-      attributes.parentRunId ??
-      this.inferredParents.get(runId);
-    const parentSpan = this.getParentSpan(effectiveParentRunId);
-    const ctx = trace.setSpan(context.active(), parentSpan);
+    constructor(
+      private tracer: Tracer,
+      private rootSpan: Span,
+    ) {
+      super();
+    }
 
-    const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
-    setToolAttributes(span, toolName, input ?? {}, output, metadata, tags);
-    span.end();
+    private getParentSpan(parentRunId?: string): Span {
+      if (parentRunId && this.spans.has(parentRunId)) {
+        return this.spans.get(parentRunId)!;
+      }
+      return this.rootSpan;
+    }
 
-    this.nodeAttributes.delete(runId);
-  }
+    private addNodeAttributes(runId: string, attributes: Record<string, any>) {
+      const current = this.nodeAttributes.get(runId) || {};
+      this.nodeAttributes.set(runId, { ...current, ...attributes });
+    }
 
-  async handleToolError(
-    err: any,
-    runId: string,
-    parentRunId?: string,
-    tags?: string[],
-  ) {
-    const attributes = this.nodeAttributes.get(runId);
-    if (!attributes) return;
+    private inferParentRunId(parentRunId?: string): string | undefined {
+      if (parentRunId) return parentRunId;
+      return this.runStack.length > 0
+        ? this.runStack[this.runStack.length - 1]
+        : undefined;
+    }
 
-    const toolName = attributes?.input?.name ?? "custom";
-    const effectiveParentRunId =
-      parentRunId ??
-      attributes.parentRunId ??
-      this.inferredParents.get(runId);
-    const parentSpan = this.getParentSpan(effectiveParentRunId);
-    const ctx = trace.setSpan(context.active(), parentSpan);
-    const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
-    span.recordException(err);
-    span.end();
+    private pushRun(runId: string): void {
+      this.runStack.push(runId);
+    }
 
-    this.nodeAttributes.delete(runId);
+    private popRun(runId: string): void {
+      const last = this.runStack[this.runStack.length - 1];
+      if (last === runId) {
+        this.runStack.pop();
+        return;
+      }
+      const idx = this.runStack.lastIndexOf(runId);
+      if (idx >= 0) {
+        this.runStack.splice(idx, 1);
+      }
+    }
+
+    async handleChainStart(
+      chain: Serialized,
+      inputs: ChainValues,
+      runId: string,
+      parentRunId?: string,
+      tags?: string[],
+      metadata?: Record<string, unknown>,
+      runName?: string,
+      runType?: string,
+    ) {
+      const metadataNodeName =
+        typeof metadata?.langgraph_node === "string"
+          ? (metadata.langgraph_node as string)
+          : "";
+      const runNameValue = typeof runName === "string" ? runName : "";
+      const chainIdName =
+        Array.isArray(chain.id) && chain.id.length > 0
+          ? chain.id[chain.id.length - 1]
+          : "";
+      const nodeName = metadataNodeName || runNameValue || chainIdName || "Chain";
+      const nodeType = chainIdName || "Unknown";
+
+      const metadataKeys =
+        metadata && typeof metadata === "object"
+          ? Object.keys(metadata as Record<string, unknown>).join(",")
+          : "n/a";
+      Logger.debug(
+        `NetraLanggraph handleChainStart: runId=${runId} parentRunId=${parentRunId} nodeName=${nodeName} nodeType=${nodeType} runName=${runNameValue || "n/a"} metadataKeys=${metadataKeys}`,
+      );
+
+      if (
+        !nodeName ||
+        ["__start__"].includes(nodeName.toLowerCase())
+      ) {
+        return;
+      }
+
+      const effectiveParentRunId = this.inferParentRunId(parentRunId);
+      if (
+        !parentRunId &&
+        effectiveParentRunId &&
+        effectiveParentRunId !== runId
+      ) {
+        this.inferredParents.set(runId, effectiveParentRunId);
+        Logger.debug(`NetraLanggraph inferred parent: runId=${runId} parentRunId=${effectiveParentRunId}`);
+      }
+
+      const parentSpan = this.getParentSpan(effectiveParentRunId);
+
+      // Create span parented to the correct node/workflow
+      const ctx = trace.setSpan(context.active(), parentSpan);
+      const span = this.tracer.startSpan(`${nodeName}.task`, undefined, ctx);
+
+      setChainInputAttributes(span, inputs, tags, metadata);
+
+      this.spans.set(runId, span);
+      this.pushRun(runId);
+    }
+
+    async handleChainEnd(
+      outputs: ChainValues,
+      runId: string,
+      parentRunId?: string,
+      tags?: string[],
+      kwargs?: { inputs?: Record<string, unknown> },
+    ) {
+      const span = this.spans.get(runId);
+      if (!span) return;
+
+      setChainOutputAttributes(span, outputs, tags);
+      span.end();
+      this.spans.delete(runId);
+      this.nodeAttributes.delete(runId);
+      this.inferredParents.delete(runId);
+      this.popRun(runId);
+    }
+
+    async handleChainError(
+      err: any,
+      runId: string,
+      parentRunId?: string,
+      tags?: string[],
+      kwargs?: { inputs?: Record<string, unknown> },
+    ) {
+      const span = this.spans.get(runId);
+      if (!span) return;
+      span.recordException(err);
+      span.end();
+      this.spans.delete(runId);
+      this.nodeAttributes.delete(runId);
+      this.inferredParents.delete(runId);
+      this.popRun(runId);
+    }
+
+    async handleLLMStart(
+      llm: Serialized,
+      prompts: string[],
+      runId: string,
+      parentRunId?: string,
+      extraParams?: Record<string, unknown>,
+      tags?: string[],
+      metadata?: Record<string, unknown>,
+      runName?: string,
+    ) {
+      const effectiveParentRunId =
+        parentRunId ?? this.inferParentRunId(parentRunId);
+      {
+        const llmId = llm.id?.[llm.id.length - 1] || "llm";
+        Logger.debug(`NetraLanggraph handleLLMStart: runId=${runId} parentRunId=${effectiveParentRunId} llmId=${llmId}`);
+      }
+      this.addNodeAttributes(runId, {
+        llmIds: llm.id,
+        metadata,
+        prompts,
+        extraParams,
+        parentRunId: effectiveParentRunId, // Store parent ID to link back
+      });
+    }
+
+    async handleLLMEnd(
+      output: LLMResult,
+      runId: string,
+      parentRunId?: string,
+    ): Promise<void> {
+      const attributes = this.nodeAttributes.get(runId);
+      if (!attributes) return;
+
+      const response = (output?.generations?.[0]?.[0] as any)?.message;
+      const llmIds = attributes.llmIds ?? [];
+      const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
+
+      const effectiveParentRunId =
+        parentRunId ??
+        attributes.parentRunId ??
+        this.inferredParents.get(runId);
+      const parentSpan = this.getParentSpan(effectiveParentRunId);
+      const ctx = trace.setSpan(context.active(), parentSpan);
+
+      const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
+      setLlmRequestAttributes(
+        span,
+        attributes.metadata,
+        attributes.prompts,
+        attributes.extraParams,
+      );
+      setBaseResponseAttributes(span, response);
+      span.end();
+
+      this.nodeAttributes.delete(runId);
+    }
+
+    async handleLLMError(
+      err: any,
+      runId: string,
+      parentRunId?: string,
+      tags?: string[],
+      extraParams?: Record<string, unknown>,
+    ) {
+      const attributes = this.nodeAttributes.get(runId);
+      if (!attributes) return;
+
+      const llmIds = attributes.llmIds ?? [];
+      const llmId = llmIds?.length > 0 ? llmIds[llmIds.length - 1] : "llm";
+
+      const effectiveParentRunId =
+        parentRunId ??
+        attributes.parentRunId ??
+        this.inferredParents.get(runId);
+      const parentSpan = this.getParentSpan(effectiveParentRunId);
+      const ctx = trace.setSpan(context.active(), parentSpan);
+
+      const span = this.tracer.startSpan(`${llmId}.task`, undefined, ctx);
+      span.recordException(err);
+      span.end();
+
+      this.nodeAttributes.delete(runId);
+    }
+
+    async handleToolStart(
+      tool: Serialized,
+      input: string,
+      runId: string,
+      parentRunId?: string,
+      tags?: string[],
+      metadata?: Record<string, unknown>,
+      runName?: string,
+    ) {
+      let parsedInput: Record<string | number, any>;
+      try {
+        parsedInput = JSON.parse(input);
+      } catch {
+        parsedInput = {};
+      }
+
+      const effectiveParentRunId =
+        parentRunId ?? this.inferParentRunId(parentRunId);
+      {
+        const toolName = tool.id?.[tool.id.length - 1] || "tool";
+        Logger.debug(`NetraLanggraph handleToolStart: runId=${runId} parentRunId=${effectiveParentRunId} tool=${toolName}`);
+      }
+      this.addNodeAttributes(runId, {
+        input: parsedInput,
+        metadata,
+        tags,
+        parentRunId: effectiveParentRunId,
+      });
+    }
+
+    async handleToolEnd(
+      output: any,
+      runId: string,
+      parentRunId?: string,
+      tags?: string[],
+    ) {
+      const attributes = this.nodeAttributes.get(runId);
+      if (!attributes) return;
+
+      const toolName = attributes?.input?.name ?? "custom";
+      const { input, metadata } = attributes;
+
+      const effectiveParentRunId =
+        parentRunId ??
+        attributes.parentRunId ??
+        this.inferredParents.get(runId);
+      const parentSpan = this.getParentSpan(effectiveParentRunId);
+      const ctx = trace.setSpan(context.active(), parentSpan);
+
+      const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
+      setToolAttributes(span, toolName, input ?? {}, output, metadata, tags);
+      span.end();
+
+      this.nodeAttributes.delete(runId);
+    }
+
+    async handleToolError(
+      err: any,
+      runId: string,
+      parentRunId?: string,
+      tags?: string[],
+    ) {
+      const attributes = this.nodeAttributes.get(runId);
+      if (!attributes) return;
+
+      const toolName = attributes?.input?.name ?? "custom";
+      const effectiveParentRunId =
+        parentRunId ??
+        attributes.parentRunId ??
+        this.inferredParents.get(runId);
+      const parentSpan = this.getParentSpan(effectiveParentRunId);
+      const ctx = trace.setSpan(context.active(), parentSpan);
+      const span = this.tracer.startSpan(`${toolName}.tool`, undefined, ctx);
+      span.recordException(err);
+      span.end();
+
+      this.nodeAttributes.delete(runId);
+    }
   }
 }
 
@@ -453,7 +496,7 @@ export class LanggraphWrapper {
     config?: RunnableConfig,
     rootSpan?: Span,
   ): RunnableConfig {
-    if (!rootSpan) return config || {};
+    if (!rootSpan || !NetraLanggraphCallbackHandler) return config || {};
 
     const callbackHandler = new NetraLanggraphCallbackHandler(
       this.tracer,

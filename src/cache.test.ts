@@ -52,4 +52,16 @@ describe("TTLCache", () => {
     expect(cache.get("a")).toBeUndefined();
     expect(cache.get("b")).toBe("2");
   });
+
+  it("returns copies so mutations do not leak into the cache", () => {
+    const cache = new TTLCache<{ items: string[] }>(60);
+    const original = { items: ["a"] };
+    cache.set("key", original);
+    original.items.push("mutated-after-set");
+
+    const first = cache.get("key")!;
+    first.items.push("mutated-after-get");
+
+    expect(cache.get("key")).toEqual({ items: ["a"] });
+  });
 });

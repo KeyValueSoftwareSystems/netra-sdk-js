@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from "axios";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { apiPath } from "../utils/api-path";
 import { injectTraceContextHeaders } from "../utils/context-propagation";
 import { ConversationResponse, SimulationItem } from "./models";
 import { parseFiles } from "./utils";
@@ -176,7 +177,7 @@ export class SimulationHttpClient {
         }
 
         try {
-            const url = `/evaluations/run/${runId}/item/${runItemId}/first-turn`;
+            const url = apiPath`/evaluations/run/${runId}/item/${runItemId}/first-turn`;
             const response: AxiosResponse = await this.client.post(url, {});
             const data = response.data;
 
@@ -280,7 +281,7 @@ export class SimulationHttpClient {
         }
 
         try {
-            const url = `/evaluations/run/${runId}/item/${runItemId}/status`;
+            const url = apiPath`/evaluations/run/${runId}/item/${runItemId}/status`;
             const payload = { status, failureReason: error };
             await this.client.patch(url, payload);
             Logger.info(`${LOG_PREFIX}: Reported failure - ${error}`);
@@ -302,7 +303,7 @@ export class SimulationHttpClient {
         }
 
         try {
-            const url = `/evaluations/run/${runId}/status`;
+            const url = apiPath`/evaluations/run/${runId}/status`;
             const payload = { status };
             const response: AxiosResponse = await this.client.post(url, payload);
             const data = response.data;

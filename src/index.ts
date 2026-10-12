@@ -152,6 +152,14 @@ export class Netra {
   private static _config: Config | undefined;
   private static _tracer: any;
   private static _metricsEnabled = false;
+  private static _shutdownPromise: Promise<void> | undefined;
+  private static _shutdownHooks:
+    | {
+        beforeExit: () => void;
+        signal: (signal: NodeJS.Signals) => void;
+        uncaughtException: (error: Error) => void;
+      }
+    | undefined;
 
   static usage: Usage;
   static evaluation: Evaluation;
@@ -175,6 +183,10 @@ export class Netra {
    * Initialize the Netra SDK.
    */
   static async init(config: NetraConfig = {}): Promise<void> {
+    // Let an in-flight shutdown finish so it can't tear down this new init.
+    if (this._shutdownPromise) {
+      await this._shutdownPromise;
+    }
     if (this._initialized) {
       Logger.warn("Netra.init() called more than once; ignoring subsequent calls.");
       return;
@@ -253,46 +265,94 @@ export class Netra {
       );
     }
 
-    // Graceful shutdown logic
-    const handleSignal = async (signal: string) => {
-      Logger.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
-      await this.shutdown();
-      process.exit(0);
-    };
-
-    const handleUncaughtException = async (error: Error) => {
-      Logger.error("Uncaught exception:", error);
-      Logger.error("Shutting down Netra SDK due to crash...");
-      try {
-        await this.shutdown();
-      } catch (err) {
-        Logger.error("Error during crash shutdown:", err);
-      }
-      process.exit(1);
-    };
-
-    // Handle process running out of work
-    process.once("beforeExit", async () => {
-      // beforeExit can be called multiple times if the loop fills up again
-      // but for our purpose, we just want to ensure flush happens if the script finishes
-      await this.shutdown();
-    });
-
-    // Handle termination signals
-    process.once("SIGINT", () => handleSignal("SIGINT"));
-    process.once("SIGTERM", () => handleSignal("SIGTERM"));
-
-    // Handle crashes
-    process.once("uncaughtException", handleUncaughtException);
+    if (config.registerShutdownHooks !== false) {
+      this._registerShutdownHooks();
+    }
 
     // Wait for all async instrumentations to be ready
     await instrumentationsReady;
   }
 
-  static async shutdown(): Promise<void> {
-    if (!this._initialized) {
+  /**
+   * Flush spans when the host process is going away, without taking over
+   * the process lifecycle: the SDK never decides when (or with which code)
+   * the process exits. Once flushed, if no other listener is handling the
+   * event, Node's default behaviour is restored (the signal is re-raised so
+   * the exit code is 128+n; an uncaught exception exits with code 1).
+   */
+  private static _registerShutdownHooks(): void {
+    if (this._shutdownHooks) {
       return;
     }
+
+    const signal = (sig: NodeJS.Signals) => {
+      Logger.log(`\nReceived ${sig}. Flushing Netra SDK...`);
+      void this.shutdown()
+        .catch((err) => Logger.error("Error during signal shutdown:", err))
+        .finally(() => {
+          if (process.listenerCount(sig) === 0) {
+            process.kill(process.pid, sig);
+          }
+        });
+    };
+
+    const uncaughtException = (error: Error) => {
+      Logger.error("Uncaught exception; flushing Netra SDK before exit...");
+      void this.shutdown()
+        .catch((err) => Logger.error("Error during crash shutdown:", err))
+        .finally(() => {
+          if (process.listenerCount("uncaughtException") === 0) {
+            // Mirror Node's default: print the error and exit with code 1.
+            console.error(error);
+            process.exit(1);
+          }
+        });
+    };
+
+    const beforeExit = () => {
+      void this.shutdown();
+    };
+
+    this._shutdownHooks = { beforeExit, signal, uncaughtException };
+    process.once("beforeExit", beforeExit);
+    process.once("SIGINT", signal);
+    process.once("SIGTERM", signal);
+    process.once("uncaughtException", uncaughtException);
+  }
+
+  private static _removeShutdownHooks(): void {
+    const hooks = this._shutdownHooks;
+    if (!hooks) {
+      return;
+    }
+    process.removeListener("beforeExit", hooks.beforeExit);
+    process.removeListener("SIGINT", hooks.signal);
+    process.removeListener("SIGTERM", hooks.signal);
+    process.removeListener("uncaughtException", hooks.uncaughtException);
+    this._shutdownHooks = undefined;
+  }
+
+  /**
+   * Flush pending spans and release SDK resources. Safe to call more than
+   * once and from several places at the same time (e.g. the app's own SIGTERM
+   * handler while the SDK's hook is also flushing): concurrent callers share
+   * the same in-flight shutdown and all resolve once it has finished.
+   */
+  static shutdown(): Promise<void> {
+    if (this._shutdownPromise) {
+      return this._shutdownPromise;
+    }
+    if (!this._initialized) {
+      return Promise.resolve();
+    }
+    this._shutdownPromise = this._shutdown().finally(() => {
+      this._shutdownPromise = undefined;
+    });
+    return this._shutdownPromise;
+  }
+
+  private static async _shutdown(): Promise<void> {
+    this._removeShutdownHooks();
 
     // Unpatch any monkey-patched instrumentations first
     try {

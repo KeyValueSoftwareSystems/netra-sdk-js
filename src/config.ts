@@ -36,6 +36,14 @@ export interface NetraConfig {
    * to produce root spans (legacy behaviour).
    */
   rootInstruments?: Set<NetraInstruments>;
+  /**
+   * Register process hooks (`SIGINT`, `SIGTERM`, `uncaughtException`,
+   * `beforeExit`) that flush pending spans when the process is going away.
+   * The hooks never exit the process themselves while the application has
+   * its own handlers for the same event. Defaults to `true`; set to `false`
+   * to manage shutdown yourself via `Netra.shutdown()`.
+   */
+  registerShutdownHooks?: boolean;
 }
 
 export enum NetraInstruments {

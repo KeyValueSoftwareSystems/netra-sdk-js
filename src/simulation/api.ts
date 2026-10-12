@@ -99,36 +99,49 @@ export class Simulation {
             return null;
         }
 
+        // Mark the run as failed if the process is interrupted. These hooks
+        // must not change how the host process exits: signals are re-raised
+        // only when no other listener is handling them, and crashes are
+        // observed via `uncaughtExceptionMonitor`, which does not suppress
+        // Node's default crash behaviour.
         let interrupted = false;
         const proc = typeof process !== "undefined" ? process : undefined;
+        const removeHooks = () => {
+            proc?.removeListener("SIGINT", handleSignal);
+            proc?.removeListener("SIGTERM", handleSignal);
+            proc?.removeListener("uncaughtExceptionMonitor", handleException);
+            proc?.removeListener("unhandledRejection", handleRejection);
+        };
         const finalizeFailure = (signal?: NodeJS.Signals) => {
             if (interrupted) {
                 return;
             }
             interrupted = true;
-            proc?.removeListener("SIGINT", handleSignal);
-            proc?.removeListener("SIGTERM", handleSignal);
-            proc?.removeListener("uncaughtException", handleException);
-            proc?.removeListener("unhandledRejection", handleRejection);
+            removeHooks();
             void this._client.postRunStatus(runId, "failed").finally(() => {
-                if (signal) {
-                    proc?.kill(proc.pid, signal);
+                if (signal && proc && proc.listenerCount(signal) === 0) {
+                    proc.kill(proc.pid, signal);
                 }
             });
         };
-        const handleSignal = (signal: "SIGINT" | "SIGTERM") => {
+        const handleSignal = (signal: NodeJS.Signals) => {
             finalizeFailure(signal);
         };
         const handleException = () => {
             finalizeFailure();
         };
-        const handleRejection = () => {
+        const handleRejection = (reason: unknown) => {
             finalizeFailure();
+            // Having a listener suppresses Node's default (throw) behaviour
+            // for unhandled rejections; restore it if we were the only one.
+            if (proc && proc.listenerCount("unhandledRejection") === 0) {
+                throw reason;
+            }
         };
         if (proc && typeof proc.once === "function") {
             proc.once("SIGINT", handleSignal);
             proc.once("SIGTERM", handleSignal);
-            proc.once("uncaughtException", handleException);
+            proc.once("uncaughtExceptionMonitor", handleException);
             proc.once("unhandledRejection", handleRejection);
         }
 
@@ -278,10 +291,7 @@ export class Simulation {
             }
         } finally {
             if (proc && typeof proc.removeListener === "function") {
-                proc.removeListener("SIGINT", handleSignal);
-                proc.removeListener("SIGTERM", handleSignal);
-                proc.removeListener("uncaughtException", handleException);
-                proc.removeListener("unhandledRejection", handleRejection);
+                removeHooks();
             }
         }
     }
