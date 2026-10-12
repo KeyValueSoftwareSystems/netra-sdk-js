@@ -13,7 +13,12 @@ import {
 import { Config } from "./config";
 import { Logger } from "./logger";
 import { LOCAL_BLOCKED_SPANS_BAGGAGE_KEY } from "./processors/localfiltering-span-processor";
-import { EntityFrame, SessionManager } from "./session-manager";
+import {
+  ENTITY_ATTR_SUFFIXES,
+  EntityFrame,
+  runWithEntityFrame,
+  SessionManager,
+} from "./session-manager";
 import { ActionModel, SpanAttributes, SpanType, UsageModel } from "./types";
 
 /**
@@ -23,16 +28,6 @@ import { ActionModel, SpanAttributes, SpanType, UsageModel } from "./types";
 const SPAN_TYPE_TO_ENTITY_TYPE: Partial<Record<SpanType, string>> = {
   [SpanType.AGENT]: "agent",
   [SpanType.TOOL]: "task",
-};
-
-/**
- * Maps entity type to the `netra.<suffix>` attribute key that carries
- * its name onto spans. Used to set the entity attribute directly on the
- * span without pushing to the global entity stack.
- */
-const ENTITY_TYPE_ATTR_SUFFIX: Record<string, string> = {
-  agent: "agent.name",
-  task: "task.name",
 };
 
 export class SpanWrapper {
@@ -125,7 +120,7 @@ export class SpanWrapper {
         SessionManager.bindSpanToEntity(this.span, this._entityType, this._entityFrame);
         // Set the entity attribute directly on the span (e.g. netra.agent.name)
         // instead of relying on the entity stack, which is shared globally.
-        const suffix = ENTITY_TYPE_ATTR_SUFFIX[this._entityType];
+        const suffix = ENTITY_ATTR_SUFFIXES[this._entityType];
         if (suffix) {
           this.span.setAttribute(`${Config.LIBRARY_NAME}.${suffix}`, this.name);
         }
@@ -192,11 +187,13 @@ export class SpanWrapper {
    * Use this when a span is opened under a placeholder (e.g. an id) and the
    * human-readable name only becomes known later. For AGENT / TOOL spans it
    * also updates `netra.agent.name` / `netra.task.name` on this span and on
-   * child spans started *after* this call.
+   * child spans started *after* this call (via `withActive`).
    *
    * Child spans that already started keep the old entity name (it was stamped
    * at their start). Called before the span is started, it changes the name
    * the span will start with.
+   *
+   * No-op with a warning after the span has ended.
    *
    * @param newName - The new span name. A non-string or empty value is ignored.
    * @returns The span wrapper (for chaining).
@@ -206,12 +203,21 @@ export class SpanWrapper {
       Logger.warn("updateSpanName: newName must be a non-empty string; ignoring");
       return this;
     }
+    if (this.endTime) {
+      Logger.warn("updateSpanName: span has already ended; ignoring");
+      return this;
+    }
     if (this.span) {
       SessionManager.updateSpanName(this.span, newName);
     }
     this.name = newName;
     // Keep wrapper attrs in sync so end() does not re-stamp the old name.
-    this.attributes["netra.span.name"] = newName;
+    // Only set netra.span.name for non-entity spans; for entity spans
+    // SessionManager.updateSpanName sets the entity-specific attribute and
+    // leaves netra.span.name reflecting the enclosing @span context.
+    if (!this._entityType) {
+      this.attributes["netra.span.name"] = newName;
+    }
     return this;
   }
 
@@ -220,13 +226,23 @@ export class SpanWrapper {
    * Child spans created inside `fn` will have this span as their parent and will
    * also inherit any blocking baggage set via `blockedSpans`. Works for both
    * sync and async functions — context.with() passes through the return value as-is.
+   *
+   * For AGENT / TOOL spans, the entity frame is pushed onto the entity stack
+   * for the duration of `fn` so `SessionSpanProcessor` stamps children with
+   * the correct `netra.agent.name` / `netra.task.name`. The frame is shared,
+   * so renames via `updateSpanName` propagate to all inherited scopes.
    */
   withActive<T>(fn: () => T): T {
     if (!this.span) return fn();
 
     const ctx =
       this.activeContext ?? trace.setSpan(context.active(), this.span);
-    return context.with(ctx, fn);
+    return context.with(ctx, () => {
+      if (this._entityType && this._entityFrame) {
+        return runWithEntityFrame(this._entityType, this._entityFrame, fn);
+      }
+      return fn();
+    });
   }
 
   setPrompt(prompt: string): this {

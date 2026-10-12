@@ -85,6 +85,14 @@ export class LocalFilteringSpanProcessor implements SpanProcessor {
     return this._blockedParentMap;
   }
 
+  /**
+   * Return the underlying mutable map so `SessionManager.updateSpanName` can
+   * remove entries when a span is renamed away from a blocked pattern.
+   */
+  get mutableBlockedParentMap(): Map<string, SpanContext | undefined> {
+    return this._blockedParentMap;
+  }
+
   private readonly globalCompiled: CompiledPatterns;
 
   /** Cache for compiled local pattern sets from baggage. */
