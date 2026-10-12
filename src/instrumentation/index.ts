@@ -38,6 +38,7 @@ import { openaiAgentsInstrumentor } from "./openai-agents";
 import { typeORMInstrumentor } from "./typeorm";
 import { FilteringSpanExporter, TrialAwareOTLPExporter } from "../exporters";
 import { LocalFilteringSpanProcessor } from "../processors/localfiltering-span-processor";
+import { SessionManager } from "../session-manager";
 import { propagation } from "@opentelemetry/api";
 import {
   CompositePropagator,
@@ -433,6 +434,9 @@ export function initInstrumentations(
   //    two can share reparenting state without module-level globals.
   const globalBlockedPatterns = config.blockedSpans ?? [];
   const localFilteringSpanProcessor = new LocalFilteringSpanProcessor(globalBlockedPatterns);
+  // Inject the mutable map so updateSpanName can remove entries when a span
+  // is renamed away from a blocked pattern (prevents orphaned reparenting).
+  SessionManager.setBlockedParentMap(localFilteringSpanProcessor.mutableBlockedParentMap);
   const originalExporter = exporter;
 
   try {
@@ -827,6 +831,7 @@ function addCustomSpanProcessors(
 
     // 0. Local Filtering Span Processor - filters spans based on local context
     const localFilteringSpanProcessor = new LocalFilteringSpanProcessor();
+    SessionManager.setBlockedParentMap(localFilteringSpanProcessor.mutableBlockedParentMap);
     provider.addSpanProcessor(localFilteringSpanProcessor);
 
     // 0.5. Root Instrument Filter Processor - blocks root spans from non-allowed instrumentations

@@ -416,6 +416,30 @@ export class Netra {
   }
 
   /**
+   * Rename the currently active span, keeping its entity name in sync.
+   *
+   * For a span opened by `@agent` / `@task` / `@workflow` / `@span` or by
+   * `startSpan` with an AGENT or TOOL type, this also updates its
+   * `netra.<entity>.name` and the name inherited by child spans started
+   * after this call. Child spans already started keep the old name. Only the
+   * active span is renamed.
+   *
+   * No-op with a warning when there is no active span.
+   */
+  static updateSpanName(name: string): void {
+    if (typeof name !== "string" || !name) {
+      Logger.warn("updateSpanName: name must be a non-empty string; ignoring");
+      return;
+    }
+    const span = trace.getActiveSpan();
+    if (!span?.isRecording()) {
+      Logger.warn("updateSpanName: no active span to rename");
+      return;
+    }
+    SessionManager.updateSpanName(span, name);
+  }
+
+  /**
    * Set a custom attribute on the current active span
    */
   static setCustomAttributes(key: string, value: any): void {

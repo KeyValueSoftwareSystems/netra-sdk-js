@@ -20,14 +20,49 @@ export { ConversationType };
 const MODULE_NAME = "netra.session-manager";
 
 /**
+ * A single frame on an entity stack. `name` is mutable so that
+ * `SessionManager.updateSpanName` can rename an entity in-place and every
+ * async scope that shares this frame (via AsyncLocalStorage) sees the new
+ * name immediately — no need to rebind the store.
+ */
+export class EntityFrame {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+}
+
+/**
+ * Maps each entity type to the `netra.<suffix>` attribute key that carries
+ * its name onto spans. Single source of truth shared by
+ * `getCurrentEntityAttributes` (stamps at span start) and
+ * `SessionManager.updateSpanName` (re-stamps on a live span).
+ *
+ * Exported so `SpanWrapper` can look up the suffix for a given entity type
+ * without duplicating the map.
+ */
+export const ENTITY_ATTR_SUFFIXES: Record<string, string> = {
+  workflow: "workflow.name",
+  task: "task.name",
+  agent: "agent.name",
+  span: "span.name",
+};
+
+/**
+ * Process-wide mapping from a span to the entity frame it owns.
+ * Weak keys ensure entries are garbage-collected when the span is.
+ */
+const spanEntityFrames = new WeakMap<Span, { entityType: string; frame: EntityFrame }>();
+
+/**
  * Per-async-scope state: entity name stacks and a name→span registry.
  * Deliberately minimal — live span references belong to OTel's context, not here.
  */
 interface EntityContext {
-  workflowStack: string[];
-  taskStack: string[];
-  agentStack: string[];
-  spanStack: string[];
+  workflowStack: EntityFrame[];
+  taskStack: EntityFrame[];
+  agentStack: EntityFrame[];
+  spanStack: EntityFrame[];
   spansByName: Map<string, Span[]>;
 }
 
@@ -40,7 +75,6 @@ type ConversationEntry = {
 
 const entityStorage = new AsyncLocalStorage<EntityContext>();
 
-// Global fallback for single-threaded / non-async entry points
 const globalFallbackContext: EntityContext = {
   workflowStack: [],
   taskStack: [],
@@ -51,6 +85,20 @@ const globalFallbackContext: EntityContext = {
 
 function getEntityContext(): EntityContext {
   return entityStorage.getStore() ?? globalFallbackContext;
+}
+
+/**
+ * Return the entity stack for `entityType` from the given context,
+ * or `undefined` for unknown types.
+ */
+function stackFor(ctx: EntityContext, entityType: string): EntityFrame[] | undefined {
+  switch (entityType) {
+    case "workflow": return ctx.workflowStack;
+    case "task":     return ctx.taskStack;
+    case "agent":    return ctx.agentStack;
+    case "span":     return ctx.spanStack;
+    default:         return undefined;
+  }
 }
 
 /**
@@ -67,6 +115,37 @@ export function runWithEntityContext<T>(fn: () => T): T {
     spansByName: new Map(),
   };
   return entityStorage.run(ctx, fn);
+}
+
+/**
+ * Run `fn` with `frame` pushed onto the entity stack for `entityType`.
+ *
+ * Creates a shallow copy of the current entity context so the frame is
+ * visible to child spans started inside `fn` (via `SessionSpanProcessor`)
+ * without mutating the caller's context. Because the same `EntityFrame`
+ * object is shared, renames via `SessionManager.updateSpanName` propagate
+ * to every async scope that inherited it.
+ *
+ * This is the `startSpan`-level equivalent of what decorators achieve with
+ * `pushEntity` + `startActiveSpan`: it scopes the entity name to the
+ * `withActive` callback rather than the global stack.
+ */
+export function runWithEntityFrame<T>(
+  entityType: string,
+  frame: EntityFrame,
+  fn: () => T,
+): T {
+  const cur = getEntityContext();
+  const next: EntityContext = {
+    workflowStack: [...cur.workflowStack],
+    taskStack: [...cur.taskStack],
+    agentStack: [...cur.agentStack],
+    spanStack: [...cur.spanStack],
+    spansByName: cur.spansByName,
+  };
+
+  stackFor(next, entityType)?.push(frame);
+  return entityStorage.run(next, fn);
 }
 
 // SessionManager
@@ -111,36 +190,116 @@ export class SessionManager {
 
   // Entity stacks (workflow / task / agent / span)
 
-  static pushEntity(entityType: string, entityName: string): void {
+  static pushEntity(entityType: string, entityName: string): EntityFrame | undefined {
     const ctx = getEntityContext();
-    switch (entityType) {
-      case "workflow": ctx.workflowStack.push(entityName); break;
-      case "task":     ctx.taskStack.push(entityName);     break;
-      case "agent":    ctx.agentStack.push(entityName);    break;
-      case "span":     ctx.spanStack.push(entityName);     break;
-    }
+    const stack = stackFor(ctx, entityType);
+    if (!stack) return undefined;
+    const frame = new EntityFrame(entityName);
+    stack.push(frame);
+    return frame;
   }
 
-  static popEntity(entityType: string): string | undefined {
-    const ctx = getEntityContext();
-    switch (entityType) {
-      case "workflow": return ctx.workflowStack.pop();
-      case "task":     return ctx.taskStack.pop();
-      case "agent":    return ctx.agentStack.pop();
-      case "span":     return ctx.spanStack.pop();
-      default:         return undefined;
+  static popEntity(entityType: string, token?: EntityFrame): string | undefined {
+    const stack = stackFor(getEntityContext(), entityType);
+    if (!stack?.length) return undefined;
+    if (!token) {
+      return stack.pop()?.name;
     }
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i] === token) {
+        const [removed] = stack.splice(i, 1);
+        return removed.name;
+      }
+    }
+    return undefined;
   }
 
   static getCurrentEntityAttributes(): Record<string, string> {
     const ctx = getEntityContext();
     const attrs: Record<string, string> = {};
-    const last = <T>(arr: T[]) => arr[arr.length - 1];
-    if (ctx.workflowStack.length) attrs[`${Config.LIBRARY_NAME}.workflow.name`] = last(ctx.workflowStack)!;
-    if (ctx.taskStack.length)     attrs[`${Config.LIBRARY_NAME}.task.name`]     = last(ctx.taskStack)!;
-    if (ctx.agentStack.length)    attrs[`${Config.LIBRARY_NAME}.agent.name`]    = last(ctx.agentStack)!;
-    if (ctx.spanStack.length)     attrs[`${Config.LIBRARY_NAME}.span.name`]     = last(ctx.spanStack)!;
+    for (const [entityType, suffix] of Object.entries(ENTITY_ATTR_SUFFIXES)) {
+      const stack = stackFor(ctx, entityType);
+      if (stack?.length) {
+        attrs[`${Config.LIBRARY_NAME}.${suffix}`] = stack[stack.length - 1].name;
+      }
+    }
     return attrs;
+  }
+
+  /**
+   * Record that `span` owns the entity frame pushed with `frame`.
+   * Lets `updateSpanName` rename the span's own entity frame. No-op when
+   * `frame` is undefined (pushEntity got an unknown entity type).
+   */
+  static bindSpanToEntity(span: Span, entityType: string, frame: EntityFrame | undefined): void {
+    if (!frame) return;
+    spanEntityFrames.set(span, { entityType, frame });
+  }
+
+  /**
+   * Rename `span`, keeping its entity name in sync.
+   *
+   * Always updates the OpenTelemetry span name. If the span is an entity span
+   * (bound via `bindSpanToEntity`), also re-stamps its `netra.<entity>.name`
+   * attribute and renames the entity frame so child spans started after this
+   * call inherit the new name. Already-started child spans keep the old name.
+   *
+   * `netra.span.name` is only updated for unbound spans (plain SPAN with no
+   * entity binding). For entity spans (agent/task/workflow/span-entity),
+   * `netra.span.name` reflects the enclosing `@span` context they are inside
+   * and must not be overwritten by the entity rename.
+   *
+   * Clears `netra.local_blocked` so a span whose old name matched a blocking
+   * pattern is not silently dropped after being renamed to a non-blocked name.
+   * Also removes the span from any injected `_blockedParentMap` so children
+   * are not reparented past the now-unblocked span.
+   */
+  static updateSpanName(span: Span, newName: string): void {
+    try {
+      const entry = spanEntityFrames.get(span);
+      if (entry) {
+        const suffix = ENTITY_ATTR_SUFFIXES[entry.entityType];
+        entry.frame.name = newName;
+        if (suffix) {
+          span.setAttribute(`${Config.LIBRARY_NAME}.${suffix}`, newName);
+        }
+      } else {
+        // Only update netra.span.name for unbound spans (no entity binding).
+        // Entity spans get their name via the entity-specific attribute above.
+        span.setAttribute(`${Config.LIBRARY_NAME}.span.name`, newName);
+      }
+      // Clear the local-blocked flag so a span renamed away from a blocked
+      // pattern is not silently dropped at export time.
+      span.setAttribute("netra.local_blocked", false);
+      // Remove from blockedParentMap so children are not reparented past this
+      // now-unblocked span.
+      SessionManager._removeFromBlockedParentMap(span.spanContext().spanId);
+      span.updateName(newName);
+    } catch (e) {
+      Logger.error("updateSpanName failed:", e);
+    }
+  }
+
+  /**
+   * Injected reference to the `LocalFilteringSpanProcessor`'s blocked parent
+   * map. Set once during initialization so `updateSpanName` can remove entries
+   * when a span is renamed away from a blocked pattern.
+   */
+  private static _blockedParentMap?: Map<string, any>;
+
+  /**
+   * Inject the `LocalFilteringSpanProcessor`'s mutable blocked parent map.
+   * Called once during SDK initialization.
+   */
+  static setBlockedParentMap(map: Map<string, any>): void {
+    SessionManager._blockedParentMap = map;
+  }
+
+  /**
+   * Remove a span id from the injected blocked parent map.
+   */
+  static _removeFromBlockedParentMap(spanId: string): void {
+    SessionManager._blockedParentMap?.delete(spanId);
   }
 
   static clearEntityStacks(): void {
