@@ -40,6 +40,22 @@ await Netra.init({
 
 > **Note**: Always `await` the `init()` call to ensure all instrumentations (like OpenAI, Anthropic, LangGraph) are fully patched before your application starts using them. This is especially important in frameworks like NestJS where modules are loaded after initialization.
 
+#### Shutdown
+
+By default `init()` registers `SIGINT`, `SIGTERM`, `uncaughtException` and `beforeExit` hooks that flush pending spans. The SDK never decides when your process exits: if your app has its own handler for the same event, it keeps control (e.g. to drain connections); otherwise Node's default behaviour applies after the flush. To manage shutdown entirely yourself, opt out and call `Netra.shutdown()`:
+
+```typescript
+await Netra.init({ appName: "my-ai-app", registerShutdownHooks: false });
+
+process.on("SIGTERM", async () => {
+  await server.close();
+  await Netra.shutdown(); // flush pending spans
+  process.exit(0);
+});
+```
+
+`Netra.shutdown()` is safe to call more than once or from several places at the same time; overlapping calls share one flush and all resolve once it completes.
+
 ## 🎯 Decorators
 
 Use decorators to automatically trace your functions and classes. 
