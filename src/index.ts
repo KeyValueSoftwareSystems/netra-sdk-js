@@ -11,6 +11,12 @@ import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Logger } from "./logger";
 import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
+import {
+  FLUSH_TIMEOUT_MS,
+  registerExitTask,
+  settleOtherExitTasks,
+  type ExitTask,
+} from "./shutdown-registry";
 import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
@@ -153,13 +159,9 @@ export class Netra {
   private static _tracer: any;
   private static _metricsEnabled = false;
   private static _shutdownPromise: Promise<void> | undefined;
-  private static _shutdownHooks:
-    | {
-        beforeExit: () => void;
-        signal: (signal: NodeJS.Signals) => void;
-        uncaughtException: (error: Error) => void;
-      }
-    | undefined;
+  private static _unregisterFlush: (() => void) | undefined;
+  private static readonly _flushTask: ExitTask = () => this.shutdown();
+  private static _beforeExit: (() => void) | undefined;
 
   static usage: Usage;
   static evaluation: Evaluation;
@@ -281,55 +283,33 @@ export class Netra {
    * the exit code is 128+n; an uncaught exception exits with code 1).
    */
   private static _registerShutdownHooks(): void {
-    if (this._shutdownHooks) {
+    if (this._unregisterFlush) {
       return;
     }
 
-    const signal = (sig: NodeJS.Signals) => {
-      Logger.log(`\nReceived ${sig}. Flushing Netra SDK...`);
-      void this.shutdown()
-        .catch((err) => Logger.error("Error during signal shutdown:", err))
-        .finally(() => {
-          if (process.listenerCount(sig) === 0) {
-            process.kill(process.pid, sig);
-          }
-        });
-    };
+    // The signal / crash paths are arbitrated by the shutdown registry, which
+    // owns the listeners for every part of the SDK so that no two of them race
+    // each other to re-raise.
+    this._unregisterFlush = registerExitTask(this._flushTask);
 
-    const uncaughtException = (error: Error) => {
-      Logger.error("Uncaught exception; flushing Netra SDK before exit...");
-      void this.shutdown()
-        .catch((err) => Logger.error("Error during crash shutdown:", err))
-        .finally(() => {
-          if (process.listenerCount("uncaughtException") === 0) {
-            // Mirror Node's default: print the error and exit with code 1.
-            console.error(error);
-            process.exit(1);
-          }
-        });
-    };
-
+    // `beforeExit` stays here deliberately. It fires on a benign loop drain and
+    // makes no exit-code decision, so it is not part of what the registry
+    // arbitrates; routing it through there would also let a normal idle moment
+    // consume tasks that are meant to run only when the process is dying.
     const beforeExit = () => {
       void this.shutdown();
     };
-
-    this._shutdownHooks = { beforeExit, signal, uncaughtException };
+    this._beforeExit = beforeExit;
     process.once("beforeExit", beforeExit);
-    process.once("SIGINT", signal);
-    process.once("SIGTERM", signal);
-    process.once("uncaughtException", uncaughtException);
   }
 
   private static _removeShutdownHooks(): void {
-    const hooks = this._shutdownHooks;
-    if (!hooks) {
-      return;
+    this._unregisterFlush?.();
+    this._unregisterFlush = undefined;
+    if (this._beforeExit) {
+      process.removeListener("beforeExit", this._beforeExit);
+      this._beforeExit = undefined;
     }
-    process.removeListener("beforeExit", hooks.beforeExit);
-    process.removeListener("SIGINT", hooks.signal);
-    process.removeListener("SIGTERM", hooks.signal);
-    process.removeListener("uncaughtException", hooks.uncaughtException);
-    this._shutdownHooks = undefined;
   }
 
   /**
@@ -361,8 +341,6 @@ export class Netra {
       Logger.error("Error during uninstrumentAll:", e);
     }
 
-    const FLUSH_TIMEOUT_MS = 5000;
-
     try {
       const traceProvider = trace.getTracerProvider();
       const flushPromise = (async () => {
@@ -393,6 +371,16 @@ export class Netra {
       this.models?.clearCache();
     } catch (e) {
       Logger.error("Error clearing SDK API caches:", e);
+    }
+
+    // Wait for the other registered exit tasks (e.g. a simulation marking its
+    // run failed) before resolving. Applications shut down with
+    // `await Netra.shutdown(); process.exit(0)`, so resolving early would let
+    // them exit while a sibling task is still mid-request.
+    try {
+      await settleOtherExitTasks(this._flushTask);
+    } catch (e) {
+      Logger.error("Error awaiting pending shutdown tasks:", e);
     }
 
     this._initialized = false;

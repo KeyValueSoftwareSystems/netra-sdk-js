@@ -42,6 +42,11 @@ export interface NetraConfig {
    * The hooks never exit the process themselves while the application has
    * its own handlers for the same event. Defaults to `true`; set to `false`
    * to manage shutdown yourself via `Netra.shutdown()`.
+   *
+   * This covers the span-flushing hooks only. A simulation run still registers
+   * short-lived exit hooks of its own so an interrupted run is marked `failed`
+   * instead of being left `running`; those are removed when the run ends and
+   * likewise never override an application that handles the event itself.
    */
   registerShutdownHooks?: boolean;
 }

@@ -5,6 +5,7 @@
 import pLimit from "p-limit";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { registerExitTask } from "../shutdown-registry";
 import { SpanWrapper } from "../span-wrapper";
 import { SimulationHttpClient } from "./client";
 import {
@@ -99,51 +100,16 @@ export class Simulation {
             return null;
         }
 
-        // Mark the run as failed if the process is interrupted. These hooks
-        // must not change how the host process exits: signals are re-raised
-        // only when no other listener is handling them, and crashes are
-        // observed via `uncaughtExceptionMonitor`, which does not suppress
-        // Node's default crash behaviour.
-        let interrupted = false;
-        const proc = typeof process !== "undefined" ? process : undefined;
-        const removeHooks = () => {
-            proc?.removeListener("SIGINT", handleSignal);
-            proc?.removeListener("SIGTERM", handleSignal);
-            proc?.removeListener("uncaughtExceptionMonitor", handleException);
-            proc?.removeListener("unhandledRejection", handleRejection);
-        };
-        const finalizeFailure = (signal?: NodeJS.Signals) => {
-            if (interrupted) {
-                return;
-            }
-            interrupted = true;
-            removeHooks();
-            void this._client.postRunStatus(runId, "failed").finally(() => {
-                if (signal && proc && proc.listenerCount(signal) === 0) {
-                    proc.kill(proc.pid, signal);
-                }
-            });
-        };
-        const handleSignal = (signal: NodeJS.Signals) => {
-            finalizeFailure(signal);
-        };
-        const handleException = () => {
-            finalizeFailure();
-        };
-        const handleRejection = (reason: unknown) => {
-            finalizeFailure();
-            // Having a listener suppresses Node's default (throw) behaviour
-            // for unhandled rejections; restore it if we were the only one.
-            if (proc && proc.listenerCount("unhandledRejection") === 0) {
-                throw reason;
-            }
-        };
-        if (proc && typeof proc.once === "function") {
-            proc.once("SIGINT", handleSignal);
-            proc.once("SIGTERM", handleSignal);
-            proc.once("uncaughtExceptionMonitor", handleException);
-            proc.once("unhandledRejection", handleRejection);
-        }
+        // Mark the run as failed if the process is interrupted. The shutdown
+        // registry owns the listeners and decides when the process may die, so
+        // this post is not truncated by the SDK's own span flush racing it.
+        // `unhandledRejection` is opted into here (and only here) to preserve
+        // the behaviour this runner has always had, without arming that event
+        // for every consumer of the SDK.
+        const unregisterExitTask = registerExitTask(
+            () => this._client.postRunStatus(runId, "failed"),
+            { unhandledRejection: true },
+        );
 
         try {
             // --- Phase 2: Run beforeAll hook ---
@@ -290,9 +256,7 @@ export class Simulation {
                 throw error;
             }
         } finally {
-            if (proc && typeof proc.removeListener === "function") {
-                removeHooks();
-            }
+            unregisterExitTask();
         }
     }
 

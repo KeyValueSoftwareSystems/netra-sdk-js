@@ -35,6 +35,19 @@ describe("Netra process shutdown hooks", () => {
     expect(counts()).toEqual(before);
   });
 
+  it("never arms unhandledRejection for an ordinary init", async () => {
+    // Merely having an unhandledRejection listener suppresses Node's default
+    // crash behaviour, so the SDK must not install one just because something
+    // registered an exit task. Only the simulation runner opts in, and only
+    // for the duration of a run.
+    const before = process.listenerCount("unhandledRejection");
+    await Netra.init({});
+    expect(process.listenerCount("unhandledRejection")).toBe(before);
+
+    await Netra.shutdown();
+    expect(process.listenerCount("unhandledRejection")).toBe(before);
+  });
+
   it("flushes on a signal without exiting while the app has its own handler", async () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
