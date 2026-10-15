@@ -125,6 +125,23 @@ describe("shutdown registry (real process)", () => {
         expect(exited).toBeGreaterThan(posted);
     }, 20_000);
 
+    it("documents the deadlock with signal-exit-style listeners", async () => {
+        // KNOWN LIMITATION, pre-dating the coordinator (the same listenerCount
+        // guard shipped in 26cec5c). `signal-exit` re-raises only when its own
+        // listeners are alone; we defer to any non-SDK listener. So neither
+        // re-raises and the process outlives SIGTERM -- under Kubernetes it is
+        // SIGKILLed at the end of the grace period instead.
+        //
+        // This asserts the CURRENT behaviour so the day it changes is visible.
+        // Affected apps should pass `registerShutdownHooks: false`.
+        const result = await run(bundle("exit-signal-exit-style"));
+
+        expect(result.stdout).toContain("FLUSHED");
+        expect(result.stdout).toContain("SIGNAL_EXIT_DEFERRED");
+        expect(result.stdout).toContain("STILL_ALIVE_AFTER_SIGTERM");
+        expect(result.code).toBe(99); // the fixture's own escape hatch
+    }, 20_000);
+
     it("exits promptly on a second signal instead of waiting out the budget", async () => {
         const result = await run(bundle("exit-double-signal"));
 

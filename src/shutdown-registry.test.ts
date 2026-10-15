@@ -243,7 +243,7 @@ describe("shutdown registry: re-entrancy", () => {
         expect(attachedDuringSlowTask).toBeGreaterThan(0);
     });
 
-    it("does not swallow a crash that happens during a shutdown", async () => {
+    it("does not swallow a crash during shutdown when nothing else handles it", async () => {
         // Our listener is still attached while tasks run, so Node will not act
         // on the error. If we simply ignored it, it would be neither logged nor
         // fatal and the process would limp on in a broken state.
@@ -255,17 +255,94 @@ describe("shutdown registry: re-entrancy", () => {
             .spyOn(console, "error")
             .mockImplementation(() => {});
 
-        registerExitTask(() => new Promise((r) => setTimeout(r, 50)));
+        // The test runner installs its own uncaughtException listener; detach
+        // it so this exercises the nobody-is-handling-this path.
+        const others = process.listeners("uncaughtException");
+        others.forEach((l) => process.removeListener("uncaughtException", l));
 
-        process.emit("SIGTERM", "SIGTERM");
-        await settle();
+        try {
+            registerExitTask(() => new Promise((r) => setTimeout(r, 50)));
 
-        const crash = new Error("crash during shutdown");
-        process.emit("uncaughtException", crash);
-        await settle();
+            process.emit("SIGTERM", "SIGTERM");
+            await settle();
 
-        expect(errorLog).toHaveBeenCalledWith(crash);
-        expect(exit).toHaveBeenCalledWith(1);
+            const crash = new Error("crash during shutdown");
+            process.emit("uncaughtException", crash);
+            await settle();
+
+            expect(errorLog).toHaveBeenCalledWith(crash);
+            expect(exit).toHaveBeenCalledWith(1);
+        } finally {
+            others.forEach((l) =>
+                process.on("uncaughtException", l as (e: Error) => void),
+            );
+        }
+    });
+
+    it("leaves a crash during shutdown to the app when the app handles it", async () => {
+        // An application draining connections in its own SIGTERM handler may
+        // also handle stray errors. Forcing an exit here would kill it
+        // mid-cleanup and report a crash, contradicting the promise in
+        // config.ts that the SDK never exits while the app has its own
+        // handlers.
+        vi.spyOn(process, "kill").mockImplementation((() => true) as never);
+        const exit = vi
+            .spyOn(process, "exit")
+            .mockImplementation((() => undefined) as never);
+        const appHandler = vi.fn();
+        process.on("uncaughtException", appHandler);
+
+        try {
+            registerExitTask(() => new Promise((r) => setTimeout(r, 50)));
+
+            process.emit("SIGTERM", "SIGTERM");
+            await settle();
+
+            process.emit("uncaughtException", new Error("stray error"));
+            await settle();
+
+            expect(appHandler).toHaveBeenCalled();
+            expect(exit).not.toHaveBeenCalled();
+        } finally {
+            process.removeListener("uncaughtException", appHandler);
+        }
+    });
+
+    it("stays out of a rejection the app handles, and stays armed", async () => {
+        // The app owns the event, so nothing is shutting down. Firing here
+        // would burn the one-shot exit tasks: observed live, a recovered
+        // rejection marked a healthy simulation run "failed" before the run
+        // went on to complete.
+        vi.spyOn(process, "kill").mockImplementation((() => true) as never);
+        const flush = vi.fn().mockResolvedValue(undefined);
+        const optedIn = vi.fn().mockResolvedValue(undefined);
+        registerExitTask(flush);
+        registerExitTask(optedIn, { unhandledRejection: true });
+
+        const appRejectionHandler = vi.fn();
+        process.on("unhandledRejection", appRejectionHandler);
+
+        try {
+            const armed = process.listenerCount("SIGTERM");
+            process.emit(
+                "unhandledRejection",
+                new Error("recovered"),
+                Promise.resolve(),
+            );
+            await settle();
+
+            // Nothing consumed, nothing torn down.
+            expect(optedIn).not.toHaveBeenCalled();
+            expect(flush).not.toHaveBeenCalled();
+            expect(process.listenerCount("SIGTERM")).toBe(armed);
+
+            // Both still run when the process really does go away.
+            process.emit("SIGTERM", "SIGTERM");
+            await vi.waitFor(() => expect(flush).toHaveBeenCalled());
+            expect(optedIn).toHaveBeenCalled();
+        } finally {
+            process.removeListener("unhandledRejection", appRejectionHandler);
+        }
     });
 });
 
@@ -306,7 +383,14 @@ describe("shutdown registry: crash handling", () => {
         }
     });
 
-    it("leaves the exit to the application when it handles uncaughtException", async () => {
+    it("stays out of a crash the application handles, and stays armed", async () => {
+        // The application owns the event and may carry on running, so the
+        // process is not necessarily going away. Firing here would burn the
+        // one-shot exit tasks and tear down our listeners, leaving the SDK
+        // disarmed for the SIGTERM that really does end the process.
+        // Observed live: listener counts dropped 2 -> 1 after a recovered
+        // crash in the loan-agent harness.
+        vi.spyOn(process, "kill").mockImplementation((() => true) as never);
         const exit = vi
             .spyOn(process, "exit")
             .mockImplementation((() => undefined) as never);
@@ -316,23 +400,30 @@ describe("shutdown registry: crash handling", () => {
         try {
             const task = vi.fn().mockResolvedValue(undefined);
             registerExitTask(task);
+            const armed = process.listenerCount("SIGTERM");
 
             process.emit("uncaughtException", new Error("boom"));
-            await vi.waitFor(() => expect(task).toHaveBeenCalled());
             await settle();
 
             expect(appHandler).toHaveBeenCalled();
             expect(exit).not.toHaveBeenCalled();
+            // Nothing consumed, nothing torn down.
+            expect(task).not.toHaveBeenCalled();
+            expect(process.listenerCount("SIGTERM")).toBe(armed);
+
+            // And the task still runs when the process really does go away.
+            process.emit("SIGTERM", "SIGTERM");
+            await vi.waitFor(() => expect(task).toHaveBeenCalled());
         } finally {
             process.removeListener("uncaughtException", appHandler);
         }
     });
 
-    it("only runs opted-in tasks on an unhandled rejection", async () => {
-        // Keep an app listener attached for the duration: without one the
-        // registry correctly restores Node's default and rethrows, which would
-        // take down the test worker. The rethrow itself is covered by the
-        // child-process tests, where a real crash is the expected outcome.
+    it("opting in arms the listener; it does not fire on a survivable rejection", async () => {
+        // `unhandledRejection: true` governs whether the SDK listens at all.
+        // A fatal rejection (nothing handles it) then runs every task and
+        // restores Node's crash -- covered by the child-process tests, where
+        // a real crash is the expected outcome.
         const appHandler = vi.fn();
         process.on("unhandledRejection", appHandler);
 
@@ -342,15 +433,20 @@ describe("shutdown registry: crash handling", () => {
             registerExitTask(plain);
             registerExitTask(optedIn, { unhandledRejection: true });
 
+            expect(process.listenerCount("unhandledRejection")).toBeGreaterThan(
+                1,
+            );
+
             process.emit(
                 "unhandledRejection",
                 new Error("nope"),
                 Promise.resolve(),
             );
-            await vi.waitFor(() => expect(optedIn).toHaveBeenCalled());
             await settle();
 
+            expect(appHandler).toHaveBeenCalled();
             expect(plain).not.toHaveBeenCalled();
+            expect(optedIn).not.toHaveBeenCalled();
         } finally {
             process.removeListener("unhandledRejection", appHandler);
         }

@@ -184,12 +184,11 @@ function appHandles(event: NodeJS.Signals | "uncaughtException"): boolean {
 }
 
 async function runTasks(reason: ExitReason): Promise<void> {
-    const pending = [...entries].filter(
-        (e) => reason.kind !== "unhandledRejection" || e.unhandledRejection,
-    );
-    // Copy first and clear: each task runs at most once, and a task is allowed
-    // to unregister itself while the batch is still running.
-    entries.clear();
+    const pending = [...entries];
+    // Remove only what we are about to run, never the whole set: each task
+    // runs at most once, and one registered while this batch is running must
+    // stay registered.
+    pending.forEach((e) => entries.delete(e));
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const budget = new Promise<void>((resolve) => {
@@ -304,24 +303,38 @@ const onSignal = (sig: NodeJS.Signals): void => {
 
 const onUncaughtException = (error: Error): void => {
     if (rethrowing) {
-        // Our own deliberate rethrow of an unhandled rejection. Stay out of the
-        // way so it gets Node's default disposition.
+        // Our own deliberate rethrow of an unhandled rejection. Stay out of
+        // the way so it gets Node's default disposition. Consume the flag here
+        // rather than where it is set: the throw unwinds before Node emits
+        // this event, so resetting it any earlier would clear it too soon.
+        rethrowing = false;
         return;
     }
     if (firing) {
-        // A crash while we were already shutting down. Our listener is still
-        // attached, so Node will not act on it — if we returned here the error
-        // would be neither logged nor fatal, and the process would limp on in a
-        // broken state.
+        // A crash while we were already shutting down. If the application has
+        // its own handler it owns the decision, exactly as it would without
+        // us — forcing an exit here would kill it mid-cleanup.
+        if (appHandles("uncaughtException")) {
+            return;
+        }
+        // Nothing else handles this. Our listener is still attached, so Node
+        // will not act on it either; returning would leave the error neither
+        // logged nor fatal and the process limping on in a broken state.
         uninstall();
         console.error(error);
         process.exitCode = 1;
         setImmediate(() => process.exit(1));
         return;
     }
+    if (appHandles("uncaughtException")) {
+        // The application owns this event and may well carry on running, so
+        // the process is not necessarily going away. Firing here would burn
+        // the one-shot exit tasks and tear down our listeners, leaving the SDK
+        // disarmed: a later SIGTERM would then flush nothing. Stay out of it.
+        return;
+    }
     firing = true;
     const gen = ++generation;
-    const handled = appHandles("uncaughtException");
     Logger.error("Uncaught exception; flushing Netra SDK before exit...");
     void runTasks({ kind: "uncaughtException", error })
         .catch((err) => Logger.error("netra: error during crash shutdown:", err))
@@ -331,14 +344,12 @@ const onUncaughtException = (error: Error): void => {
             }
             uninstall();
             firing = false;
-            if (!handled) {
-                // Mirror Node's default: print the error and exit with code 1.
-                // `exitCode` + a deferred `exit` so the stderr write gets a turn
-                // before the process goes away.
-                console.error(error);
-                process.exitCode = 1;
-                setImmediate(() => process.exit(1));
-            }
+            // Mirror Node's default: print the error and exit with code 1.
+            // `exitCode` + a deferred `exit` so the stderr write gets a turn
+            // before the process goes away.
+            console.error(error);
+            process.exitCode = 1;
+            setImmediate(() => process.exit(1));
         });
 };
 
@@ -346,31 +357,57 @@ const onUnhandledRejection = (reason: unknown): void => {
     if (firing) {
         return;
     }
-    firing = true;
-    const gen = ++generation;
-    void runTasks({ kind: "unhandledRejection", error: reason })
-        .catch((err) => Logger.error("netra: error during shutdown:", err))
-        .finally(() => {
-            if (gen !== generation) {
-                return;
-            }
-            const handled = process
-                .listeners("unhandledRejection")
-                .some((l) => !ours.has(l));
-            uninstall();
-            firing = false;
-            if (!handled) {
-                // Restore Node's default. A bare `throw` here would become
-                // another rejected promise and re-enter this same handler;
-                // throwing from `setImmediate` surfaces as a genuine uncaught
-                // exception instead. Never replace this with Promise.reject.
-                rethrowing = true;
-                setImmediate(() => {
-                    throw reason;
-                });
-            }
-        });
+
+    // Does the application listen for rejections? If so it owns the event
+    // completely: Node would not crash, nothing is shutting down, and firing
+    // here would burn the one-shot exit tasks. Observed live: a rejection the
+    // app recovered from marked a healthy simulation run "failed" before the
+    // run went on to complete.
+    const rejHandled = process
+        .listeners("unhandledRejection")
+        .some((l) => !ours.has(l));
+    if (rejHandled) {
+        return;
+    }
+
+    // Nothing listens for rejections, so Node's behaviour is to raise this as
+    // an uncaught exception. Whether that ends the process depends on whether
+    // anything handles *that*.
+    if (!appHandles("uncaughtException")) {
+        firing = true;
+        const gen = ++generation;
+        void runTasks({ kind: "unhandledRejection", error: reason })
+            .catch((err) => Logger.error("netra: error during shutdown:", err))
+            .finally(() => {
+                if (gen !== generation) {
+                    return;
+                }
+                firing = false;
+                uninstall();
+                rethrow(reason);
+            });
+        return;
+    }
+
+    // An application `uncaughtException` handler will catch the rethrow and
+    // carry on, so the process survives. Preserve Node's semantics without
+    // treating this as a shutdown.
+    rethrow(reason);
 };
+
+/**
+ * Restore Node's default disposition for an unhandled rejection.
+ *
+ * A bare `throw` here would become another rejected promise and re-enter the
+ * handler above; throwing from `setImmediate` surfaces as a genuine uncaught
+ * exception instead. Never replace this with `Promise.reject`.
+ */
+function rethrow(reason: unknown): void {
+    rethrowing = true;
+    setImmediate(() => {
+        throw reason;
+    });
+}
 
 /** Test-only: drop all listeners and module state. */
 export function __resetForTests(): void {
