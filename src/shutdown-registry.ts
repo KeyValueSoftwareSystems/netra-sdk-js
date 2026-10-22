@@ -264,7 +264,12 @@ const onSignal = (sig: NodeJS.Signals): void => {
         // let the signal take its default disposition; the in-flight tasks are
         // abandoned deliberately.
         Logger.debug(`netra: second ${sig} during shutdown; exiting now`);
-        const handled = appHandles(sig);
+        // Only listeners still attached count here, not `appHandles`: its
+        // `appHadListener` fallback is stale by now. An app that removes its
+        // own handler and re-sends the signal (NestJS does this) has handed
+        // the decision back; trusting the stale flag would leave nobody to
+        // re-raise and the process would hang until SIGKILL.
+        const handled = process.listeners(sig).some((l) => !ours.has(l));
         // Supersede the in-flight fire so its `.finally` does not re-raise
         // again once its abandoned tasks eventually settle.
         generation++;

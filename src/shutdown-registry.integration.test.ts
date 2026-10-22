@@ -152,4 +152,13 @@ describe("shutdown registry (real process)", () => {
         // The task asks for 30s; escalation must not wait for it.
         expect(result.ms).toBeLessThan(5_000);
     }, 20_000);
+
+    it("dies by the signal when the app removes its handler and re-sends it", async () => {
+        const result = await run(bundle("exit-app-resends-signal"));
+
+        expect(result.stdout).not.toContain("STILL_ALIVE_AFTER_SIGTERM");
+        expect(result.signal ?? result.code).toBe(
+            result.signal ? "SIGTERM" : 143,
+        );
+    }, 20_000);
 });
