@@ -4,6 +4,7 @@
 
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { apiPath } from "../utils/api-path";
 import { injectTraceContextHeaders } from "../utils/context-propagation";
 
 export interface HttpClientConfig {
@@ -78,12 +79,32 @@ export class NetraHttpClient {
     return this.initialized;
   }
 
+  /**
+   * Build an API path, percent-encoding every interpolated value.
+   * Returns null (and logs) if a value is not a valid path segment;
+   * `get`/`post` treat a null path as a failed request.
+   */
+  protected path(
+    strings: TemplateStringsArray,
+    ...values: unknown[]
+  ): string | null {
+    try {
+      return apiPath(strings, ...values);
+    } catch (error) {
+      Logger.error(`netra: ${error instanceof Error ? error.message : error}`);
+      return null;
+    }
+  }
+
   async get<T = any>(
-    path: string,
+    path: string | null,
     params?: Record<string, string | number | undefined>
   ): Promise<HttpResponse<T>> {
     if (!this.initialized) {
       Logger.error("netra: HTTP client is not initialized");
+      return { data: {} as T, status: 0, ok: false };
+    }
+    if (path === null) {
       return { data: {} as T, status: 0, ok: false };
     }
 
@@ -124,11 +145,14 @@ export class NetraHttpClient {
   }
 
   async post<T = any>(
-    path: string,
+    path: string | null,
     body?: Record<string, any>
   ): Promise<HttpResponse<T>> {
     if (!this.initialized) {
       Logger.error("netra: HTTP client is not initialized");
+      return { data: {} as T, status: 0, ok: false };
+    }
+    if (path === null) {
       return { data: {} as T, status: 0, ok: false };
     }
 

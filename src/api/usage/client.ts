@@ -27,7 +27,7 @@ export class UsageHttpClient extends NetraHttpClient {
     if (startTime) params.startTime = startTime;
     if (endTime) params.endTime = endTime;
 
-    const response = await this.get(`/usage/sessions/${sessionId}`, params);
+    const response = await this.get(this.path`/usage/sessions/${sessionId}`, params);
     return this.extractData(response, {});
   }
 
@@ -47,7 +47,7 @@ export class UsageHttpClient extends NetraHttpClient {
     if (startTime) params.startTime = startTime;
     if (endTime) params.endTime = endTime;
 
-    const response = await this.get(`/usage/tenants/${tenantId}`, params);
+    const response = await this.get(this.path`/usage/tenants/${tenantId}`, params);
     return this.extractData(response, {});
   }
 
@@ -139,7 +139,7 @@ export class UsageHttpClient extends NetraHttpClient {
     if (params.spanName !== undefined) queryParams.spanName = params.spanName;
 
     const response = await this.get(
-      `/sdk/traces/${params.traceId}/spans`,
+      this.path`/sdk/traces/${params.traceId}/spans`,
       queryParams
     );
     return response.ok ? response.data : {};

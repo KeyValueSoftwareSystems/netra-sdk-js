@@ -1,8 +1,8 @@
-import { RunnableConfig } from "@langchain/core/runnables";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import { Logger } from "../../logger";
 import { __version__ } from "./version";
-import { LanggraphWrapper } from "./wrappers";
+import { LanggraphWrapper, loadLanggraphCallbackHandler } from "./wrappers";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.langgraph";
 const INSTRUMENTS = ["langgraph >= 1.1.1"];
@@ -109,6 +109,10 @@ export class NetraLanggraphInstrumentor {
     const Langgraph = await resolveLanggraph();
     if (!Langgraph) {
       Logger.warn("LangGraph class not found, skipping instrumentation");
+      return this;
+    }
+    if (!(await loadLanggraphCallbackHandler())) {
+      Logger.warn("@langchain/core not found, skipping LangGraph instrumentation");
       return this;
     }
 
