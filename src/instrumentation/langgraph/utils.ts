@@ -1,5 +1,5 @@
 import { Span } from "@opentelemetry/api";
-import { ChainValues } from "@langchain/core/utils/types";
+import type { ChainValues } from "@langchain/core/utils/types";
 import { SpanAttributes } from "../span-attributes";
 
 export const NetraLanggraphAttributes = {

@@ -11,6 +11,12 @@ import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { Logger } from "./logger";
 import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
+import {
+  FLUSH_TIMEOUT_MS,
+  registerExitTask,
+  settleOtherExitTasks,
+  type ExitTask,
+} from "./shutdown-registry";
 import { ConversationType, SessionManager } from "./session-manager";
 import { Simulation } from "./simulation";
 import { SpanWrapper } from "./span-wrapper";
@@ -152,6 +158,10 @@ export class Netra {
   private static _config: Config | undefined;
   private static _tracer: any;
   private static _metricsEnabled = false;
+  private static _shutdownPromise: Promise<void> | undefined;
+  private static _unregisterFlush: (() => void) | undefined;
+  private static readonly _flushTask: ExitTask = () => this.shutdown();
+  private static _beforeExit: (() => void) | undefined;
 
   static usage: Usage;
   static evaluation: Evaluation;
@@ -175,6 +185,10 @@ export class Netra {
    * Initialize the Netra SDK.
    */
   static async init(config: NetraConfig = {}): Promise<void> {
+    // Let an in-flight shutdown finish so it can't tear down this new init.
+    if (this._shutdownPromise) {
+      await this._shutdownPromise;
+    }
     if (this._initialized) {
       Logger.warn("Netra.init() called more than once; ignoring subsequent calls.");
       return;
@@ -253,46 +267,72 @@ export class Netra {
       );
     }
 
-    // Graceful shutdown logic
-    const handleSignal = async (signal: string) => {
-      Logger.log(`\nReceived ${signal}. Shutting down Netra SDK...`);
-      await this.shutdown();
-      process.exit(0);
-    };
-
-    const handleUncaughtException = async (error: Error) => {
-      Logger.error("Uncaught exception:", error);
-      Logger.error("Shutting down Netra SDK due to crash...");
-      try {
-        await this.shutdown();
-      } catch (err) {
-        Logger.error("Error during crash shutdown:", err);
-      }
-      process.exit(1);
-    };
-
-    // Handle process running out of work
-    process.once("beforeExit", async () => {
-      // beforeExit can be called multiple times if the loop fills up again
-      // but for our purpose, we just want to ensure flush happens if the script finishes
-      await this.shutdown();
-    });
-
-    // Handle termination signals
-    process.once("SIGINT", () => handleSignal("SIGINT"));
-    process.once("SIGTERM", () => handleSignal("SIGTERM"));
-
-    // Handle crashes
-    process.once("uncaughtException", handleUncaughtException);
+    if (config.registerShutdownHooks !== false) {
+      this._registerShutdownHooks();
+    }
 
     // Wait for all async instrumentations to be ready
     await instrumentationsReady;
   }
 
-  static async shutdown(): Promise<void> {
-    if (!this._initialized) {
+  /**
+   * Flush spans when the host process is going away, without taking over
+   * the process lifecycle: the SDK never decides when (or with which code)
+   * the process exits. Once flushed, if no other listener is handling the
+   * event, Node's default behaviour is restored (the signal is re-raised so
+   * the exit code is 128+n; an uncaught exception exits with code 1).
+   */
+  private static _registerShutdownHooks(): void {
+    if (this._unregisterFlush) {
       return;
     }
+
+    // The signal / crash paths are arbitrated by the shutdown registry, which
+    // owns the listeners for every part of the SDK so that no two of them race
+    // each other to re-raise.
+    this._unregisterFlush = registerExitTask(this._flushTask);
+
+    // `beforeExit` stays here deliberately. It fires on a benign loop drain and
+    // makes no exit-code decision, so it is not part of what the registry
+    // arbitrates; routing it through there would also let a normal idle moment
+    // consume tasks that are meant to run only when the process is dying.
+    const beforeExit = () => {
+      void this.shutdown();
+    };
+    this._beforeExit = beforeExit;
+    process.once("beforeExit", beforeExit);
+  }
+
+  private static _removeShutdownHooks(): void {
+    this._unregisterFlush?.();
+    this._unregisterFlush = undefined;
+    if (this._beforeExit) {
+      process.removeListener("beforeExit", this._beforeExit);
+      this._beforeExit = undefined;
+    }
+  }
+
+  /**
+   * Flush pending spans and release SDK resources. Safe to call more than
+   * once and from several places at the same time (e.g. the app's own SIGTERM
+   * handler while the SDK's hook is also flushing): concurrent callers share
+   * the same in-flight shutdown and all resolve once it has finished.
+   */
+  static shutdown(): Promise<void> {
+    if (this._shutdownPromise) {
+      return this._shutdownPromise;
+    }
+    if (!this._initialized) {
+      return Promise.resolve();
+    }
+    this._shutdownPromise = this._shutdown().finally(() => {
+      this._shutdownPromise = undefined;
+    });
+    return this._shutdownPromise;
+  }
+
+  private static async _shutdown(): Promise<void> {
+    this._removeShutdownHooks();
 
     // Unpatch any monkey-patched instrumentations first
     try {
@@ -300,8 +340,6 @@ export class Netra {
     } catch (e) {
       Logger.error("Error during uninstrumentAll:", e);
     }
-
-    const FLUSH_TIMEOUT_MS = 5000;
 
     try {
       const traceProvider = trace.getTracerProvider();
@@ -333,6 +371,16 @@ export class Netra {
       this.models?.clearCache();
     } catch (e) {
       Logger.error("Error clearing SDK API caches:", e);
+    }
+
+    // Wait for the other registered exit tasks (e.g. a simulation marking its
+    // run failed) before resolving. Applications shut down with
+    // `await Netra.shutdown(); process.exit(0)`, so resolving early would let
+    // them exit while a sibling task is still mid-request.
+    try {
+      await settleOtherExitTasks(this._flushTask);
+    } catch (e) {
+      Logger.error("Error awaiting pending shutdown tasks:", e);
     }
 
     this._initialized = false;
