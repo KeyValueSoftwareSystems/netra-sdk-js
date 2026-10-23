@@ -23,7 +23,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
       return [];
     }
 
-    const response = await this.get(`/evaluations/dataset/${datasetId}`);
+    const response = await this.get(this.path`/evaluations/dataset/${datasetId}`);
     return this.extractData(response, []);
   }
 
@@ -96,7 +96,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
     }
 
     const response = await this.post(
-      `/evaluations/dataset/${datasetId}/items`,
+      this.path`/evaluations/dataset/${datasetId}/items`,
       itemPayload,
     );
 
@@ -121,7 +121,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
     }
 
     try {
-      const response = await this.get(`/evaluations/run/${runId}`);
+      const response = await this.get(this.path`/evaluations/run/${runId}`);
       if (!response.ok) {
         const errorMessage =
           response.data?.error?.message ?? "Unknown error";
@@ -154,7 +154,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
       return { success: false };
     }
 
-    const response = await this.post(`/evaluations/run/${runId}/item`, payload);
+    const response = await this.post(this.path`/evaluations/run/${runId}/item`, payload);
 
     if (!response.ok) {
       return { success: false };
@@ -187,7 +187,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
 
     const payload = { evaluatorResults };
     const response = await this.post(
-      `/evaluations/run/${runId}/item/${testRunItemId}/local-evaluations`,
+      this.path`/evaluations/run/${runId}/item/${testRunItemId}/local-evaluations`,
       payload,
     );
 
@@ -211,7 +211,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
 
     const payload = { status };
     const response = await this.post(
-      `/evaluations/run/${runId}/status`,
+      this.path`/evaluations/run/${runId}/status`,
       payload,
     );
 
@@ -238,7 +238,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
     }
 
     try {
-      const response = await this.get(`sdk/traces/spans/${spanId}`);
+      const response = await this.get(this.path`sdk/traces/spans/${spanId}`);
       if (!response.ok) {
         return null;
       }

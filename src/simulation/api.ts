@@ -5,6 +5,7 @@
 import pLimit from "p-limit";
 import { Config } from "../config";
 import { Logger } from "../logger";
+import { registerExitTask } from "../shutdown-registry";
 import { SpanWrapper } from "../span-wrapper";
 import { SimulationHttpClient } from "./client";
 import {
@@ -99,38 +100,16 @@ export class Simulation {
             return null;
         }
 
-        let interrupted = false;
-        const proc = typeof process !== "undefined" ? process : undefined;
-        const finalizeFailure = (signal?: NodeJS.Signals) => {
-            if (interrupted) {
-                return;
-            }
-            interrupted = true;
-            proc?.removeListener("SIGINT", handleSignal);
-            proc?.removeListener("SIGTERM", handleSignal);
-            proc?.removeListener("uncaughtException", handleException);
-            proc?.removeListener("unhandledRejection", handleRejection);
-            void this._client.postRunStatus(runId, "failed").finally(() => {
-                if (signal) {
-                    proc?.kill(proc.pid, signal);
-                }
-            });
-        };
-        const handleSignal = (signal: "SIGINT" | "SIGTERM") => {
-            finalizeFailure(signal);
-        };
-        const handleException = () => {
-            finalizeFailure();
-        };
-        const handleRejection = () => {
-            finalizeFailure();
-        };
-        if (proc && typeof proc.once === "function") {
-            proc.once("SIGINT", handleSignal);
-            proc.once("SIGTERM", handleSignal);
-            proc.once("uncaughtException", handleException);
-            proc.once("unhandledRejection", handleRejection);
-        }
+        // Mark the run as failed if the process is interrupted. The shutdown
+        // registry owns the listeners and decides when the process may die, so
+        // this post is not truncated by the SDK's own span flush racing it.
+        // `unhandledRejection` is opted into here (and only here) to preserve
+        // the behaviour this runner has always had, without arming that event
+        // for every consumer of the SDK.
+        const unregisterExitTask = registerExitTask(
+            () => this._client.postRunStatus(runId, "failed"),
+            { unhandledRejection: true },
+        );
 
         try {
             // --- Phase 2: Run beforeAll hook ---
@@ -277,12 +256,7 @@ export class Simulation {
                 throw error;
             }
         } finally {
-            if (proc && typeof proc.removeListener === "function") {
-                proc.removeListener("SIGINT", handleSignal);
-                proc.removeListener("SIGTERM", handleSignal);
-                proc.removeListener("uncaughtException", handleException);
-                proc.removeListener("unhandledRejection", handleRejection);
-            }
+            unregisterExitTask();
         }
     }
 

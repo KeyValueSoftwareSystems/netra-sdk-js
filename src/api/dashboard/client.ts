@@ -263,7 +263,7 @@ export class DashboardHttpClient extends NetraHttpClient {
     }
 
     try {
-      const url = `/public/dashboard/session/${encodeURIComponent(sessionId)}`;
+      const url = this.path`/public/dashboard/session/${sessionId}`;
 
       const response = await this.get(url);
 
