@@ -1,5 +1,8 @@
 /**
  * In-memory TTL cache for SDK read API responses.
+ *
+ * Values are deep-copied on `set` and `get`, so callers that mutate a returned
+ * object (e.g. appending messages to a prompt) never affect other callers.
  */
 
 export class TTLCache<T = unknown> {
@@ -17,12 +20,15 @@ export class TTLCache<T = unknown> {
       this.store.delete(key);
       return undefined;
     }
-    return entry.value;
+    return structuredClone(entry.value);
   }
 
   set(key: string, value: T, ttl?: number): void {
     const ttlMs = (ttl ?? this.defaultTtl) * 1000;
-    this.store.set(key, { value, expiresAt: performance.now() + ttlMs });
+    this.store.set(key, {
+      value: structuredClone(value),
+      expiresAt: performance.now() + ttlMs,
+    });
   }
 
   invalidate(key: string): void {

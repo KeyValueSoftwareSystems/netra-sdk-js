@@ -41,6 +41,22 @@ describe("Prompts.getPrompt caching", () => {
     expect(second).toEqual({ template: "v1" });
   });
 
+  it("does not let callers mutate the cached prompt", async () => {
+    getPromptVersion.mockResolvedValue({
+      data: { messages: [{ role: "system", content: "base" }] },
+    });
+
+    const first = await prompts.getPrompt({ name: "my-prompt", useCache: true });
+    first!.messages.push({ role: "user", content: "request A" });
+
+    const second = await prompts.getPrompt({ name: "my-prompt", useCache: true });
+    second!.messages[0].content = "changed";
+
+    const third = await prompts.getPrompt({ name: "my-prompt", useCache: true });
+    expect(getPromptVersion).toHaveBeenCalledTimes(1);
+    expect(third).toEqual({ messages: [{ role: "system", content: "base" }] });
+  });
+
   it("keeps separate cache entries per label when useCache is true", async () => {
     getPromptVersion
       .mockResolvedValueOnce({ data: { template: "prod" } })
