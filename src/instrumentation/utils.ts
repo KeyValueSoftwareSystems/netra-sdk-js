@@ -537,6 +537,30 @@ function setFinishReason(span: Span, response: Record<string, unknown>): void {
   }
 }
 
+// OpenAI splits GPT-5.6+ cache writes by TTL; each tier is billed at a different rate.
+const CACHE_WRITE_TTL_ATTRIBUTES = {
+  ttl_30m_tokens: SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS_30M,
+  ttl_12h_tokens: SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS_12H,
+} as const;
+
+/**
+ * Records OpenAI's per-TTL cache-write split from an input/prompt tokens
+ * details object. A tier reported as 0 is recorded; a missing or non-numeric
+ * tier is skipped.
+ */
+export function setCacheWriteTtlAttributes(
+  span: Span,
+  inputTokensDetails: unknown,
+): void {
+  if (!isDict(inputTokensDetails)) return;
+  const breakdown: unknown = inputTokensDetails.cache_write_tokens_details;
+  if (!isDict(breakdown)) return;
+  for (const [field, attribute] of Object.entries(CACHE_WRITE_TTL_ATTRIBUTES)) {
+    const tokens: unknown = breakdown[field];
+    if (typeof tokens === "number") span.setAttribute(attribute, tokens);
+  }
+}
+
 function setUsageAttributes(
   span: Span,
   response: Record<string, unknown>,
@@ -597,6 +621,10 @@ function setUsageAttributes(
       Number(cacheCreationTokens),
     );
   }
+  setCacheWriteTtlAttributes(
+    span,
+    usage.prompt_tokens_details ?? usage.input_tokens_details,
+  );
 
   const reasoningTokens = (
     (usage.completion_tokens_details ?? usage.output_tokens_details) as
