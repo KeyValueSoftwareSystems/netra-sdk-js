@@ -28,13 +28,21 @@ export interface SpanData {
     input_tokens?: number;
     output_tokens?: number;
     details?: Record<string, unknown> | null;
-    input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+    input_tokens_details?: {
+      cached_tokens?: number;
+      cache_write_tokens?: number;
+      cache_write_tokens_details?: { ttl_30m_tokens?: number; ttl_12h_tokens?: number } | null;
+    } | null;
     output_tokens_details?: { reasoning_tokens?: number } | null;
     // Chat Completions API naming (OpenAIChatCompletionsModel).
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
-    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } | null;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cache_write_tokens?: number;
+      cache_write_tokens_details?: { ttl_30m_tokens?: number; ttl_12h_tokens?: number } | null;
+    } | null;
     completion_tokens_details?: { reasoning_tokens?: number } | null;
   };
   // HandoffSpanData
