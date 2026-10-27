@@ -24,6 +24,10 @@ export const SpanAttributes = {
   LLM_USAGE_CACHE_READ_INPUT_TOKENS: "gen_ai.usage.cache_read_input_tokens",
   LLM_USAGE_CACHE_CREATION_INPUT_TOKENS:
     "gen_ai.usage.cache_creation_input_tokens",
+  LLM_USAGE_CACHE_CREATION_INPUT_TOKENS_30M:
+    "gen_ai.usage.cache_creation_input_tokens_30m",
+  LLM_USAGE_CACHE_CREATION_INPUT_TOKENS_12H:
+    "gen_ai.usage.cache_creation_input_tokens_12h",
   LLM_USAGE_REASONING_TOKENS: "gen_ai.usage.reasoning_tokens",
   LLM_USAGE_TOTAL_TOKENS: "llm.usage.total_tokens",
 

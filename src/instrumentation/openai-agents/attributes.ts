@@ -21,6 +21,7 @@ import {
 } from "./constants";
 import { Logger } from "../../logger";
 import { safeStringify } from "../../utils/serialization";
+import { setCacheWriteTtlAttributes } from "../utils";
 import { AgentSpan, SpanData } from "./types";
 import { extractContentString, extractInstructions } from "./utils";
 
@@ -286,6 +287,7 @@ function setUsageAttributes(
     if (inputDetails.cache_write_tokens !== undefined) {
       span.setAttribute(SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS, Number(inputDetails.cache_write_tokens));
     }
+    setCacheWriteTtlAttributes(span, inputDetails);
   }
 
   const outputDetails = usage.output_tokens_details ?? usage.completion_tokens_details;
@@ -307,7 +309,11 @@ interface ResponseObject {
     input_tokens?: number;
     output_tokens?: number;
     total_tokens?: number;
-    input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+    input_tokens_details?: {
+      cached_tokens?: number;
+      cache_write_tokens?: number;
+      cache_write_tokens_details?: { ttl_30m_tokens?: number; ttl_12h_tokens?: number } | null;
+    };
     output_tokens_details?: { reasoning_tokens?: number };
   };
   output?: Array<{
@@ -372,6 +378,7 @@ function setResponseObjectUsageAttributes(
   if (usage.input_tokens_details?.cache_write_tokens !== undefined) {
     span.setAttribute(SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS, usage.input_tokens_details.cache_write_tokens);
   }
+  setCacheWriteTtlAttributes(span, usage.input_tokens_details);
   if (usage.output_tokens_details?.reasoning_tokens !== undefined) {
     span.setAttribute(SpanAttributes.LLM_USAGE_REASONING_TOKENS, usage.output_tokens_details.reasoning_tokens);
   }
