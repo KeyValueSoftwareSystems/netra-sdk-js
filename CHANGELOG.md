@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-10-27
+
+### Added
+
+- **OpenAI Cache-Write TTL Breakdown**: OpenAI usage payloads that split cache writes by TTL (`cache_write_tokens_details.ttl_30m_tokens` / `ttl_12h_tokens` under `prompt_tokens_details` or `input_tokens_details`) are now recorded as `gen_ai.usage.cache_creation_input_tokens_30m` and `gen_ai.usage.cache_creation_input_tokens_12h`, since each tier is billed at a different rate. Captured by both the OpenAI and OpenAI Agents instrumentations (span usage and Responses API usage). A tier reported as `0` is recorded; a missing or non-numeric tier is skipped. Exposed as `SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS_30M` and `SpanAttributes.LLM_USAGE_CACHE_CREATION_INPUT_TOKENS_12H`.
+
+## [1.10.1] - 2026-10-07
+
+### Changed
+
+- **Dependency Updates**: Bumped runtime dependencies — `@opentelemetry/core` to `^2.11.0`, `@opentelemetry/otlp-transformer` to `^0.222.0`, `@opentelemetry/instrumentation-undici` to `^0.32.0`, `@traceloop/node-server-sdk` to `^0.27.0`, and `axios` to `^1.20.0`. The `@opentelemetry/instrumentation-undici` peer dependency range moved from `^0.6.0` to `^0.32.0`, so applications that install it directly need a compatible version.
+
 ## [1.10.0] - 2026-09-21
 
 ### Added
