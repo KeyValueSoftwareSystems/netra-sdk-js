@@ -56,6 +56,8 @@ process.on("SIGTERM", async () => {
 
 `Netra.shutdown()` is safe to call more than once or from several places at the same time; overlapping calls share one flush and all resolve once it completes.
 
+> **Note**: `registerShutdownHooks: false` opts out of the *span-flushing* hooks. While a simulation run is in progress the SDK still registers short-lived `SIGINT`, `SIGTERM`, `uncaughtException` and `unhandledRejection` listeners so an interrupted run is marked `failed` rather than left `running`; they are removed as soon as the run ends. They do not change your exit code — if your app handles the signal, it stays in control.
+
 ## 🎯 Decorators
 
 Use decorators to automatically trace your functions and classes. 

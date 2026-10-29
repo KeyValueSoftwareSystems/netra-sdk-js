@@ -341,29 +341,36 @@ export class Netra {
       Logger.error("Error during uninstrumentAll:", e);
     }
 
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const traceProvider = trace.getTracerProvider();
+      // The global provider is OTel's ProxyTracerProvider, which has neither
+      // forceFlush nor shutdown; the real provider is its delegate.
+      const globalProvider = trace.getTracerProvider() as any;
+      const traceProvider =
+        typeof globalProvider.getDelegate === "function"
+          ? globalProvider.getDelegate()
+          : globalProvider;
+      // Flush only, never shut the provider down: Traceloop's initialize() is
+      // one-shot per process, so a later Netra.init() reuses this provider and
+      // would otherwise export nothing.
       const flushPromise = (async () => {
-        if (
-          "forceFlush" in traceProvider &&
-          typeof traceProvider.forceFlush === "function"
-        ) {
+        if (typeof traceProvider?.forceFlush === "function") {
           await traceProvider.forceFlush();
-        }
-        if (
-          "shutdown" in traceProvider &&
-          typeof traceProvider.shutdown === "function"
-        ) {
-          await traceProvider.shutdown();
         }
       })();
 
       await Promise.race([
         flushPromise,
-        new Promise((resolve) => setTimeout(resolve, FLUSH_TIMEOUT_MS)),
+        new Promise((resolve) => {
+          flushTimer = setTimeout(resolve, FLUSH_TIMEOUT_MS);
+          // Don't let the budget itself hold the process open after the flush.
+          flushTimer.unref?.();
+        }),
       ]);
     } catch (e) {
       Logger.error("Error during Netra trace shutdown:", e);
+    } finally {
+      clearTimeout(flushTimer);
     }
 
     try {

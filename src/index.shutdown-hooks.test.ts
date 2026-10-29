@@ -8,6 +8,7 @@ vi.mock("./instrumentation", () => ({
 }));
 
 import { Netra } from "./index";
+import { FLUSH_TIMEOUT_MS } from "./shutdown-registry";
 
 const EVENTS = ["SIGINT", "SIGTERM", "uncaughtException", "beforeExit"] as const;
 const counts = () => EVENTS.map((e) => process.listenerCount(e));
@@ -110,12 +111,43 @@ describe("Netra process shutdown hooks", () => {
     finishFlush();
     await Promise.all([first, second]);
     expect(forceFlush).toHaveBeenCalledTimes(1);
-    expect(shutdown).toHaveBeenCalledTimes(1);
+    // Flush only: Traceloop cannot re-initialize a shut-down provider.
+    expect(shutdown).not.toHaveBeenCalled();
     expect(Netra.isInitialized()).toBe(false);
 
     // A later call after completion is a no-op.
     await Netra.shutdown();
     expect(forceFlush).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes the real provider behind OTel's global proxy", async () => {
+    await Netra.init({ registerShutdownHooks: false });
+
+    const forceFlush = vi.fn(() => Promise.resolve());
+    // ProxyTracerProvider exposes neither forceFlush nor shutdown itself.
+    vi.spyOn(trace, "getTracerProvider").mockReturnValue({
+      getTracer: vi.fn(),
+      getDelegate: () => ({ getTracer: vi.fn(), forceFlush }),
+    } as never);
+
+    await Netra.shutdown();
+    expect(forceFlush).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not leave the flush timeout pending once the flush has finished", async () => {
+    // A live 5s timer would hold the event loop open, so an app that exits by
+    // draining (or via beforeExit) would linger for the whole flush budget.
+    await Netra.init({ registerShutdownHooks: false });
+    const clear = vi.spyOn(globalThis, "clearTimeout");
+    const set = vi.spyOn(globalThis, "setTimeout");
+
+    await Netra.shutdown();
+
+    const flushTimer = set.mock.results.find(
+      (_, i) => set.mock.calls[i][1] === FLUSH_TIMEOUT_MS,
+    )?.value;
+    expect(flushTimer).toBeDefined();
+    expect(clear).toHaveBeenCalledWith(flushTimer);
   });
 
   it("init() waits for an in-flight shutdown instead of being ignored", async () => {
