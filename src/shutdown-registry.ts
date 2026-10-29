@@ -81,8 +81,11 @@ let rejectionInstalled = false;
 let firing = false;
 /** We are deliberately rethrowing a rejection to restore Node's default. */
 let rethrowing = false;
-/** The application was handling the signal that started the current fire. */
-let fireAppOwned = false;
+/**
+ * The signal that started the current fire, if the application was handling
+ * it. Only a re-send of that same signal can be a hand-back.
+ */
+let appOwnedSignal: NodeJS.Signals | undefined;
 /**
  * Set when the application hands the exit back mid-fire: it handled the first
  * signal, then removed its handler and re-sent the signal (NestJS
@@ -297,9 +300,9 @@ export async function settleOtherExitTasks(exclude: ExitTask): Promise<void> {
 }
 
 /** Begin a shutdown; returns its generation. */
-function startFire(appOwned: boolean): number {
+function startFire(appOwned?: NodeJS.Signals): number {
     firing = true;
-    fireAppOwned = appOwned;
+    appOwnedSignal = appOwned;
     handedBack = undefined;
     return ++generation;
 }
@@ -309,7 +312,7 @@ const onSignal = (sig: NodeJS.Signals): void => {
         // Only listeners still attached count here, not `appHandles`: its
         // `appHadListener` fallback is stale by now.
         const handled = process.listeners(sig).some((l) => !ours.has(l));
-        if (!handled && fireAppOwned && !handedBack) {
+        if (!handled && sig === appOwnedSignal && !handedBack) {
             // The app handled the first signal and has since removed its
             // handler and re-sent it (NestJS does this): it is handing the
             // exit back to Node, not insisting. Let the tasks finish (still
@@ -338,7 +341,7 @@ const onSignal = (sig: NodeJS.Signals): void => {
         return;
     }
     const handled = appHandles(sig);
-    const gen = startFire(handled);
+    const gen = startFire(handled ? sig : undefined);
     Logger.log(`\nReceived ${sig}. Flushing Netra SDK...`);
     void runTasks({ kind: "signal", signal: sig })
         .catch((err) => Logger.error("netra: error during shutdown:", err))
@@ -391,7 +394,7 @@ const onUncaughtException = (error: Error): void => {
         // disarmed: a later SIGTERM would then flush nothing. Stay out of it.
         return;
     }
-    const gen = startFire(false);
+    const gen = startFire();
     Logger.error("Uncaught exception; flushing Netra SDK before exit...");
     void runTasks({ kind: "uncaughtException", error })
         .catch((err) => Logger.error("netra: error during crash shutdown:", err))
@@ -431,7 +434,7 @@ const onUnhandledRejection = (reason: unknown): void => {
     // an uncaught exception. Whether that ends the process depends on whether
     // anything handles *that*.
     if (!appHandles("uncaughtException")) {
-        const gen = startFire(false);
+        const gen = startFire();
         void runTasks({ kind: "unhandledRejection", error: reason })
             .catch((err) => Logger.error("netra: error during shutdown:", err))
             .finally(() => {
@@ -471,7 +474,7 @@ export function __resetForTests(): void {
     inFlight = [];
     uninstall();
     firing = false;
-    fireAppOwned = false;
+    appOwnedSignal = undefined;
     handedBack = undefined;
     rethrowing = false;
     generation++;

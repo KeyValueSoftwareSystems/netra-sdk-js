@@ -232,6 +232,30 @@ describe("shutdown registry: signal handling", () => {
         }
     });
 
+    it("does not mistake a different signal for a hand-back", async () => {
+        // The app owns SIGTERM but not SIGINT: Ctrl+C during the flush is the
+        // user insisting, not the app handing SIGTERM back.
+        const kill = vi
+            .spyOn(process, "kill")
+            .mockImplementation((() => true) as never);
+        const appHandler = vi.fn();
+        process.on("SIGTERM", appHandler);
+
+        try {
+            registerExitTask(() => new Promise<void>(() => {}));
+
+            process.emit("SIGTERM", "SIGTERM");
+            await settle();
+            process.emit("SIGINT", "SIGINT");
+            await settle();
+
+            expect(kill).toHaveBeenCalledWith(process.pid, "SIGINT");
+            expect(process.listenerCount("SIGINT")).toBe(0);
+        } finally {
+            process.removeListener("SIGTERM", appHandler);
+        }
+    });
+
     it("still exits immediately on a signal after a hand-back", async () => {
         const kill = vi
             .spyOn(process, "kill")

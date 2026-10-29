@@ -42,21 +42,24 @@ await Netra.init({
 
 #### Shutdown
 
-By default `init()` registers `SIGINT`, `SIGTERM`, `uncaughtException` and `beforeExit` hooks that flush pending spans. The SDK never decides when your process exits: if your app has its own handler for the same event, it keeps control (e.g. to drain connections); otherwise Node's default behaviour applies after the flush. To manage shutdown entirely yourself, opt out and call `Netra.shutdown()`:
+By default, `init()` flushes pending spans (for up to 5 seconds) when the process receives `SIGINT`/`SIGTERM`, crashes, or exits naturally. If your app handles these events itself, it stays in control; otherwise Node's default behaviour applies after the flush. To manage shutdown yourself, opt out and call `Netra.shutdown()`:
 
 ```typescript
 await Netra.init({ appName: "my-ai-app", registerShutdownHooks: false });
 
 process.on("SIGTERM", async () => {
-  await server.close();
+  await new Promise((resolve) => server.close(resolve));
   await Netra.shutdown(); // flush pending spans
   process.exit(0);
 });
 ```
 
-`Netra.shutdown()` is safe to call more than once or from several places at the same time; overlapping calls share one flush and all resolve once it completes.
+`Netra.shutdown()` is safe to call more than once or from several places at the same time.
 
-> **Note**: `registerShutdownHooks: false` opts out of the *span-flushing* hooks. While a simulation run is in progress the SDK still registers short-lived `SIGINT`, `SIGTERM`, `uncaughtException` and `unhandledRejection` listeners so an interrupted run is marked `failed` rather than left `running`; they are removed as soon as the run ends. They do not change your exit code — if your app handles the signal, it stays in control.
+> **Notes**
+> - If your app has its own `uncaughtException` handler, the SDK leaves crashes to it and does not flush; call `Netra.shutdown()` there before exiting.
+> - If a library keeps a permanent signal listener (e.g. via `signal-exit`), `SIGTERM` may not stop the process. Use `registerShutdownHooks: false` and call `Netra.shutdown()` yourself.
+> - With `registerShutdownHooks: false`, a running simulation still listens for these events briefly so an interrupted run is marked `failed`.
 
 ## 🎯 Decorators
 
