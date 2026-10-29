@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-10-29
+
+### Added
+
+- **`registerShutdownHooks` Option**: `Netra.init({ registerShutdownHooks: false })` skips the SDK's `SIGINT`, `SIGTERM`, `uncaughtException` and `beforeExit` hooks, so the application can manage shutdown itself and call `Netra.shutdown()`. Defaults to `true`. A running simulation still registers short-lived hooks of its own so an interrupted run is marked `failed`.
+
+### Changed
+
+- **Shutdown Hooks No Longer Exit the Process**: The signal and crash hooks flush pending spans (for up to 5 seconds) and then hand control back instead of calling `process.exit()`. An application that handles the event itself stays in control and is no longer cut off mid-drain. Otherwise Node's default applies: `SIGTERM`/`SIGINT` now end the process by that signal (exit code 143/130) instead of exit code 0, and an uncaught exception exits with code 1. If the application has its own `uncaughtException` handler, the SDK leaves crashes to it and does not flush.
+- **Signal Hand-Back**: If the application handles a signal, removes its handler and re-sends the same signal (as NestJS `enableShutdownHooks()` does), the SDK finishes its flush before the process exits. A different signal, or the same signal sent again after that, exits immediately. Because a re-sent signal cannot be told apart from a user pressing Ctrl+C twice, an application whose handler removes itself (e.g. `process.once`) waits for the flush on a second identical signal.
+- **`Netra.shutdown()` Lifecycle**: Repeated or overlapping calls share one shutdown, and the returned promise also waits for other SDK exit work, such as a simulation marking its run `failed`. `Netra.init()` waits for an in-flight shutdown before re-initializing. `Netra.shutdown()` now flushes the tracer provider without shutting it down, so a later `Netra.init()` in the same process keeps exporting spans.
+- **LangGraph Uses the Application's `@langchain/core`**: `@langchain/core` is no longer bundled. The LangGraph instrumentation builds on the application's own copy, declared as an optional peer dependency (`>=1.0.0 <2.0.0`), and is skipped with a warning when it is not installed. `@langchain/langgraph` is now an optional peer dependency.
+- **CommonJS Type Declarations**: `require` consumers now resolve their own declarations (`dist/index.d.cts`), so TypeScript picks the correct types for both `import` and `require` under `node16`/`nodenext` module resolution.
+- **Dependencies**: `@traceloop/instrumentation-langchain` (`^0.27.0`) is now a direct dependency. `@langchain/ollama`, `@opentelemetry/instrumentation-http`, `@opentelemetry/instrumentation-express` and `@opentelemetry/instrumentation-undici` are no longer declared as peer dependencies; the HTTP, Express and undici instrumentations are still enabled when those packages are installed.
+
+### Fixed
+
+- **Spans Flushed on Shutdown**: `Netra.shutdown()` and the shutdown hooks now flush the real tracer provider. Previously they looked for `forceFlush()` on OpenTelemetry's global proxy provider, which does not have one, so spans still buffered when the process stopped were lost.
+- **Faster Natural Exit**: A process that finishes on its own no longer stays alive for up to 5 seconds after the flush completes.
+- **No Hang When a Signal Listener Is Removed**: If a signal listener that existed when the SDK installed its hooks (for example a transient `signal-exit` hook) is removed before the signal arrives, the SDK now re-raises the signal instead of leaving the process running until `SIGKILL`.
+- **Simulation Status on Interruption**: Marking an interrupted simulation run `failed` is coordinated with the span flush, so the status update is no longer cut short. A crash or rejection that the application handles and recovers from no longer marks a healthy run `failed` or disarms the SDK's hooks.
+
+### Security
+
+- **API Path Encoding**: IDs interpolated into API paths (sessions, tenants, traces, spans, datasets, evaluation runs and simulation items) are percent-encoded as a single path segment, so a value containing `/`, `?`, `#` or `%` can no longer change which endpoint is called. Empty, `.` and `..` values are rejected: the call fails and an error is logged.
+- **Cache Isolation**: The prompts and models caches store and return deep copies, so mutating a returned object (for example, appending messages to a prompt) no longer changes what later callers receive.
+
 ## [1.11.0] - 2026-10-27
 
 ### Added
