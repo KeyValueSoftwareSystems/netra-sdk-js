@@ -153,9 +153,21 @@ describe("shutdown registry (real process)", () => {
         expect(result.ms).toBeLessThan(5_000);
     }, 20_000);
 
-    it("dies by the signal when the app removes its handler and re-sends it", async () => {
+    it("finishes tasks, then dies by the signal, when the app hands a re-sent signal back", async () => {
         const result = await run(bundle("exit-app-resends-signal"));
 
+        // The app re-sent the signal 100ms in; the 1s task still finishes.
+        expect(result.stdout).toContain("FLUSHED");
+        expect(result.stdout).not.toContain("STILL_ALIVE_AFTER_SIGTERM");
+        expect(result.signal ?? result.code).toBe(
+            result.signal ? "SIGTERM" : 143,
+        );
+    }, 20_000);
+
+    it("dies by the signal when a pre-init handler was removed before it", async () => {
+        const result = await run(bundle("exit-app-removed-handler"));
+
+        expect(result.stdout).toContain("FLUSHED");
         expect(result.stdout).not.toContain("STILL_ALIVE_AFTER_SIGTERM");
         expect(result.signal ?? result.code).toBe(
             result.signal ? "SIGTERM" : 143,

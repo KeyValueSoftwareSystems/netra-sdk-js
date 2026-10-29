@@ -149,6 +149,31 @@ describe("shutdown registry: signal handling", () => {
         }
     });
 
+    it("re-raises when the app removed its pre-init handler before the signal", async () => {
+        // The install-time snapshot must not outlive the listener it recorded,
+        // or nothing re-raises and the process hangs until SIGKILL.
+        const kill = vi
+            .spyOn(process, "kill")
+            .mockImplementation((() => true) as never);
+        const appHandler = vi.fn();
+        process.on("SIGTERM", appHandler);
+
+        try {
+            const task = vi.fn().mockResolvedValue(undefined);
+            registerExitTask(task);
+            process.removeListener("SIGTERM", appHandler);
+            await settle(1);
+
+            process.emit("SIGTERM", "SIGTERM");
+            await vi.waitFor(() =>
+                expect(kill).toHaveBeenCalledWith(process.pid, "SIGTERM"),
+            );
+            expect(appHandler).not.toHaveBeenCalled();
+        } finally {
+            process.removeListener("SIGTERM", appHandler);
+        }
+    });
+
     it("exits immediately on a second signal instead of waiting out the budget", async () => {
         const kill = vi
             .spyOn(process, "kill")
@@ -170,6 +195,98 @@ describe("shutdown registry: signal handling", () => {
         expect(kill).toHaveBeenCalledWith(process.pid, "SIGTERM");
         expect(process.listenerCount("SIGTERM")).toBe(0);
         released();
+    });
+
+    it("finishes the tasks when the app hands a re-sent signal back", async () => {
+        // NestJS enableShutdownHooks(): the app handles the first signal,
+        // removes its handler, cleans up and re-sends the signal. That is a
+        // hand-back, not "I meant it", so the flush must not be abandoned.
+        const kill = vi
+            .spyOn(process, "kill")
+            .mockImplementation((() => true) as never);
+        const appHandler = (sig: NodeJS.Signals) => {
+            process.removeListener(sig, appHandler);
+            process.emit("SIGTERM", "SIGTERM");
+        };
+        process.on("SIGTERM", appHandler);
+
+        try {
+            let released!: () => void;
+            const done = vi.fn();
+            registerExitTask(
+                () => new Promise<void>((r) => { released = r; }).then(done),
+            );
+
+            process.emit("SIGTERM", "SIGTERM");
+            await settle();
+            expect(kill).not.toHaveBeenCalled(); // still flushing
+
+            released();
+            await vi.waitFor(() =>
+                expect(kill).toHaveBeenCalledWith(process.pid, "SIGTERM"),
+            );
+            expect(done).toHaveBeenCalled();
+            expect(kill).toHaveBeenCalledTimes(1);
+        } finally {
+            process.removeListener("SIGTERM", appHandler);
+        }
+    });
+
+    it("does not mistake a different signal for a hand-back", async () => {
+        // The app owns SIGTERM but not SIGINT: Ctrl+C during the flush is the
+        // user insisting, not the app handing SIGTERM back.
+        const kill = vi
+            .spyOn(process, "kill")
+            .mockImplementation((() => true) as never);
+        const appHandler = vi.fn();
+        process.on("SIGTERM", appHandler);
+
+        try {
+            registerExitTask(() => new Promise<void>(() => {}));
+
+            process.emit("SIGTERM", "SIGTERM");
+            await settle();
+            process.emit("SIGINT", "SIGINT");
+            await settle();
+
+            expect(kill).toHaveBeenCalledWith(process.pid, "SIGINT");
+            expect(process.listenerCount("SIGINT")).toBe(0);
+        } finally {
+            process.removeListener("SIGTERM", appHandler);
+        }
+    });
+
+    it("still exits immediately on a signal after a hand-back", async () => {
+        const kill = vi
+            .spyOn(process, "kill")
+            .mockImplementation((() => true) as never);
+        const appHandler = (sig: NodeJS.Signals) => {
+            process.removeListener(sig, appHandler);
+            process.emit("SIGTERM", "SIGTERM");
+        };
+        process.on("SIGTERM", appHandler);
+
+        try {
+            let released!: () => void;
+            registerExitTask(
+                () => new Promise<void>((r) => { released = r; }),
+            );
+
+            process.emit("SIGTERM", "SIGTERM"); // app handles, then hands back
+            await settle();
+            expect(kill).not.toHaveBeenCalled();
+
+            process.emit("SIGTERM", "SIGTERM"); // the user insists
+            await settle();
+            expect(kill).toHaveBeenCalledWith(process.pid, "SIGTERM");
+            expect(process.listenerCount("SIGTERM")).toBe(0);
+
+            released();
+            await settle();
+            expect(kill).toHaveBeenCalledTimes(1); // abandoned fire stays quiet
+        } finally {
+            process.removeListener("SIGTERM", appHandler);
+        }
     });
 
     it("abandons a task that outlives the exit budget", async () => {
