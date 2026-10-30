@@ -322,7 +322,8 @@ function openAIWrapper(
 
   return (wrapped, instance, args, kwargs) => {
     if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((v) => v) : result;
     }
 
     const currentContext = context.active();

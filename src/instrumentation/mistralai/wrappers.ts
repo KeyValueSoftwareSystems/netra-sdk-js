@@ -55,7 +55,8 @@ function mistralWrapper(
     kwargs: Record<string, unknown>
   ): unknown {
     if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((value) => value) : result;
     }
 
     return tracer.startActiveSpan(
@@ -132,7 +133,8 @@ function mistralStreamWrapper(
     kwargs: Record<string, unknown>
   ): unknown {
     if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((value) => value) : result;
     }
 
     // IMPORTANT: Pass the active context to inherit parent span

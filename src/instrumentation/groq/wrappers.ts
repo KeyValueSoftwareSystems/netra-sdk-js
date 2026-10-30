@@ -39,7 +39,8 @@ function groqWrapper(
     kwargs: Record<string, unknown> & { stream?: boolean }
   ): unknown {
     if (shouldSuppressInstrumentation()) {
-      return wrapped.call(instance, ...args);
+      const result = wrapped.call(instance, ...args);
+      return isPromise(result) ? result.then((value) => value) : result;
     }
 
     const isStreaming = kwargs.stream === true;

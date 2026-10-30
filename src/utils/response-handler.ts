@@ -139,37 +139,16 @@ export function wrapAsyncIterable<T>(
 
   let directIterator: AsyncIterator<T> | null = null;
 
-  // Another wrapper may later replace the source's [Symbol.asyncIterator]
-  // with one that calls the function it read from this proxy (Anthropic's own
-  // tracing does). That call re-enters here while the wrapped iterator is being
-  // created; it gets the source's original iterator so the two don't recurse.
-  const originalIterate = source[Symbol.asyncIterator];
-  let creating = false;
-  const iterate = () => {
-    if (creating) return originalIterate.call(source);
-    creating = true;
-    try {
-      return createWrappedIterator();
-    } finally {
-      creating = false;
-    }
-  };
-
   return new Proxy(source, {
-    get(target, prop, receiver) {
+    get(target, prop) {
       if (prop === Symbol.asyncIterator) {
-        return iterate;
+        return () => createWrappedIterator();
       }
       if (typeof prop === "string" && ITERATOR_METHODS.has(prop)) {
-        if (!directIterator) directIterator = iterate();
+        if (!directIterator) directIterator = createWrappedIterator();
         return (directIterator as any)[prop].bind(directIterator);
       }
       const value = (target as any)[prop];
-      // SDK streams build their ReadableStream from `this[Symbol.asyncIterator]()`;
-      // calling it on the proxy keeps reads going through the wrapped iterator.
-      if (prop === "toReadableStream" && typeof value === "function") {
-        return value.bind(receiver);
-      }
       if (typeof value === "function") return value.bind(target);
       return value;
     },
