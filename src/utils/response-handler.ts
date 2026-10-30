@@ -20,6 +20,25 @@ export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
   return value != null && typeof (value as any).then === "function";
 }
 
+/**
+ * The `APIPromise` returned by Stainless-generated SDKs (OpenAI, Anthropic,
+ * Groq): a Promise subclass whose extra methods (`.withResponse()`,
+ * `.asResponse()`, `._thenUnwrap()`) the SDKs' own helpers such as
+ * `.parse()` and `.stream()` depend on.
+ */
+export interface APIPromiseLike<T = unknown> extends Promise<T> {
+  responsePromise: Promise<unknown>;
+  _thenUnwrap<U>(transform: (value: T) => U): APIPromiseLike<U>;
+}
+
+export function isAPIPromise(value: unknown): value is APIPromiseLike {
+  return (
+    isPromise(value) &&
+    typeof (value as any)._thenUnwrap === "function" &&
+    isPromise((value as any).responsePromise)
+  );
+}
+
 const ITERATOR_METHODS = new Set(["next", "return", "throw"]);
 
 /**
@@ -114,7 +133,7 @@ export function wrapAsyncIterable<T>(
   let directIterator: AsyncIterator<T> | null = null;
 
   return new Proxy(source, {
-    get(target, prop) {
+    get(target, prop, receiver) {
       if (prop === Symbol.asyncIterator) {
         return () => createWrappedIterator();
       }
@@ -123,6 +142,11 @@ export function wrapAsyncIterable<T>(
         return (directIterator as any)[prop].bind(directIterator);
       }
       const value = (target as any)[prop];
+      // SDK streams build their ReadableStream from `this[Symbol.asyncIterator]()`;
+      // calling it on the proxy keeps reads going through the wrapped iterator.
+      if (prop === "toReadableStream" && typeof value === "function") {
+        return value.bind(receiver);
+      }
       if (typeof value === "function") return value.bind(target);
       return value;
     },
@@ -132,9 +156,14 @@ export function wrapAsyncIterable<T>(
 /**
  * Wrap a promise with lifecycle callbacks.
  * If the resolved value is async-iterable, wraps it with `wrapAsyncIterable`.
- * When `preserveOriginal` is set, returns a Proxy that routes
+ *
+ * An `APIPromise` is never replaced: the result is derived from it with
+ * `_thenUnwrap`, so every SDK method keeps working and the body is parsed
+ * only when the caller consumes it.
+ *
+ * Otherwise, when `preserveOriginal` is set, returns a Proxy that routes
  * then/catch/finally to the instrumented promise and other properties
- * to the original object (preserving SDK methods like `.withResponse()`).
+ * to the original object.
  */
 export function wrapPromise<T>(
   promise: Promise<T>,
@@ -151,6 +180,36 @@ export function wrapPromise<T>(
       Logger.error("netra: finalize callback error", e);
     }
   }
+  function safeOnSuccess(value: unknown) {
+    try {
+      callbacks.onSuccess?.(value);
+    } catch (e) {
+      Logger.error("netra: onSuccess callback error", e);
+    }
+  }
+  function safeOnError(error: unknown) {
+    try {
+      callbacks.onError(error);
+    } catch {
+      Logger.error("netra: onError callback error", error);
+    }
+  }
+
+  if (isAPIPromise(promise)) {
+    // Failures are seen on the raw response promise, which never reads the body.
+    promise.responsePromise.then(undefined, (error) => {
+      safeOnError(error);
+      safeFinalize("error");
+    });
+    return promise._thenUnwrap((value) => {
+      if (isAsyncIterable(value)) {
+        return wrapAsyncIterable(value, { ...callbacks, finalize: safeFinalize });
+      }
+      safeOnSuccess(value);
+      safeFinalize("ok");
+      return value;
+    });
+  }
 
   const instrumentedPromise = (async () => {
     try {
@@ -158,19 +217,11 @@ export function wrapPromise<T>(
       if (isAsyncIterable(value)) {
         return wrapAsyncIterable(value as any, callbacks);
       }
-      try {
-        callbacks.onSuccess?.(value);
-      } catch (e) {
-        Logger.error("netra: onSuccess callback error", e);
-      }
+      safeOnSuccess(value);
       safeFinalize("ok");
       return value;
     } catch (error) {
-      try {
-        callbacks.onError(error);
-      } catch {
-        Logger.error("netra: onError callback error", error);
-      }
+      safeOnError(error);
       safeFinalize("error");
       throw error;
     }
@@ -179,6 +230,11 @@ export function wrapPromise<T>(
   if (!options?.preserveOriginal) {
     return instrumentedPromise;
   }
+
+  // The caller may consume the original through an SDK method and never
+  // touch this promise; mark it handled so a rejection can't crash the process.
+  // The caller still sees the error through its own then/catch.
+  instrumentedPromise.catch(() => {});
 
   const original = options.preserveOriginal;
   return new Proxy(instrumentedPromise, {
