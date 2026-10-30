@@ -31,6 +31,13 @@ export interface APIPromiseLike<T = unknown> extends Promise<T> {
   _thenUnwrap<U>(transform: (value: T) => U): APIPromiseLike<U>;
 }
 
+export interface WrapOptions {
+  /** Return the SDK's own object, routing only then/catch/finally through Netra. */
+  preserveOriginal?: object;
+  /** Hand an `APIPromise` back to the app as an `APIPromise`; see `wrapPromise`. */
+  deriveAPIPromise?: boolean;
+}
+
 export function isAPIPromise(value: unknown): value is APIPromiseLike {
   return (
     isPromise(value) &&
@@ -173,18 +180,21 @@ export function wrapAsyncIterable<T>(
  * Wrap a promise with lifecycle callbacks.
  * If the resolved value is async-iterable, wraps it with `wrapAsyncIterable`.
  *
- * An `APIPromise` is never replaced: the result is derived from it with
- * `_thenUnwrap`, so every SDK method keeps working and the caller's body is
- * parsed only when the caller consumes it.
+ * With `deriveAPIPromise`, an `APIPromise` is never replaced: the result is
+ * derived from it with `_thenUnwrap`, so every SDK method keeps working and
+ * the caller's body is parsed only when the caller consumes it. Provider
+ * wrappers that return the SDK's promise to the app opt in to this.
  *
- * Otherwise, when `preserveOriginal` is set, returns a Proxy that routes
- * then/catch/finally to the instrumented promise and other properties
- * to the original object.
+ * Otherwise the promise is awaited as soon as it is wrapped, so anything it
+ * wraps (an instrumented LLM call, the Anthropic SDK's own span) ends before
+ * this span does, and Netra still marks the trace root as an LLM call. With
+ * `preserveOriginal`, a Proxy routes then/catch/finally to the instrumented
+ * promise and other properties to the original object.
  */
 export function wrapPromise<T>(
   promise: Promise<T>,
   callbacks: ResponseCallbacks,
-  options?: { preserveOriginal?: object },
+  options?: WrapOptions,
 ): any {
   let finalized = false;
   function safeFinalize(status: "ok" | "error") {
@@ -211,7 +221,7 @@ export function wrapPromise<T>(
     }
   }
 
-  if (isAPIPromise(promise)) {
+  if (options?.deriveAPIPromise && isAPIPromise(promise)) {
     // Failures are seen on the raw response promise, which never reads the body.
     promise.responsePromise.then(observeJSONBody, (error) => {
       safeOnError(error);
@@ -313,7 +323,7 @@ export function wrapPromise<T>(
 export function wrapResponse<T>(
   response: T,
   callbacks: ResponseCallbacks,
-  options?: { preserveOriginal?: object },
+  options?: WrapOptions,
 ): T {
   if (isAsyncIterable(response)) {
     return wrapAsyncIterable(response as any, callbacks) as T;

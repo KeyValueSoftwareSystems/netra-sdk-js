@@ -272,7 +272,7 @@ function executeStreaming(
         onChunk: (chunk) => collector.collect(chunk),
         onError: (error) => recordSpanError(span, error),
         finalize: (status) => collector.finish(status),
-      });
+      }, { deriveAPIPromise: true });
     }
 
     return new StreamingWrapper(span, response, startTime, kwargs);
@@ -302,7 +302,7 @@ function executeNonStreaming(
           setSpanSuccess(span, modelAsDict(value), startTime),
         onError: (error) => recordSpanError(span, error),
         finalize: () => span.end(),
-      });
+      }, { deriveAPIPromise: true });
     }
 
     finalizeSpanSuccess(span, modelAsDict(result), startTime);

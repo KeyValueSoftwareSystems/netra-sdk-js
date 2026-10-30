@@ -67,7 +67,7 @@ function groqWrapper(
             onChunk: (chunk) => collector.processChunk(chunk),
             onError: (error) => recordSpanError(span, error),
             finalize: (status) => collector.finish(status),
-          });
+          }, { deriveAPIPromise: true });
         } else {
           return new StreamingWrapper(span, response, startTime, kwargs);
         }
@@ -108,7 +108,7 @@ function groqWrapper(
                 },
                 onError: (error) => recordSpanError(span, error),
                 finalize: () => span.end(),
-              });
+              }, { deriveAPIPromise: true });
             } else {
               const endTime = Date.now();
               const responseDict = modelAsDict(response);
