@@ -140,7 +140,7 @@ export function wrapAsyncIterable<T>(
   let directIterator: AsyncIterator<T> | null = null;
 
   return new Proxy(source, {
-    get(target, prop) {
+    get(target, prop, receiver) {
       if (prop === Symbol.asyncIterator) {
         return () => createWrappedIterator();
       }
@@ -149,6 +149,12 @@ export function wrapAsyncIterable<T>(
         return (directIterator as any)[prop].bind(directIterator);
       }
       const value = (target as any)[prop];
+      // SDK streams build their ReadableStream from `this[Symbol.asyncIterator]()`;
+      // calling it on the proxy keeps reads going through the wrapped iterator,
+      // so `new Response(stream.toReadableStream())` still ends the span.
+      if (prop === "toReadableStream" && typeof value === "function") {
+        return value.bind(receiver);
+      }
       if (typeof value === "function") return value.bind(target);
       return value;
     },

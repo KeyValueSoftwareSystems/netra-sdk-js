@@ -116,6 +116,17 @@ describe("Groq instrumentation", () => {
     expect(spans[spans.length - 1].status.code).toBe(SpanStatusCode.OK);
   });
 
+  it("toReadableStream() works and still ends the span", async () => {
+    server.handle((_req, res) => sendSSE(res, CHUNKS));
+
+    const stream = await client.chat.completions.create({ ...PARAMS, stream: true });
+    const reader = stream.toReadableStream().getReader();
+    while (!(await reader.read()).done);
+
+    const [span] = tracing.spans("groq.chat");
+    expect(span.status.code).toBe(SpanStatusCode.OK);
+  });
+
   it("breaking out of the stream aborts the request and ends the span", async () => {
     let requestClosed!: Promise<void>;
     server.handle((_req, res) => {

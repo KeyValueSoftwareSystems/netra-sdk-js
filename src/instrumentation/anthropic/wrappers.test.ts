@@ -165,6 +165,18 @@ describe("Anthropic instrumentation", () => {
       expect(await collect(data)).toHaveLength(EVENTS.length);
     });
 
+    it("toReadableStream() works and still ends the span", async () => {
+      const stream = await client.messages.create({ ...PARAMS, stream: true });
+      const reader = stream.toReadableStream().getReader();
+      let lines = 0;
+      for (let r = await reader.read(); !r.done; r = await reader.read()) {
+        lines += new TextDecoder().decode(r.value).trim().split("\n").length;
+      }
+
+      expect(lines).toBe(EVENTS.length);
+      expect(tracing.spans("anthropic.chat")).toHaveLength(1);
+    });
+
     it("messages.stream().finalMessage() still works", async () => {
       const message = await client.messages.stream(PARAMS).finalMessage();
 

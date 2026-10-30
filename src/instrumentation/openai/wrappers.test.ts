@@ -220,7 +220,7 @@ describe("OpenAI instrumentation", () => {
       expect(await collect(right)).toHaveLength(3);
     });
 
-    it("toReadableStream() works", async () => {
+    it("toReadableStream() works and still ends the span", async () => {
       const stream = await client.chat.completions.create({ ...PARAMS, stream: true });
       const reader = stream.toReadableStream().getReader();
       let text = "";
@@ -229,6 +229,9 @@ describe("OpenAI instrumentation", () => {
       }
 
       expect(text.trim().split("\n")).toHaveLength(3);
+      const [span] = tracing.spans("openai.chat");
+      expect(span.status.code).toBe(SpanStatusCode.OK);
+      expect(JSON.stringify(span.attributes)).toContain("Hello");
     });
 
     it("breaking out of the stream aborts the request and ends the span", async () => {
