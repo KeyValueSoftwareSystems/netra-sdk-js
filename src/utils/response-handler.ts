@@ -132,13 +132,29 @@ export function wrapAsyncIterable<T>(
 
   let directIterator: AsyncIterator<T> | null = null;
 
+  // Another wrapper may later replace the source's [Symbol.asyncIterator]
+  // with one that calls the function it read from this proxy (Anthropic's own
+  // tracing does). That call re-enters here while the wrapped iterator is being
+  // created; it gets the source's original iterator so the two don't recurse.
+  const originalIterate = source[Symbol.asyncIterator];
+  let creating = false;
+  const iterate = () => {
+    if (creating) return originalIterate.call(source);
+    creating = true;
+    try {
+      return createWrappedIterator();
+    } finally {
+      creating = false;
+    }
+  };
+
   return new Proxy(source, {
     get(target, prop, receiver) {
       if (prop === Symbol.asyncIterator) {
-        return () => createWrappedIterator();
+        return iterate;
       }
       if (typeof prop === "string" && ITERATOR_METHODS.has(prop)) {
-        if (!directIterator) directIterator = createWrappedIterator();
+        if (!directIterator) directIterator = iterate();
         return (directIterator as any)[prop].bind(directIterator);
       }
       const value = (target as any)[prop];
@@ -158,8 +174,8 @@ export function wrapAsyncIterable<T>(
  * If the resolved value is async-iterable, wraps it with `wrapAsyncIterable`.
  *
  * An `APIPromise` is never replaced: the result is derived from it with
- * `_thenUnwrap`, so every SDK method keeps working and the body is parsed
- * only when the caller consumes it.
+ * `_thenUnwrap`, so every SDK method keeps working and the caller's body is
+ * parsed only when the caller consumes it.
  *
  * Otherwise, when `preserveOriginal` is set, returns a Proxy that routes
  * then/catch/finally to the instrumented promise and other properties
@@ -197,7 +213,7 @@ export function wrapPromise<T>(
 
   if (isAPIPromise(promise)) {
     // Failures are seen on the raw response promise, which never reads the body.
-    promise.responsePromise.then(undefined, (error) => {
+    promise.responsePromise.then(observeJSONBody, (error) => {
       safeOnError(error);
       safeFinalize("error");
     });
@@ -205,10 +221,41 @@ export function wrapPromise<T>(
       if (isAsyncIterable(value)) {
         return wrapAsyncIterable(value, { ...callbacks, finalize: safeFinalize });
       }
-      safeOnSuccess(value);
-      safeFinalize("ok");
+      if (!finalized) {
+        safeOnSuccess(value);
+        safeFinalize("ok");
+      }
       return value;
     });
+  }
+
+  // Read a copy of a JSON body so the span ends when the response arrives,
+  // even if the caller reads the result late or never. The caller's own body
+  // is left unread. This runs before any caller handler on responsePromise,
+  // so the body is still unused when it is cloned.
+  function observeJSONBody(props: any) {
+    try {
+      const response = props?.response;
+      const contentType = String(response?.headers?.get?.("content-type") ?? "");
+      if (typeof response?.clone !== "function" || !contentType.includes("json")) {
+        return;
+      }
+      response
+        .clone()
+        .json()
+        .then(
+          (body: unknown) => {
+            if (finalized) return;
+            safeOnSuccess(body);
+            safeFinalize("ok");
+          },
+          // The caller's own read reports the failure; the span then ends
+          // through _thenUnwrap or the error path.
+          () => {},
+        );
+    } catch (e) {
+      Logger.debug("netra: could not read a copy of the response body", e);
+    }
   }
 
   const instrumentedPromise = (async () => {
