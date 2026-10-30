@@ -238,9 +238,13 @@ export function wrapPromise<T>(
             safeOnSuccess(body);
             safeFinalize("ok");
           },
-          // The caller's own read reports the failure; the span then ends
-          // through _thenUnwrap or the error path.
-          () => {},
+          // A malformed or truncated body: the caller's own read of the same
+          // bytes fails too, and _thenUnwrap never runs, so end the span here.
+          (error: unknown) => {
+            if (finalized) return;
+            safeOnError(error);
+            safeFinalize("error");
+          },
         );
     } catch (e) {
       Logger.debug("netra: could not read a copy of the response body", e);
