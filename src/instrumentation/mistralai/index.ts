@@ -568,7 +568,6 @@ export const mistralAIInstrumentor = new NetraMistralAIInstrumentor();
 export {
   agentsStreamWrapper,
   agentsWrapper,
-  AsyncStreamingWrapper,
   chatStreamWrapper,
   chatWrapper,
   embeddingsWrapper,

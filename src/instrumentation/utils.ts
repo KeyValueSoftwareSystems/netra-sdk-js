@@ -649,8 +649,14 @@ function setEmbeddingResponseMeta(
   span.setAttribute("llm.response.embedding_count", data.length);
 
   const firstItem = data[0] as Record<string, unknown>;
-  const embedding = firstItem?.embedding as number[] | undefined;
+  const embedding = firstItem?.embedding;
   if (Array.isArray(embedding)) {
     span.setAttribute("llm.response.embedding_dimensions", embedding.length);
+  } else if (typeof embedding === "string") {
+    // encoding_format "base64": packed float32 values, 4 bytes each.
+    span.setAttribute(
+      "llm.response.embedding_dimensions",
+      Buffer.byteLength(embedding, "base64") / 4,
+    );
   }
 }

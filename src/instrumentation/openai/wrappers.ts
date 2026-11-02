@@ -13,6 +13,11 @@ import {
   modelAsDict,
   shouldSuppressInstrumentation,
 } from "../utils";
+import {
+  isAsyncIterable,
+  wrapPromise,
+  wrapResponse,
+} from "../../utils/response-handler";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import { OpenAIRequestType, StreamResponse, WrapperFn } from "./types";
 
@@ -24,12 +29,16 @@ const SPAN_NAMES: Record<OpenAIRequestType, string> = {
 
 const STREAMING_TYPES = new Set<OpenAIRequestType>(["chat", "response"]);
 
-function handleSpanError(span: Span, error: unknown): void {
+function recordSpanError(span: Span, error: unknown): void {
   span.setStatus({
     code: SpanStatusCode.ERROR,
     message: error instanceof Error ? error.message : String(error),
   });
   span.recordException(error as Error);
+}
+
+function handleSpanError(span: Span, error: unknown): void {
+  recordSpanError(span, error);
   span.end();
 }
 
@@ -41,7 +50,7 @@ function setSpanRequestContext(
   setRequestAttributes(span, kwargs, requestType);
 }
 
-function finalizeSpanSuccess(
+function setSpanSuccess(
   span: Span,
   response: Record<string, unknown>,
   startTime: number,
@@ -49,6 +58,14 @@ function finalizeSpanSuccess(
   setResponseAttributes(span, response);
   span.setAttribute("llm.response.duration", (Date.now() - startTime) / 1000);
   span.setStatus({ code: SpanStatusCode.OK });
+}
+
+function finalizeSpanSuccess(
+  span: Span,
+  response: Record<string, unknown>,
+  startTime: number,
+): void {
+  setSpanSuccess(span, response, startTime);
   span.end();
 }
 
@@ -211,64 +228,27 @@ export class StreamingWrapper
   }
 }
 
-export class AsyncStreamingWrapper
-  extends BaseStreamHandler
-  implements AsyncIterable<unknown>
-{
-  private iterator: AsyncIterator<unknown> | null = null;
-  private response!: unknown;
-
-  constructor(
-    span: Span,
-    response: unknown,
-    startTime: number,
-    requestKwargs: Record<string, unknown>,
-  ) {
-    super(span, startTime, requestKwargs);
-    defineHidden(this, "response", response);
+/**
+ * Accumulates the chunks of an async stream. The stream itself is wrapped with
+ * `wrapAsyncIterable`, so the caller keeps the SDK's own stream object
+ * (`controller`, `tee()`, `toReadableStream()`), and `break` ends the span.
+ */
+class AsyncStreamCollector extends BaseStreamHandler {
+  collect(chunk: unknown): void {
+    this.processChunk(chunk);
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<unknown> {
-    return this;
-  }
-
-  async next(): Promise<IteratorResult<unknown>> {
-    try {
-      if (!this.iterator) {
-        this.iterator = this.resolveIterator();
-      }
-      const result = await this.iterator.next();
-      if (result.done) {
-        this.finalizeSpan(SpanStatusCode.OK);
-      } else {
-        this.processChunk(result.value);
-      }
-      return result;
-    } catch (error) {
-      this.finalizeSpan(SpanStatusCode.ERROR);
-      throw error;
+  finish(status: "ok" | "error"): void {
+    if (status === "ok") {
+      this.finalizeSpan(SpanStatusCode.OK);
+      return;
     }
-  }
-
-  private resolveIterator(): AsyncIterator<unknown> {
-    if (!this.response || typeof this.response !== "object") {
-      throw new Error("Response is not iterable");
-    }
-    if (Symbol.asyncIterator in (this.response as object)) {
-      return (this.response as AsyncIterable<unknown>)[Symbol.asyncIterator]();
-    }
-    if (Symbol.iterator in (this.response as object)) {
-      const syncIter = (this.response as Iterable<unknown>)[Symbol.iterator]();
-      return {
-        async next() {
-          return syncIter.next();
-        },
-      };
-    }
-    if (typeof (this.response as AsyncIterator<unknown>).next === "function") {
-      return this.response as AsyncIterator<unknown>;
-    }
-    throw new Error("Response is not iterable");
+    // The error status and exception were already recorded by onError.
+    this.span.setAttribute(
+      "llm.response.duration",
+      (Date.now() - this.startTime) / 1000,
+    );
+    this.span.end();
   }
 }
 
@@ -282,18 +262,17 @@ function executeStreaming(
   const startTime = Date.now();
   try {
     setSpanRequestContext(span, kwargs, requestType);
-    const response = context.with(trace.setSpan(ctx, span), call);
+    const spanContext = trace.setSpan(ctx, span);
+    const response = context.with(spanContext, call);
 
-    if (isPromise(response)) {
-      return (async () => {
-        try {
-          const stream = await response;
-          return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
-        } catch (error) {
-          handleSpanError(span, error);
-          throw error;
-        }
-      })();
+    if (isPromise(response) || isAsyncIterable(response)) {
+      const collector = new AsyncStreamCollector(span, startTime, kwargs);
+      return wrapResponse(response, {
+        withContext: (fn) => context.with(spanContext, fn),
+        onChunk: (chunk) => collector.collect(chunk),
+        onError: (error) => recordSpanError(span, error),
+        finalize: (status) => collector.finish(status),
+      }, { deriveAPIPromise: true });
     }
 
     return new StreamingWrapper(span, response, startTime, kwargs);
@@ -315,16 +294,15 @@ function executeNonStreaming(
     const result = call();
 
     if (isPromise(result)) {
-      return result.then(
-        (value) => {
-          finalizeSpanSuccess(span, modelAsDict(value), startTime);
-          return value;
-        },
-        (error) => {
-          handleSpanError(span, error);
-          throw error;
-        },
-      );
+      // wrapPromise keeps OpenAI's APIPromise (and its .withResponse(),
+      // .asResponse() and ._thenUnwrap()) instead of returning a plain Promise.
+      return wrapPromise(result, {
+        withContext: (fn) => fn(),
+        onSuccess: (value) =>
+          setSpanSuccess(span, modelAsDict(value), startTime),
+        onError: (error) => recordSpanError(span, error),
+        finalize: () => span.end(),
+      }, { deriveAPIPromise: true });
     }
 
     finalizeSpanSuccess(span, modelAsDict(result), startTime);

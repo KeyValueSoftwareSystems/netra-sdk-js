@@ -12,6 +12,10 @@ import {
 import { Logger } from "../../logger";
 import { defineHidden, isPromise } from "../utils";
 import {
+  isAsyncIterable,
+  wrapResponse,
+} from "../../utils/response-handler";
+import {
   modelAsDict,
   setRequestAttributes,
   setResponseAttributes,
@@ -29,6 +33,15 @@ const FIM_STREAM_SPAN_NAME = FIM_SPAN_NAME;
 const AGENTS_STREAM_SPAN_NAME = AGENTS_SPAN_NAME;
 
 type MistralRequestType = "chat" | "embedding" | "fim" | "agent";
+
+function recordSpanError(span: Span, error: unknown): void {
+  Logger.error("netra.instrumentation.mistralai:", error);
+  span.setStatus({
+    code: SpanStatusCode.ERROR,
+    message: error instanceof Error ? error.message : String(error),
+  });
+  span.recordException(error as Error);
+}
 
 function mistralWrapper(
   tracer: Tracer,
@@ -143,36 +156,15 @@ function mistralStreamWrapper(
       setRequestAttributes(span, { ...kwargs, stream: true }, requestType);
       const startTime = Date.now();
       const response = wrapped.call(instance, ...args);
-      if (isPromise(response)) {
-        return (async () => {
-          try {
-            const stream = await response;
-            if (
-              stream &&
-              typeof stream === "object" &&
-              Symbol.asyncIterator in (stream as any)
-            ) {
-              return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
-            }
-            return new StreamingWrapper(span, stream, startTime, kwargs);
-          } catch (error) {
-            Logger.error("netra.instrumentation.mistralai:", error);
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: error instanceof Error ? error.message : String(error),
-            });
-            span.recordException(error as Error);
-            span.end();
-            throw error;
-          }
-        })();
-      }
-      if (
-        response &&
-        typeof response === "object" &&
-        Symbol.asyncIterator in (response as any)
-      ) {
-        return new AsyncStreamingWrapper(span, response, startTime, kwargs);
+      if (isPromise(response) || isAsyncIterable(response)) {
+        // Keep Mistral's own stream object (a ReadableStream); see wrapResponse.
+        const collector = new AsyncStreamCollector(span, startTime, kwargs);
+        return wrapResponse(response, {
+          withContext: (fn) => fn(),
+          onChunk: (chunk) => collector.processChunk(chunk),
+          onError: (error) => recordSpanError(span, error),
+          finalize: (status) => collector.finish(status),
+        });
       }
       return new StreamingWrapper(span, response, startTime, kwargs);
     } catch (error) {
@@ -427,35 +419,21 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
 }
 
 /**
- * Async wrapper for streaming responses (AsyncIterable from MistralAI SDK)
+ * Accumulates the chunks of an async stream. The stream itself is wrapped with
+ * `wrapAsyncIterable`, so the caller keeps Mistral's own stream object (a
+ * ReadableStream with getReader(), cancel(), tee()), and `break` ends the span.
  */
-export class AsyncStreamingWrapper
-  implements AsyncIterable<unknown>, AsyncIterator<unknown>
-{
-  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
-  private span!: Span;
-  private response!: unknown;
-  private iterator: AsyncIterator<unknown> | null = null;
-  private startTime!: number;
-  private requestKwargs!: Record<string, unknown>;
-  private completeResponse: Record<string, unknown>;
+class AsyncStreamCollector {
+  private completeResponse: Record<string, unknown> = {
+    choices: [],
+    model: "",
+  };
 
   constructor(
-    span: Span,
-    response: unknown,
-    startTime: number,
-    requestKwargs: Record<string, unknown>
-  ) {
-    defineHidden(this, "span", span);
-    defineHidden(this, "response", response);
-    defineHidden(this, "startTime", startTime);
-    defineHidden(this, "requestKwargs", requestKwargs);
-    this.completeResponse = { choices: [], model: "" };
-  }
-
-  toJSON() {
-    return this.completeResponse;
-  }
+    private span: Span,
+    private startTime: number,
+    private requestKwargs: Record<string, unknown>
+  ) {}
 
   private isChat(): boolean {
     return (
@@ -478,63 +456,7 @@ export class AsyncStreamingWrapper
     }
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<unknown> {
-    return this;
-  }
-
-  async next(): Promise<IteratorResult<unknown>> {
-    try {
-      // Initialize the iterator on first call
-      if (!this.iterator) {
-        // Check if response is an AsyncIterable and get the iterator
-        if (
-          this.response &&
-          typeof this.response === "object" &&
-          Symbol.asyncIterator in this.response
-        ) {
-          this.iterator = (this.response as AsyncIterable<unknown>)[
-            Symbol.asyncIterator
-          ]();
-        } else if (
-          this.response &&
-          typeof this.response === "object" &&
-          Symbol.iterator in (this.response as any)
-        ) {
-          // Handle sync iterables
-          const syncIterator = (this.response as Iterable<unknown>)[
-            Symbol.iterator
-          ]();
-          this.iterator = {
-            async next() {
-              return syncIterator.next();
-            },
-          };
-        } else if (
-          this.response &&
-          typeof this.response === "object" &&
-          typeof (this.response as AsyncIterator<unknown>).next === "function"
-        ) {
-          // Already an iterator
-          this.iterator = this.response as AsyncIterator<unknown>;
-        } else {
-          throw new Error("Response is not iterable");
-        }
-      }
-
-      const result = await this.iterator.next();
-      if (result.done) {
-        this.finalizeSpan();
-        return result;
-      }
-      this.processChunk(result.value);
-      return result;
-    } catch (error) {
-      this.finalizeSpan(error);
-      throw error;
-    }
-  }
-
-  private processChunk(chunk: unknown): void {
+  processChunk(chunk: unknown): void {
     const chunkDict = modelAsDict(chunk);
     const choices = this.completeResponse.choices as Array<
       Record<string, unknown>
@@ -622,24 +544,13 @@ export class AsyncStreamingWrapper
     this.span.addEvent("llm.content.completion.chunk");
   }
 
-  private finalizeSpan(error?: unknown): void {
+  finish(status: "ok" | "error"): void {
     const endTime = Date.now();
     const duration = (endTime - this.startTime) / 1000;
     setResponseAttributes(this.span, this.completeResponse);
     this.span.setAttribute("llm.response.duration", duration);
-    if (error) {
-      this.span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      try {
-        this.span.recordException(error as Error);
-      } catch {
-        // Ignore
-      }
-    } else {
-      this.span.setStatus({ code: SpanStatusCode.OK });
-    }
+    // On error, the status and exception were already recorded by onError.
+    if (status === "ok") this.span.setStatus({ code: SpanStatusCode.OK });
     this.span.end();
   }
 }

@@ -10,7 +10,6 @@ import {
   Span,
   SpanKind,
   Tracer,
-  Context,
   context,
   trace,
   createContextKey,
@@ -19,8 +18,8 @@ import {
 import { createRequire } from "module";
 
 import { Logger } from "../../logger";
+import { wrapAsyncIterable } from "../../utils/response-handler";
 import {
-  defineHidden,
   setResponseAttributes as setBaseResponseAttributes,
   shouldSuppressInstrumentation,
 } from "../utils";
@@ -29,45 +28,6 @@ import {
 // This prevents double-instrumentation when invoke internally calls stream
 const LANGGRAPH_INSTRUMENTATION_ACTIVE = createContextKey("netra.langgraph.active");
 
-function getContextManager(): any {
-  try {
-    if ((context as any)._getContextManager) {
-      return (context as any)._getContextManager();
-    }
-
-    const globalSymbols = Object.getOwnPropertySymbols(global);
-    const otelSymbol = globalSymbols.find(s =>
-      s.toString().includes("opentelemetry.js.api"),
-    );
-    if (otelSymbol) {
-      const globalState = (global as any)[otelSymbol];
-      if (globalState?.contextManager) {
-        return globalState.contextManager;
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function enterWithContext(newContext: Context): void {
-  const contextManager = getContextManager();
-  if (!contextManager) return;
-
-  if (typeof contextManager.enterWith === "function") {
-    contextManager.enterWith(newContext);
-    return;
-  }
-
-  if (
-    contextManager._asyncLocalStorage &&
-    typeof contextManager._asyncLocalStorage.enterWith === "function"
-  ) {
-    contextManager._asyncLocalStorage.enterWith(newContext);
-  }
-}
 import {
   NetraLanggraphAttributes,
   setChainInputAttributes,
@@ -427,64 +387,6 @@ function createCallbackHandlerClass(
   }
 }
 
-class LanggraphStreamingWrapper implements AsyncIterable<unknown> {
-  private iterable: any;
-  private output: Record<string, any> = {};
-  // Assigned via defineHidden in constructor (non-enumerable to avoid circular JSON)
-  private rootSpan!: Span;
-  private rootContext!: Context;
-
-  constructor(rootSpan: Span, rootContext: Context) {
-    defineHidden(this, "rootSpan", rootSpan);
-    defineHidden(this, "rootContext", rootContext);
-  }
-
-  toJSON() {
-    try {
-      return this.output;
-    } catch {
-      return {};
-    }
-  }
-
-  async startStream(
-    originalFunc: (...args: any[]) => any,
-    instance: unknown,
-    input: any,
-    config?: RunnableConfig,
-    ...rest: any[]
-  ) {
-    this.iterable = await originalFunc.call(instance, input, config, ...rest);
-    return this;
-  }
-
-  async *[Symbol.asyncIterator]() {
-    const spanContext = trace.setSpan(this.rootContext, this.rootSpan);
-    try {
-      const iterator = await this.iterable[Symbol.asyncIterator]();
-      while (true) {
-        let result: any;
-        await context.with(spanContext, async () => {
-          result = await iterator.next();
-        });
-        if (result.done) break;
-        const value = result?.value ?? {};
-        this.output = { ...this.output, ...value };
-        yield result;
-      }
-      this.rootSpan.setAttribute(
-        NetraLanggraphAttributes.entityOutput,
-        JSON.stringify({ outputs: this.output }),
-      );
-    } catch (error) {
-      this.rootSpan.recordException(error as Error);
-      throw error;
-    } finally {
-      this.rootSpan.end();
-    }
-  }
-}
-
 export class LanggraphWrapper {
   private spanName: string;
 
@@ -545,7 +447,6 @@ export class LanggraphWrapper {
     // Set the active flag to prevent nested instrumentation (e.g., when invoke calls stream internally)
     const ctxWithSpan = trace.setSpan(context.active(), span);
     const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
-    enterWithContext(ctxWithFlag);
 
     return context.with(ctxWithFlag, async () => {
       {
@@ -601,21 +502,43 @@ export class LanggraphWrapper {
     );
     setGraphInputAttributes(span, input);
     const updatedConfig = this.getUpdatedConfig(config, span);
+    const ctxWithSpan = trace.setSpan(context.active(), span);
+    const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
+
+    let stream: AsyncIterable<unknown>;
     try {
-      const ctxWithSpan = trace.setSpan(context.active(), span);
-      const ctxWithFlag = ctxWithSpan.setValue(LANGGRAPH_INSTRUMENTATION_ACTIVE, true);
-      enterWithContext(ctxWithFlag);
-      const streamingWrapper = new LanggraphStreamingWrapper(span, ctxWithFlag);
-      return streamingWrapper.startStream(
-        originalFunc,
-        instance,
-        input,
-        updatedConfig,
-        ...rest,
+      // LangGraph starts running the graph as soon as stream() is called, so
+      // the call itself must run inside the workflow context, not just the reads.
+      stream = await context.with(ctxWithFlag, () =>
+        originalFunc.call(instance, input, updatedConfig, ...rest),
       );
     } catch (error) {
       span.recordException(error as Error);
       span.end();
+      throw error;
     }
+
+    // Return LangGraph's own stream so chunks, getReader(), cancel() and
+    // pipeTo() are untouched; only iteration is observed.
+    let output: Record<string, any> = {};
+    return wrapAsyncIterable(stream, {
+      withContext: (fn) => context.with(ctxWithFlag, fn),
+      onChunk: (chunk) => {
+        output = { ...output, ...(chunk ?? {}) };
+      },
+      onError: (error) => span.recordException(error as Error),
+      finalize: (status) => {
+        try {
+          if (status === "ok") {
+            span.setAttribute(
+              NetraLanggraphAttributes.entityOutput,
+              JSON.stringify({ outputs: output }),
+            );
+          }
+        } finally {
+          span.end();
+        }
+      },
+    });
   }
 }

@@ -20,6 +20,32 @@ export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
   return value != null && typeof (value as any).then === "function";
 }
 
+/**
+ * The `APIPromise` returned by Stainless-generated SDKs (OpenAI, Anthropic,
+ * Groq): a Promise subclass whose extra methods (`.withResponse()`,
+ * `.asResponse()`, `._thenUnwrap()`) the SDKs' own helpers such as
+ * `.parse()` and `.stream()` depend on.
+ */
+export interface APIPromiseLike<T = unknown> extends Promise<T> {
+  responsePromise: Promise<unknown>;
+  _thenUnwrap<U>(transform: (value: T) => U): APIPromiseLike<U>;
+}
+
+export interface WrapOptions {
+  /** Return the SDK's own object, routing only then/catch/finally through Netra. */
+  preserveOriginal?: object;
+  /** Hand an `APIPromise` back to the app as an `APIPromise`; see `wrapPromise`. */
+  deriveAPIPromise?: boolean;
+}
+
+export function isAPIPromise(value: unknown): value is APIPromiseLike {
+  return (
+    isPromise(value) &&
+    typeof (value as any)._thenUnwrap === "function" &&
+    isPromise((value as any).responsePromise)
+  );
+}
+
 const ITERATOR_METHODS = new Set(["next", "return", "throw"]);
 
 /**
@@ -114,7 +140,7 @@ export function wrapAsyncIterable<T>(
   let directIterator: AsyncIterator<T> | null = null;
 
   return new Proxy(source, {
-    get(target, prop) {
+    get(target, prop, receiver) {
       if (prop === Symbol.asyncIterator) {
         return () => createWrappedIterator();
       }
@@ -123,6 +149,12 @@ export function wrapAsyncIterable<T>(
         return (directIterator as any)[prop].bind(directIterator);
       }
       const value = (target as any)[prop];
+      // SDK streams build their ReadableStream from `this[Symbol.asyncIterator]()`;
+      // calling it on the proxy keeps reads going through the wrapped iterator,
+      // so `new Response(stream.toReadableStream())` still ends the span.
+      if (prop === "toReadableStream" && typeof value === "function") {
+        return value.bind(receiver);
+      }
       if (typeof value === "function") return value.bind(target);
       return value;
     },
@@ -132,14 +164,22 @@ export function wrapAsyncIterable<T>(
 /**
  * Wrap a promise with lifecycle callbacks.
  * If the resolved value is async-iterable, wraps it with `wrapAsyncIterable`.
- * When `preserveOriginal` is set, returns a Proxy that routes
- * then/catch/finally to the instrumented promise and other properties
- * to the original object (preserving SDK methods like `.withResponse()`).
+ *
+ * With `deriveAPIPromise`, an `APIPromise` is never replaced: the result is
+ * derived from it with `_thenUnwrap`, so every SDK method keeps working and
+ * the caller's body is parsed only when the caller consumes it. Provider
+ * wrappers that return the SDK's promise to the app opt in to this.
+ *
+ * Otherwise the promise is awaited as soon as it is wrapped, so anything it
+ * wraps (an instrumented LLM call, the Anthropic SDK's own span) ends before
+ * this span does, and Netra still marks the trace root as an LLM call. With
+ * `preserveOriginal`, a Proxy routes then/catch/finally to the instrumented
+ * promise and other properties to the original object.
  */
 export function wrapPromise<T>(
   promise: Promise<T>,
   callbacks: ResponseCallbacks,
-  options?: { preserveOriginal?: object },
+  options?: WrapOptions,
 ): any {
   let finalized = false;
   function safeFinalize(status: "ok" | "error") {
@@ -151,6 +191,71 @@ export function wrapPromise<T>(
       Logger.error("netra: finalize callback error", e);
     }
   }
+  function safeOnSuccess(value: unknown) {
+    try {
+      callbacks.onSuccess?.(value);
+    } catch (e) {
+      Logger.error("netra: onSuccess callback error", e);
+    }
+  }
+  function safeOnError(error: unknown) {
+    try {
+      callbacks.onError(error);
+    } catch {
+      Logger.error("netra: onError callback error", error);
+    }
+  }
+
+  if (options?.deriveAPIPromise && isAPIPromise(promise)) {
+    // Failures are seen on the raw response promise, which never reads the body.
+    promise.responsePromise.then(observeJSONBody, (error) => {
+      safeOnError(error);
+      safeFinalize("error");
+    });
+    return promise._thenUnwrap((value) => {
+      if (isAsyncIterable(value)) {
+        return wrapAsyncIterable(value, { ...callbacks, finalize: safeFinalize });
+      }
+      if (!finalized) {
+        safeOnSuccess(value);
+        safeFinalize("ok");
+      }
+      return value;
+    });
+  }
+
+  // Read a copy of a JSON body so the span ends when the response arrives,
+  // even if the caller reads the result late or never. The caller's own body
+  // is left unread. This runs before any caller handler on responsePromise,
+  // so the body is still unused when it is cloned.
+  function observeJSONBody(props: any) {
+    try {
+      const response = props?.response;
+      const contentType = String(response?.headers?.get?.("content-type") ?? "");
+      if (typeof response?.clone !== "function" || !contentType.includes("json")) {
+        return;
+      }
+      response
+        .clone()
+        .json()
+        .then(
+          (body: unknown) => {
+            if (finalized) return;
+            safeOnSuccess(body);
+            safeFinalize("ok");
+          },
+          // A malformed or truncated body: the caller's own read of the same
+          // bytes fails too, and _thenUnwrap never runs, so end the span here.
+          (error: unknown) => {
+            if (finalized) return;
+            safeOnError(error);
+            safeFinalize("error");
+          },
+        );
+    } catch (e) {
+      Logger.debug("netra: could not read a copy of the response body", e);
+    }
+  }
 
   const instrumentedPromise = (async () => {
     try {
@@ -158,19 +263,11 @@ export function wrapPromise<T>(
       if (isAsyncIterable(value)) {
         return wrapAsyncIterable(value as any, callbacks);
       }
-      try {
-        callbacks.onSuccess?.(value);
-      } catch (e) {
-        Logger.error("netra: onSuccess callback error", e);
-      }
+      safeOnSuccess(value);
       safeFinalize("ok");
       return value;
     } catch (error) {
-      try {
-        callbacks.onError(error);
-      } catch {
-        Logger.error("netra: onError callback error", error);
-      }
+      safeOnError(error);
       safeFinalize("error");
       throw error;
     }
@@ -179,6 +276,11 @@ export function wrapPromise<T>(
   if (!options?.preserveOriginal) {
     return instrumentedPromise;
   }
+
+  // The caller may consume the original through an SDK method and never
+  // touch this promise; mark it handled so a rejection can't crash the process.
+  // The caller still sees the error through its own then/catch.
+  instrumentedPromise.catch(() => {});
 
   const original = options.preserveOriginal;
   return new Proxy(instrumentedPromise, {
@@ -210,7 +312,7 @@ export function wrapPromise<T>(
 export function wrapResponse<T>(
   response: T,
   callbacks: ResponseCallbacks,
-  options?: { preserveOriginal?: object },
+  options?: WrapOptions,
 ): T {
   if (isAsyncIterable(response)) {
     return wrapAsyncIterable(response as any, callbacks) as T;
