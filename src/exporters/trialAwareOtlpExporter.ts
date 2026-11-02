@@ -2,7 +2,7 @@ import * as http from "http";
 import * as https from "https";
 import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { ExportResult, ExportResultCode } from "@opentelemetry/core";
-import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
+import { ProtobufTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { isTrialBlocked, setTrialBlocked } from "./utils";
 
 interface ExporterConfig {
@@ -30,7 +30,7 @@ export class TrialAwareOTLPExporter implements SpanExporter {
 
     let data: Uint8Array | string;
     try {
-      const serialized = JsonTraceSerializer.serializeRequest(spans);
+      const serialized = ProtobufTraceSerializer.serializeRequest(spans);
       if (!serialized) throw new Error("Serialization failed");
       data = serialized;
     } catch (err) {
@@ -49,7 +49,7 @@ export class TrialAwareOTLPExporter implements SpanExporter {
       headers: {
         ...this._headers,
         host: url.host,
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-protobuf",
         "Content-Length":
           typeof data === "string" ? Buffer.byteLength(data) : data.byteLength,
       },
