@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.1] - 2026-11-02
+
+### Changed
+
+- **Protobuf Span Export**: The OTLP exporter now sends spans as Protobuf (`application/x-protobuf`) instead of JSON, which makes each export request smaller.
+
+### Fixed
+
+- **Export Failures Are Logged**: In debug mode (`debugMode: true` or `NETRA_DEBUG=true`), a batch that is not exported now logs a warning. The warning gives the HTTP status, the backend's error message (or the start of the response body), and the number and size of the dropped spans. A `413 Payload Too Large` response also suggests lowering `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` or reducing large span attributes. Network errors that return no response (connection refused, DNS, TLS, socket reset) are logged the same way. Failed batches are still not retried. Before this change, they were dropped without any log.
+
 ## [1.12.0] - 2026-10-29
 
 ### Added
