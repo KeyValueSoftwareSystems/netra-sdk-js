@@ -135,9 +135,14 @@ export class TrialAwareOTLPExporter implements SpanExporter {
       });
     });
 
-    req.on("error", (err) =>
-      resultCallback({ code: ExportResultCode.FAILED, error: err }),
-    );
+    req.on("error", (err) => {
+      // No response (connection refused, DNS, TLS, socket reset): nothing else logs this.
+      Logger.warn(
+        `Span export failed: ${err.message}. ` +
+          `Dropped a batch of ${spans.length} spans (${requestBytes} bytes).`,
+      );
+      resultCallback({ code: ExportResultCode.FAILED, error: err });
+    });
     req.write(data);
     req.end();
   }
