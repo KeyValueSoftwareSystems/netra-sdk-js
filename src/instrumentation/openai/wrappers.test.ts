@@ -17,7 +17,10 @@ import {
   setupTracing,
   startMockServer,
 } from "../../__fixtures__/llm-test-utils";
+<<<<<<< HEAD
 import { NetraLogger } from "../../netraLogger";
+=======
+>>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
 import { NetraOpenAIInstrumentor } from "./index";
 
 const PARAMS = {
@@ -58,6 +61,7 @@ const CHUNKS = [
   { data: "[DONE]" },
 ];
 
+<<<<<<< HEAD
 /**
  * The Decisions API ships in openai >= 7.30.0 and the dev dependency is 6.x, so
  * this mirrors v7's `Decisions` resource: a `create` that POSTs to /decisions
@@ -121,6 +125,8 @@ function decisionInput(inputJson: unknown): { entries: any[]; questions: unknown
   return { entries: all.slice(0, -1), questions: JSON.parse(questionsEntry.content) };
 }
 
+=======
+>>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
 async function collect(iterable: AsyncIterable<any>): Promise<any[]> {
   const out: any[] = [];
   for await (const item of iterable) out.push(item);
@@ -130,7 +136,11 @@ async function collect(iterable: AsyncIterable<any>): Promise<any[]> {
 describe("OpenAI instrumentation", () => {
   let tracing: ReturnType<typeof setupTracing>;
   let server: MockServer;
+<<<<<<< HEAD
   let client: DecisionsClient;
+=======
+  let client: OpenAI;
+>>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
   let rejections: ReturnType<typeof captureUnhandledRejections>;
   const instrumentor = new NetraOpenAIInstrumentor();
 
@@ -138,15 +148,23 @@ describe("OpenAI instrumentation", () => {
     vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
     tracing = setupTracing();
     server = await startMockServer();
+<<<<<<< HEAD
     (OpenAI as any).Decisions = StubDecisions;
     await instrumentor.instrument({ tracerProvider: tracing.provider });
     client = new OpenAI({ apiKey: "test", baseURL: `${server.url}/v1`, maxRetries: 0 }) as DecisionsClient;
     client.decisions = new StubDecisions(client);
+=======
+    await instrumentor.instrument({ tracerProvider: tracing.provider });
+    client = new OpenAI({ apiKey: "test", baseURL: `${server.url}/v1`, maxRetries: 0 });
+>>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
   });
 
   afterAll(async () => {
     await instrumentor.uninstrument();
+<<<<<<< HEAD
     delete (OpenAI as any).Decisions;
+=======
+>>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
     await server.close();
     await tracing.teardown();
     vi.unstubAllEnvs();
@@ -364,6 +382,7 @@ describe("OpenAI instrumentation", () => {
       expect(tracing.spans("openai.chat")).toHaveLength(2);
     });
   });
+<<<<<<< HEAD
 
   describe("decisions", () => {
     let requestPath: string | undefined;
@@ -522,4 +541,6 @@ describe("OpenAI instrumentation without the Decisions API", () => {
       errorSpy.mockRestore();
     }
   });
+=======
+>>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
 });
