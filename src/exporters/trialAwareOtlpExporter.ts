@@ -3,7 +3,58 @@ import * as https from "https";
 import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { ExportResult, ExportResultCode } from "@opentelemetry/core";
 import { ProtobufTraceSerializer } from "@opentelemetry/otlp-transformer";
+import { Logger } from "../logger";
 import { isTrialBlocked, setTrialBlocked } from "./utils";
+
+const HTTP_STATUS_PAYLOAD_TOO_LARGE = 413;
+/** Longest excerpt of a non-JSON error body quoted in the export-failure debug message. */
+const RESPONSE_EXCERPT_MAX_CHARS = 200;
+const PAYLOAD_TOO_LARGE_HINT =
+  "Lower OTEL_BSP_MAX_EXPORT_BATCH_SIZE or reduce large span attributes such as prompts and completions.";
+
+/**
+ * What the backend said, quoted: `error.message` from its error envelope (joined when it is a list
+ * of validation messages), else an excerpt of the raw body.
+ */
+function describeServerMessage(responseBody: string): string {
+  try {
+    const parsed: unknown = JSON.parse(responseBody);
+    const message = (parsed as { error?: { message?: unknown } } | null)?.error
+      ?.message;
+    if (typeof message === "string") return `"${message}"`;
+    if (Array.isArray(message) && message.every((m) => typeof m === "string")) {
+      return `"${message.join("; ")}"`;
+    }
+  } catch {
+    // Not JSON: quote the raw body below.
+  }
+  const excerpt = responseBody.trim().slice(0, RESPONSE_EXCERPT_MAX_CHARS);
+  return excerpt ? `"${excerpt}"` : "(empty response body)";
+}
+
+/**
+ * Debug message for a batch the backend rejected. The same format is used by netra-sdk-py's
+ * TrialAwareOTLPExporter, so both SDKs report export failures identically.
+ */
+function formatExportFailure(
+  statusCode: number | undefined,
+  statusMessage: string | undefined,
+  responseBody: string,
+  spanCount: number,
+  requestBytes: number,
+): string {
+  const status = [statusCode ?? "unknown", statusMessage]
+    .filter(Boolean)
+    .join(" ");
+  const hint =
+    statusCode === HTTP_STATUS_PAYLOAD_TOO_LARGE
+      ? ` ${PAYLOAD_TOO_LARGE_HINT}`
+      : "";
+  return (
+    `Span export failed with HTTP ${status}: ${describeServerMessage(responseBody)}. ` +
+    `Dropped a batch of ${spanCount} spans (${requestBytes} bytes).${hint}`
+  );
+}
 
 interface ExporterConfig {
   url: string;
@@ -40,6 +91,8 @@ export class TrialAwareOTLPExporter implements SpanExporter {
       });
     }
 
+    const requestBytes =
+      typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
     const url = new URL(this._url);
     const options: https.RequestOptions = {
       hostname: url.hostname,
@@ -50,8 +103,7 @@ export class TrialAwareOTLPExporter implements SpanExporter {
         ...this._headers,
         host: url.host,
         "Content-Type": "application/x-protobuf",
-        "Content-Length":
-          typeof data === "string" ? Buffer.byteLength(data) : data.byteLength,
+        "Content-Length": requestBytes,
       },
     };
 
@@ -64,6 +116,16 @@ export class TrialAwareOTLPExporter implements SpanExporter {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
           resultCallback({ code: ExportResultCode.SUCCESS });
         } else {
+          // Debug mode only (Logger.warn). The batch is not retried, so it is gone.
+          Logger.warn(
+            formatExportFailure(
+              res.statusCode,
+              res.statusMessage,
+              body,
+              spans.length,
+              requestBytes,
+            ),
+          );
           this.checkErrorBody(body, res.statusCode);
           resultCallback({
             code: ExportResultCode.FAILED,
