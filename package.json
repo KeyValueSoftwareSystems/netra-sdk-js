@@ -117,11 +117,15 @@
     }
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@langchain/core": "^1.2.17",
     "@langchain/langgraph": "^1.4.20",
+    "@opentelemetry/context-async-hooks": "^2.11.0",
     "@types/node": "^25.0.0",
     "@types/shimmer": "^1.2.0",
     "esbuild": "^0.27.2",
+    "groq-sdk": "^1.6.0",
+    "openai": "^6.49.0",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
