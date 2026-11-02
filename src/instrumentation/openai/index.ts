@@ -168,7 +168,6 @@ export class NetraOpenAIInstrumentor {
 export const openAIInstrumentor = new NetraOpenAIInstrumentor();
 
 export {
-  AsyncStreamingWrapper,
   chatWrapper,
   embeddingsWrapper,
   responsesWrapper,
