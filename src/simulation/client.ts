@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from "axios";
 import { Config } from "../config";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import { apiPath } from "../utils/api-path";
 import { injectTraceContextHeaders } from "../utils/context-propagation";
 import { ConversationResponse, SimulationItem } from "./models";
@@ -33,7 +33,8 @@ export class SimulationHttpClient {
     private _createClient(config: Config): AxiosInstance | null {
         const endpoint = (config.otlpEndpoint || "").trim();
         if (!endpoint) {
-            Logger.error(`${LOG_PREFIX}: NETRA_OTLP_ENDPOINT is required`);
+            // Debug only: init already shows one MISSING_ENDPOINT_NOTICE covering API calls.
+            NetraLogger.debug(`${LOG_PREFIX}: NETRA_OTLP_ENDPOINT is required`);
             return null;
         }
 
@@ -61,7 +62,7 @@ export class SimulationHttpClient {
 
             return instance;
         } catch (error) {
-            Logger.error(`${LOG_PREFIX}: Failed to create HTTP client:`, error);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Failed to create HTTP client:`, error);
             return null;
         }
     }
@@ -99,7 +100,7 @@ export class SimulationHttpClient {
 
         const timeout = parseFloat(timeoutStr);
         if (isNaN(timeout)) {
-            Logger.warn(
+            NetraLogger.notice("warn",
                 `${LOG_PREFIX}: Invalid timeout '${timeoutStr}', using default ${DEFAULT_TIMEOUT}ms`,
             );
             return DEFAULT_TIMEOUT;
@@ -121,7 +122,7 @@ export class SimulationHttpClient {
         hooksMeta?: Record<string, any> | null,
     ): Promise<InitializeRunResult | null> {
         if (!this.client) {
-            Logger.error(`${LOG_PREFIX}: Client not initialized`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Client not initialized`);
             return null;
         }
 
@@ -143,7 +144,7 @@ export class SimulationHttpClient {
             const items = responseData.items || [];
 
             if (items.length === 0) {
-                Logger.warn(`${LOG_PREFIX}: No items returned from initialize_run`);
+                NetraLogger.warn(`${LOG_PREFIX}: No items returned from initialize_run`);
                 return null;
             }
 
@@ -157,7 +158,7 @@ export class SimulationHttpClient {
             };
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
-            Logger.error(`${LOG_PREFIX}: Failed to initialize run:`, errorMsg);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Failed to initialize run:`, errorMsg);
             return null;
         }
     }
@@ -172,7 +173,7 @@ export class SimulationHttpClient {
         runItemId: string,
     ): Promise<SimulationItem | null> {
         if (!this.client) {
-            Logger.error(`${LOG_PREFIX}: Client not initialized`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Client not initialized`);
             return null;
         }
 
@@ -191,7 +192,7 @@ export class SimulationHttpClient {
             };
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
-            Logger.error(
+            NetraLogger.notice("error",
                 `${LOG_PREFIX}: Failed to generate first turn for item ${runItemId}:`,
                 errorMsg,
             );
@@ -209,7 +210,7 @@ export class SimulationHttpClient {
         traceId: string,
     ): Promise<ConversationResponse | null> {
         if (!this.client) {
-            Logger.error(`${LOG_PREFIX}: Client not initialized`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Client not initialized`);
             return null;
         }
 
@@ -237,7 +238,7 @@ export class SimulationHttpClient {
 
             const userMessages = responseData.userMessages || [];
             if (userMessages.length === 0) {
-                Logger.warn(`${LOG_PREFIX}: No user messages in continue response`);
+                NetraLogger.warn(`${LOG_PREFIX}: No user messages in continue response`);
                 return null;
             }
 
@@ -251,7 +252,7 @@ export class SimulationHttpClient {
             };
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
-            Logger.error(`${LOG_PREFIX}: Failed to trigger conversation:`, errorMsg);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Failed to trigger conversation:`, errorMsg);
             return null;
         }
     }
@@ -276,7 +277,7 @@ export class SimulationHttpClient {
         status: string = "failed",
     ): Promise<void> {
         if (!this.client) {
-            Logger.error(`${LOG_PREFIX}: Client not initialized`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Client not initialized`);
             return;
         }
 
@@ -284,10 +285,10 @@ export class SimulationHttpClient {
             const url = apiPath`/evaluations/run/${runId}/item/${runItemId}/status`;
             const payload = { status, failureReason: error };
             await this.client.patch(url, payload);
-            Logger.info(`${LOG_PREFIX}: Reported failure - ${error}`);
+            NetraLogger.info(`${LOG_PREFIX}: Reported failure - ${error}`);
         } catch (err) {
             const errorMsg = this._extractErrorMessage(err);
-            Logger.error(`${LOG_PREFIX}: Failed to report failure:`, errorMsg);
+            NetraLogger.notice("error", `${LOG_PREFIX}: Failed to report failure:`, errorMsg);
         }
     }
 
@@ -296,7 +297,7 @@ export class SimulationHttpClient {
      */
     async postRunStatus(runId: string, status: string): Promise<any> {
         if (!this.client) {
-            Logger.error(
+            NetraLogger.notice("error",
                 `${LOG_PREFIX}: Client not initialized; cannot post run status`,
             );
             return { success: false };
@@ -309,13 +310,13 @@ export class SimulationHttpClient {
             const data = response.data;
 
             if (data && typeof data === "object" && "data" in data) {
-                Logger.info(`${LOG_PREFIX}: Completed test run successfully`);
+                NetraLogger.info(`${LOG_PREFIX}: Completed test run successfully`);
                 return data.data || {};
             }
             return data;
         } catch (error) {
             const errorMsg = this._extractErrorMessage(error);
-            Logger.error(
+            NetraLogger.notice("error",
                 `${LOG_PREFIX}: Failed to post run status for run '${runId}':`,
                 errorMsg,
             );

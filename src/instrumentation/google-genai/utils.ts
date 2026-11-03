@@ -12,7 +12,7 @@
  */
 
 import { Span } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { safeStringify } from "../../utils/serialization";
 import { SpanAttributes } from "../span-attributes";
 import {
@@ -95,7 +95,7 @@ export function setRequestAttributes(
       writePromptAttributes(span, messages);
     }
   } catch (e) {
-    Logger.error(`${LOG_PREFIX}: setRequestAttributes error`, e);
+    NetraLogger.error(`${LOG_PREFIX}: setRequestAttributes error`, e);
   }
 }
 
@@ -265,7 +265,7 @@ export function setResponseAttributes(
       writeCompletionAttributes(span, messages);
     }
   } catch (e) {
-    Logger.error(`${LOG_PREFIX}: setResponseAttributes error`, e);
+    NetraLogger.error(`${LOG_PREFIX}: setResponseAttributes error`, e);
   }
 }
 
@@ -532,11 +532,11 @@ export function processStreamChunk(
       }
     }
 
-    if (Logger.isDebugMode()) {
+    if (NetraLogger.isDebugMode()) {
       span.addEvent("llm.content.completion.chunk");
     }
   } catch (e) {
-    Logger.error(`${LOG_PREFIX}: processStreamChunk error`, e);
+    NetraLogger.error(`${LOG_PREFIX}: processStreamChunk error`, e);
   }
 }
 

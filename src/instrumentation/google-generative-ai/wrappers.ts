@@ -5,7 +5,7 @@ import {
   Tracer,
   context,
 } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import {
   isPromise,
   modelAsDict,
@@ -86,7 +86,7 @@ function googleGenerativeAIWrapper(
             try {
               setRequestAttributes(span, kwargs, requestType, args[0]);
             } catch (e) {
-              Logger.error(`${LOG_PREFIX}:`, e);
+              NetraLogger.error(`${LOG_PREFIX}:`, e);
             }
             const startTime = Date.now();
             const response = original.apply(this, args);
@@ -108,7 +108,7 @@ function googleGenerativeAIWrapper(
                       );
                     }
                   } catch (e) {
-                    Logger.error(`${LOG_PREFIX}:`, e);
+                    NetraLogger.error(`${LOG_PREFIX}:`, e);
                   }
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
@@ -134,7 +134,7 @@ function googleGenerativeAIWrapper(
                   (endTime - startTime) / 1000,
                 );
               } catch (e) {
-                Logger.error(`${LOG_PREFIX}:`, e);
+                NetraLogger.error(`${LOG_PREFIX}:`, e);
               }
               span.setStatus({ code: SpanStatusCode.OK });
               span.end();
@@ -185,7 +185,7 @@ function googleGenerativeAIStreamWrapper(
             try {
               setRequestAttributes(span, kwargs, requestType, args[0]);
             } catch (e) {
-              Logger.error(`${LOG_PREFIX}:`, e);
+              NetraLogger.error(`${LOG_PREFIX}:`, e);
             }
 
             const response = original.apply(this, args);
@@ -217,7 +217,7 @@ function googleGenerativeAIStreamWrapper(
                       duration,
                     );
                   } catch (e) {
-                    Logger.error(`${LOG_PREFIX}:`, e);
+                    NetraLogger.error(`${LOG_PREFIX}:`, e);
                   }
                   span.setStatus({ code: SpanStatusCode.OK });
                   span.end();
@@ -262,7 +262,7 @@ function googleGenerativeAIStreamWrapper(
                                 duration,
                               );
                             } catch (e) {
-                              Logger.error(`${LOG_PREFIX}:`, e);
+                              NetraLogger.error(`${LOG_PREFIX}:`, e);
                             }
                             span.setStatus({ code: SpanStatusCode.OK });
                             span.end();

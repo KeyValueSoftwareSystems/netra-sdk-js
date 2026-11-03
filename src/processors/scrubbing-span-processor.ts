@@ -19,7 +19,7 @@
 
 import { AttributeValue, Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 // Sensitive patterns for data detection
 const SENSITIVE_PATTERNS: Record<string, RegExp> = {
@@ -145,7 +145,7 @@ export class ScrubbingSpanProcessor implements SpanProcessor {
     try {
       this.wrapSetAttribute(span);
     } catch (e) {
-      Logger.error("ScrubbingSpanProcessor.onStart error:", e);
+      NetraLogger.error("ScrubbingSpanProcessor.onStart error:", e);
     }
   }
 

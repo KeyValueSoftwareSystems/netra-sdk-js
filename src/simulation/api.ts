@@ -4,7 +4,7 @@
 
 import pLimit from "p-limit";
 import { Config } from "../config";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import { registerExitTask } from "../shutdown-registry";
 import { SpanWrapper } from "../span-wrapper";
 import { SimulationHttpClient } from "./client";
@@ -96,7 +96,7 @@ export class Simulation {
 
         const { runId, items } = initResult;
         if (!items || items.length === 0) {
-            Logger.error(`${LOG_PREFIX}: No items returned from initialize_run`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: No items returned from initialize_run`);
             return null;
         }
 
@@ -119,7 +119,7 @@ export class Simulation {
                     sharedContext = await runBeforeAll(hooks);
                 } catch (error) {
                     const errorMsg = `beforeAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
-                    Logger.error(`${LOG_PREFIX}: ${errorMsg} — aborting run (no LLM spent)`);
+                    NetraLogger.notice("error", `${LOG_PREFIX}: ${errorMsg} — aborting run (no LLM spent)`);
 
                     await this._reportFailures(
                         runId,
@@ -144,7 +144,7 @@ export class Simulation {
                     } catch (afterAllError) {
                         // Items already marked prescript_failed — do not overwrite.
                         const afterAllMsg = `afterAll hook failed: ${afterAllError instanceof Error ? afterAllError.message : String(afterAllError)}`;
-                        Logger.error(`${LOG_PREFIX}: ${afterAllMsg}`);
+                        NetraLogger.notice("error", `${LOG_PREFIX}: ${afterAllMsg}`);
                     }
                     await this._client.postRunStatus(runId, "completed");
                     return results;
@@ -175,7 +175,7 @@ export class Simulation {
                             setupContexts.set(runItemId, setupContext);
                         } catch (error) {
                             const errorMsg = `before hook failed: ${error instanceof Error ? error.message : String(error)}`;
-                            Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
+                            NetraLogger.notice("error", `${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
 
                             await this._client.reportFailure(runId, runItemId, errorMsg, "prescript_failed");
                             const itemResult: ConversationResult = {
@@ -193,7 +193,7 @@ export class Simulation {
 
                     const simItem = await this._client.generateFirstTurn(runId, runItemId);
                     if (!simItem) {
-                        Logger.warn(`${LOG_PREFIX}: Failed to generate first turn for item ${runItemId}, marking failed`);
+                        NetraLogger.notice("warn", `${LOG_PREFIX}: Failed to generate first turn for item ${runItemId}, marking failed`);
                         await this._client.reportFailure(runId, runItemId, "Failed to generate first user message");
                         const itemResult: ConversationResult = {
                             runItemId,
@@ -212,7 +212,7 @@ export class Simulation {
             await Promise.all(setupPromises);
 
             if (simulationItems.length === 0) {
-                Logger.error(`${LOG_PREFIX}: All items failed during setup/generation`);
+                NetraLogger.notice("error", `${LOG_PREFIX}: All items failed during setup/generation`);
                 const results: SimulationResult = {
                     success: false,
                     completed: [],
@@ -224,14 +224,14 @@ export class Simulation {
                 } catch (afterAllError) {
                     // All items already failed during setup — do not overwrite status.
                     const afterAllMsg = `afterAll hook failed: ${afterAllError instanceof Error ? afterAllError.message : String(afterAllError)}`;
-                    Logger.error(`${LOG_PREFIX}: ${afterAllMsg}`);
+                    NetraLogger.notice("error", `${LOG_PREFIX}: ${afterAllMsg}`);
                 }
                 await this._client.postRunStatus(runId, "completed");
                 return results;
             }
 
             // --- Phase 4: Run conversation loops ---
-            Logger.info(`${LOG_PREFIX}: Starting simulation with ${simulationItems.length} items`);
+            NetraLogger.info(`${LOG_PREFIX}: Starting simulation with ${simulationItems.length} items`);
 
             try {
                 const result = await this._runSimulationAsync(
@@ -246,12 +246,12 @@ export class Simulation {
                 );
 
                 const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(2);
-                Logger.info(`${LOG_PREFIX}: Simulation completed in ${elapsedTime} seconds`);
+                NetraLogger.info(`${LOG_PREFIX}: Simulation completed in ${elapsedTime} seconds`);
 
                 await this._client.postRunStatus(runId, "completed");
                 return result;
             } catch (error) {
-                Logger.error(`${LOG_PREFIX}: Run simulation failed`);
+                NetraLogger.notice("error", `${LOG_PREFIX}: Run simulation failed`);
                 await this._client.postRunStatus(runId, "failed");
                 throw error;
             }
@@ -301,7 +301,7 @@ export class Simulation {
                 }
 
                 processedCount++;
-                Logger.info(
+                NetraLogger.info(
                     `${LOG_PREFIX}: ${processedCount}/${runItems.length} processed (run_item_id=${runItem.runItemId})`,
                 );
 
@@ -319,7 +319,7 @@ export class Simulation {
             await runAfterAll(hooks, results as any, sharedContext);
         } catch (error) {
             const errorMsg = `afterAll hook failed: ${error instanceof Error ? error.message : String(error)}`;
-            Logger.error(`${LOG_PREFIX}: ${errorMsg}`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: ${errorMsg}`);
             // Only mark successfully completed items — do not overwrite real failures.
             const completed = results.completed;
             const successfulIds = completed.map((item) => item.runItemId);
@@ -341,7 +341,7 @@ export class Simulation {
 
         results.success = results.failed.length === 0;
 
-        Logger.info(
+        NetraLogger.info(
             `${LOG_PREFIX}: Completed=${results.completed.length}, Failed=${results.failed.length}`,
         );
 
@@ -390,7 +390,7 @@ export class Simulation {
             await runAfter(hooks, datasetItemId, itemResult, setupContext);
         } catch (error) {
             const errorMsg = `after hook failed: ${error instanceof Error ? error.message : String(error)}`;
-            Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
             errors.push(errorMsg);
         }
 
@@ -398,7 +398,7 @@ export class Simulation {
             await runAfterEach(hooks, datasetItemId, itemResult, setupContext);
         } catch (error) {
             const errorMsg = `afterEach hook failed: ${error instanceof Error ? error.message : String(error)}`;
-            Logger.error(`${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
+            NetraLogger.notice("error", `${LOG_PREFIX}: ${errorMsg} for runItemId=${runItemId}`);
             errors.push(errorMsg);
         }
 
@@ -476,7 +476,7 @@ export class Simulation {
                 }
 
                 if (response.decision === "stop") {
-                    Logger.info(
+                    NetraLogger.info(
                         `${LOG_PREFIX}: Completed run_item_id=${runItemId} reason=${response.reason}`,
                     );
                     const itemResult: ConversationResult = {
@@ -493,7 +493,7 @@ export class Simulation {
                 rawFiles = response.nextFiles || [];
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);
-                Logger.error(
+                NetraLogger.notice("error",
                     `${LOG_PREFIX}: Task failed run_item_id=${runItemId}, turn_id=${turnId}: ${errorMsg}`,
                 );
                 await this._client.reportFailure(runId, runItemId, errorMsg);

@@ -1,6 +1,6 @@
 import { jsonrepair } from "jsonrepair";
 import { safeStringify } from "./safe-stringify";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 
 const TRUNCATION_SUFFIX = "...[TRUNCATED]";
 
@@ -50,7 +50,7 @@ function tryRepairAndFit(
     const result = JSON.stringify(parsed);
     if (result.length <= budget) return result;
   } catch {
-    Logger.debug("Failed to repair and fit JSON at cut length", {
+    NetraLogger.debug("Failed to repair and fit JSON at cut length", {
       length: json.length,
       cutLength: cutLen,
     });

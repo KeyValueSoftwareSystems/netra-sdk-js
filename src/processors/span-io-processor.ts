@@ -1,6 +1,6 @@
 import { AttributeValue, Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 const _PROMPT_RE = /^gen_ai\.prompts?\.(\d+)\.(role|content)$/;
 const _COMPLETION_RE = /^gen_ai\.completions?\.(\d+)\.(role|content)$/;
@@ -80,7 +80,7 @@ export class SpanIOProcessor implements SpanProcessor {
       }
       this._wrapSetAttribute(span);
     } catch (e) {
-      Logger.error("SpanIOProcessor.onStart failed:", e);
+      NetraLogger.error("SpanIOProcessor.onStart failed:", e);
     }
   }
 
@@ -261,7 +261,7 @@ export class SpanIOProcessor implements SpanProcessor {
         // 10. Pass through
         return original(key, value);
       } catch (e) {
-        Logger.debug(`SpanIOProcessor: error processing key=${key}`, e);
+        NetraLogger.debug(`SpanIOProcessor: error processing key=${key}`, e);
         try {
           return original(key, value);
         } catch {

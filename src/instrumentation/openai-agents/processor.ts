@@ -20,7 +20,7 @@ import {
 } from "./constants";
 import { getNetraSpanType, getSpanName } from "./utils";
 import { setSpanDataAttributes } from "./attributes";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import type { AgentSpan, AgentTrace, TracingProcessor } from "./types";
 
 export class NetraAgentsTracingProcessor implements TracingProcessor {
@@ -56,7 +56,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
         stale?.end();
       } catch { /* already ended */ }
       this._otelSpans.delete(oldest);
-      Logger.debug("NetraAgentsTracingProcessor: evicted span due to MAX_TRACKED_SPANS limit");
+      NetraLogger.debug("NetraAgentsTracingProcessor: evicted span due to MAX_TRACKED_SPANS limit");
     }
   }
 
@@ -88,7 +88,7 @@ export class NetraAgentsTracingProcessor implements TracingProcessor {
         this._traceSpans.delete(oldest);
       }
 
-      Logger.debug("NetraAgentsTracingProcessor: evicted root trace due to MAX_TRACKED_TRACES limit");
+      NetraLogger.debug("NetraAgentsTracingProcessor: evicted root trace due to MAX_TRACKED_TRACES limit");
     }
   }
 

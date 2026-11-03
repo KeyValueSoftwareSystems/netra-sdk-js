@@ -10,7 +10,7 @@
 import { Span, context, trace } from "@opentelemetry/api";
 import { AsyncLocalStorage } from "async_hooks";
 import { Config } from "./config";
-import { Logger } from "./logger";
+import { NetraLogger } from "./netraLogger";
 import { RootSpanProcessor } from "./processors/root-span-processor";
 import { ConversationType } from "./types";
 import { safeStringify } from "./utils/serialization";
@@ -82,7 +82,7 @@ export class SessionManager {
       stack.push(span);
       ctx.spansByName.set(name, stack);
     } catch (e) {
-      Logger.error(`Failed to register span '${name}':`, e);
+      NetraLogger.error(`Failed to register span '${name}':`, e);
     }
   }
 
@@ -99,7 +99,7 @@ export class SessionManager {
       }
       if (stack.length === 0) ctx.spansByName.delete(name);
     } catch (e) {
-      Logger.error(`Failed to unregister span '${name}':`, e);
+      NetraLogger.error(`Failed to unregister span '${name}':`, e);
     }
   }
 
@@ -172,10 +172,10 @@ export class SessionManager {
       if (span?.isRecording()) {
         span.setAttribute(key, typeof value === "string" ? value : safeStringify(value));
       } else {
-        Logger.warn(`setAttributeOnActiveSpan: no recording span for key '${key}'`);
+        NetraLogger.warn(`setAttributeOnActiveSpan: no recording span for key '${key}'`);
       }
     } catch (e) {
-      Logger.error(`Failed to set attribute '${key}' on active span:`, e);
+      NetraLogger.error(`Failed to set attribute '${key}' on active span:`, e);
     }
   }
 
@@ -191,7 +191,7 @@ export class SessionManager {
         safeStringify(value),
       );
     } catch (e) {
-      Logger.error("setInput failed:", e);
+      NetraLogger.error("setInput failed:", e);
     }
   }
 
@@ -207,7 +207,7 @@ export class SessionManager {
         safeStringify(value),
       );
     } catch (e) {
-      Logger.error("setOutput failed:", e);
+      NetraLogger.error("setOutput failed:", e);
     }
   }
 
@@ -223,7 +223,7 @@ export class SessionManager {
         safeStringify(value),
       );
     } catch (e) {
-      Logger.error("setRootInput failed:", e);
+      NetraLogger.error("setRootInput failed:", e);
     }
   }
 
@@ -239,7 +239,7 @@ export class SessionManager {
         safeStringify(value),
       );
     } catch (e) {
-      Logger.error("setRootOutput failed:", e);
+      NetraLogger.error("setRootOutput failed:", e);
     }
   }
 
@@ -264,7 +264,7 @@ export class SessionManager {
         );
       }
     } catch (e) {
-      Logger.error(`setCustomEvent '${name}' failed:`, e);
+      NetraLogger.error(`setCustomEvent '${name}' failed:`, e);
     }
   }
 
@@ -282,14 +282,14 @@ export class SessionManager {
     content: string | Record<string, any>,
   ): void {
     if (!role || !content) {
-      Logger.error("addConversation: role and content must be provided");
+      NetraLogger.notice("error", "addConversation: role and content must be provided");
       return;
     }
 
     try {
       const span = trace.getActiveSpan();
       if (!span?.isRecording()) {
-        Logger.warn("addConversation: no active recording span");
+        NetraLogger.warn("addConversation: no active recording span");
         return;
       }
 
@@ -308,7 +308,7 @@ export class SessionManager {
           }
         }
       } catch (e) {
-        Logger.warn("addConversation: failed to parse existing conversation, starting fresh:", e);
+        NetraLogger.warn("addConversation: failed to parse existing conversation, starting fresh:", e);
       }
 
       existing.push({
@@ -321,7 +321,7 @@ export class SessionManager {
       const payload = JSON.stringify(existing);
       span.setAttribute("conversation", payload);
     } catch (e) {
-      Logger.error("addConversation failed:", e);
+      NetraLogger.error("addConversation failed:", e);
     }
   }
 }

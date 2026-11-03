@@ -32,7 +32,7 @@
  *                          postscript_failed; already-failed scenarios keep their status
  */
 
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 const LOG_PREFIX = "netra.simulation";
 
@@ -170,11 +170,11 @@ export async function runBeforeAll(
 ): Promise<Record<string, any> | null> {
     if (!hooks?.beforeAll) return null;
 
-    Logger.info(`${LOG_PREFIX}: running beforeAll hook`);
+    NetraLogger.info(`${LOG_PREFIX}: running beforeAll hook`);
     const result = await hooks.beforeAll();
 
     if (result !== null && result !== undefined && typeof result !== "object") {
-        Logger.warn(
+        NetraLogger.notice("warn",
             `${LOG_PREFIX}: beforeAll returned ${typeof result} (expected object or null); ignoring value`,
         );
         return null;
@@ -195,7 +195,7 @@ export async function runBefore(
     sharedContext: Record<string, any> | null,
 ): Promise<Record<string, any> | null> {
     if (hooks?.before && datasetItemId in hooks.before) {
-        Logger.info(
+        NetraLogger.info(
             `${LOG_PREFIX}: running before hook for datasetItemId=${datasetItemId}`,
         );
         const itemHook = hooks.before[datasetItemId];
@@ -206,7 +206,7 @@ export async function runBefore(
             if (typeof result === "object") {
                 Object.assign(base, result);
             } else {
-                Logger.warn(
+                NetraLogger.notice("warn",
                     `${LOG_PREFIX}: before hook returned ${typeof result} (expected object or null); ignoring value`,
                 );
             }
@@ -233,7 +233,7 @@ export async function runBeforeEach(
 ): Promise<Record<string, any> | null> {
     if (!hooks?.beforeEach) return sharedContext;
 
-    Logger.info(
+    NetraLogger.info(
         `${LOG_PREFIX}: running beforeEach hook for datasetItemId=${datasetItemId}`,
     );
     const result = await hooks.beforeEach(sharedContext);
@@ -243,7 +243,7 @@ export async function runBeforeEach(
         if (typeof result === "object") {
             Object.assign(base, result);
         } else {
-            Logger.warn(
+            NetraLogger.notice("warn",
                 `${LOG_PREFIX}: beforeEach hook returned ${typeof result} (expected object or null); ignoring value`,
             );
         }
@@ -269,7 +269,7 @@ export async function runAfter(
     setupContext: Record<string, any> | null,
 ): Promise<void> {
     if (hooks?.after && datasetItemId in hooks.after) {
-        Logger.info(
+        NetraLogger.info(
             `${LOG_PREFIX}: running after hook for datasetItemId=${datasetItemId}`,
         );
         await hooks.after[datasetItemId](itemResult, setupContext);
@@ -292,7 +292,7 @@ export async function runAfterEach(
 ): Promise<void> {
     if (!hooks?.afterEach) return;
 
-    Logger.info(
+    NetraLogger.info(
         `${LOG_PREFIX}: running afterEach hook for datasetItemId=${datasetItemId}`,
     );
     await hooks.afterEach(itemResult, setupContext);
@@ -311,6 +311,6 @@ export async function runAfterAll(
 ): Promise<void> {
     if (!hooks?.afterAll) return;
 
-    Logger.info(`${LOG_PREFIX}: running afterAll hook`);
+    NetraLogger.info(`${LOG_PREFIX}: running afterAll hook`);
     await hooks.afterAll(results, sharedContext);
 }

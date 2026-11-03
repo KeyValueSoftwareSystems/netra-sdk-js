@@ -3,7 +3,7 @@
  */
 
 import { Config } from "../config";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import { apiPath } from "../utils/api-path";
 import { injectTraceContextHeaders } from "../utils/context-propagation";
 
@@ -28,7 +28,9 @@ export class NetraHttpClient {
   constructor(config: Config, timeoutEnvVar: string, defaultTimeout: number) {
     const endpoint = config.otlpEndpoint?.trim() || "";
     if (!endpoint) {
-      Logger.error(
+      // Debug only: init already shows one MISSING_ENDPOINT_NOTICE covering API
+      // calls, instead of one line per API client.
+      NetraLogger.debug(
         "netra: NETRA_OTLP_ENDPOINT is required for API calls"
       );
       this.baseUrl = "";
@@ -67,7 +69,7 @@ export class NetraHttpClient {
     }
     const parsed = parseFloat(envValue);
     if (isNaN(parsed)) {
-      Logger.warn(
+      NetraLogger.notice("warn",
         `netra: Invalid ${envVar} value '${envValue}', using default ${defaultValue}`
       );
       return defaultValue;
@@ -91,7 +93,7 @@ export class NetraHttpClient {
     try {
       return apiPath(strings, ...values);
     } catch (error) {
-      Logger.error(`netra: ${error instanceof Error ? error.message : error}`);
+      NetraLogger.notice("error", `netra: ${error instanceof Error ? error.message : error}`);
       return null;
     }
   }
@@ -101,7 +103,7 @@ export class NetraHttpClient {
     params?: Record<string, string | number | undefined>
   ): Promise<HttpResponse<T>> {
     if (!this.initialized) {
-      Logger.error("netra: HTTP client is not initialized");
+      NetraLogger.notice("error", "netra: HTTP client is not initialized");
       return { data: {} as T, status: 0, ok: false };
     }
     if (path === null) {
@@ -139,7 +141,7 @@ export class NetraHttpClient {
         ok: response.ok,
       };
     } catch (error) {
-      Logger.error(`netra: GET ${path} failed:`, error);
+      NetraLogger.notice("error", `netra: GET ${path} failed:`, error);
       return { data: {} as T, status: 0, ok: false };
     }
   }
@@ -149,7 +151,7 @@ export class NetraHttpClient {
     body?: Record<string, any>
   ): Promise<HttpResponse<T>> {
     if (!this.initialized) {
-      Logger.error("netra: HTTP client is not initialized");
+      NetraLogger.notice("error", "netra: HTTP client is not initialized");
       return { data: {} as T, status: 0, ok: false };
     }
     if (path === null) {
@@ -181,7 +183,7 @@ export class NetraHttpClient {
         ok: response.ok,
       };
     } catch (error) {
-      Logger.error(`netra: POST ${path} failed:`, error);
+      NetraLogger.notice("error", `netra: POST ${path} failed:`, error);
       return { data: {} as T, status: 0, ok: false };
     }
   }

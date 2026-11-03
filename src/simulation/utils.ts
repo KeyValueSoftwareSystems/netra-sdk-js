@@ -1,6 +1,6 @@
 import axios from "axios";
 import pLimit from "p-limit";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import { FileData, ProcessedFile } from "./models";
 import { BaseTask } from "./task";
 
@@ -34,11 +34,11 @@ export function validateSimulationInputs(
     task: BaseTask,
 ): boolean {
     if (!datasetId) {
-        Logger.error(`${LOG_PREFIX}: dataset_id is required`);
+        NetraLogger.notice("error", `${LOG_PREFIX}: dataset_id is required`);
         return false;
     }
     if (!(task instanceof BaseTask)) {
-        Logger.error(`${LOG_PREFIX}: task must be a BaseTask instance`);
+        NetraLogger.notice("error", `${LOG_PREFIX}: task must be a BaseTask instance`);
         return false;
     }
     return true;
@@ -65,7 +65,7 @@ function _getFileDownloadTimeout(): number {
             _cachedFileDownloadTimeoutMs = parsed * 1000;
             return _cachedFileDownloadTimeoutMs;
         }
-        Logger.warn(
+        NetraLogger.notice("warn",
             `${LOG_PREFIX}: Invalid file download timeout '${envVal}', using default ${DEFAULT_FILE_DOWNLOAD_TIMEOUT_S}s`,
         );
     }
@@ -115,7 +115,7 @@ async function _downloadSingleFile(
             ? `HTTP ${status}`
             : (error instanceof Error ? error.message : String(error));
 
-        Logger.error(
+        NetraLogger.notice("error",
             `${LOG_PREFIX}: Failed to download file '${fileData.fileName}': ${reason}`,
         );
 
@@ -146,7 +146,7 @@ export function parseFiles(
         const downloadUrl = entry.downloadUrl || "";
 
         if (!fileName || !downloadUrl) {
-            Logger.warn(
+            NetraLogger.warn(
                 `${LOG_PREFIX}: Skipping malformed file attachment (missing fileName or downloadUrl)`,
             );
             continue;

@@ -19,7 +19,7 @@ import { AttributeValue, Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { serializeAttribute } from "../utils/serialization/truncating-serializer";
 import { Config } from "../config";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 type SetAttributeFn = (key: string, value: AttributeValue) => Span;
 
@@ -34,7 +34,7 @@ export class SerializationSpanProcessor implements SpanProcessor {
     try {
       this.wrapSetAttribute(span);
     } catch (e) {
-      Logger.debug("SerializationSpanProcessor.onStart error:", e);
+      NetraLogger.debug("SerializationSpanProcessor.onStart error:", e);
     }
   }
 

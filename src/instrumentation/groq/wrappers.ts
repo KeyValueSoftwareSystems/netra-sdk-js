@@ -1,5 +1,5 @@
 import { Tracer, Span, SpanKind, SpanStatusCode, context } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { setRequestAttributes, setResponseAttributes } from "./utils";
 import {
   defineHidden,
@@ -52,7 +52,7 @@ function groqWrapper(
               const stream: any = await response;
               return new AsyncStreamingWrapper(span, stream, startTime, kwargs);
             } catch (error) {
-              Logger.error("netra.instrumentation.groq:", error);
+              NetraLogger.error("netra.instrumentation.groq:", error);
               span.setStatus({
                 code: SpanStatusCode.ERROR,
                 message: error instanceof Error ? error.message : String(error),
@@ -66,7 +66,7 @@ function groqWrapper(
           return new StreamingWrapper(span, response, startTime, kwargs);
         }
       } catch (error) {
-        Logger.error("netra.instrumentation.groq:", error);
+        NetraLogger.error("netra.instrumentation.groq:", error);
         span.setStatus({
           code: SpanStatusCode.ERROR,
           message: error instanceof Error ? error.message : String(error),
@@ -102,7 +102,7 @@ function groqWrapper(
                   span.end();
                   return value;
                 } catch (error) {
-                  Logger.error("netra.instrumentation.groq:", error);
+                  NetraLogger.error("netra.instrumentation.groq:", error);
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
                     message:
@@ -126,7 +126,7 @@ function groqWrapper(
               return response;
             }
           } catch (error) {
-            Logger.error("netra.instrumentation.groq:", error);
+            NetraLogger.error("netra.instrumentation.groq:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),

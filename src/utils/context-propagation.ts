@@ -14,7 +14,7 @@
  */
 
 import { context, propagation, Context } from "@opentelemetry/api";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 /**
  * Inject W3C trace context (traceparent/tracestate) from the currently active
@@ -34,7 +34,7 @@ export function injectTraceContextHeaders(
   try {
     propagation.inject(context.active(), carrier);
   } catch {
-    Logger.warn("netra: Failed to inject trace context headers");
+    NetraLogger.warn("netra: Failed to inject trace context headers");
     return headers;
   }
   return carrier;

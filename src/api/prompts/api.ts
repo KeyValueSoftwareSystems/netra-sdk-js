@@ -1,6 +1,6 @@
 import { TTLCache } from "../../cache";
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { PromptsHttpClient } from "./client";
 import {
   GetPromptParams,
@@ -34,7 +34,7 @@ export class Prompts {
    */
   async getPrompt(params: GetPromptParams): Promise<PromptResponse | null> {
     if (!params || typeof params.name !== "string" || !params.name) {
-      Logger.error("netra.prompts: name is required to fetch a prompt");
+      NetraLogger.notice("error", "netra.prompts: name is required to fetch a prompt");
       return null;
     }
 

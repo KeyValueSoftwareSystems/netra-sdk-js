@@ -1,6 +1,6 @@
 import { createRequire } from "module";
 import { trace, Tracer } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { __version__ } from "./version";
 import { chatWrapper, embeddingsWrapper, responsesWrapper } from "./wrappers";
 import { InstrumentorOptions, PatchTarget } from "./types";
@@ -23,7 +23,7 @@ async function resolveOpenAI(): Promise<any[]> {
     const mod = await import("openai");
     openAIClasses.push(mod.OpenAI ?? mod.default ?? mod);
   } catch {
-    Logger.warn("Failed to resolve OpenAI ESM module");
+    NetraLogger.warn("Failed to resolve OpenAI ESM module");
   }
 
   try {
@@ -37,7 +37,7 @@ async function resolveOpenAI(): Promise<any[]> {
       openAIClasses.push(cjsClass);
     }
   } catch {
-    Logger.warn("Failed to resolve OpenAI CJS module");
+    NetraLogger.warn("Failed to resolve OpenAI CJS module");
   }
 
   return openAIClasses;
@@ -79,7 +79,7 @@ export class NetraOpenAIInstrumentor {
     options: InstrumentorOptions = {},
   ): Promise<NetraOpenAIInstrumentor> {
     if (this.isInstrumented()) {
-      Logger.warn("OpenAI is already instrumented");
+      NetraLogger.warn("OpenAI is already instrumented");
       return this;
     }
 
@@ -89,7 +89,7 @@ export class NetraOpenAIInstrumentor {
         ? provider.getTracer(INSTRUMENTATION_NAME, __version__)
         : trace.getTracer(INSTRUMENTATION_NAME, __version__);
     } catch (error) {
-      Logger.error(`Failed to initialize tracer: ${error}`);
+      NetraLogger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -106,7 +106,7 @@ export class NetraOpenAIInstrumentor {
 
   async uninstrument(): Promise<void> {
     if (!this.isInstrumented()) {
-      Logger.warn("OpenAI is not instrumented");
+      NetraLogger.warn("OpenAI is not instrumented");
       return;
     }
 
@@ -128,7 +128,7 @@ export class NetraOpenAIInstrumentor {
     const proto = target.getPrototype(openAIClass);
     if (!proto?.create) {
       if (!target.optional) {
-        Logger.error(`Failed to find OpenAI method to patch: ${target.key}`);
+        NetraLogger.error(`Failed to find OpenAI method to patch: ${target.key}`);
       }
       return;
     }
@@ -148,7 +148,7 @@ export class NetraOpenAIInstrumentor {
         );
       };
     } catch (error) {
-      Logger.error(`Failed to patch ${target.key}: ${error}`);
+      NetraLogger.error(`Failed to patch ${target.key}: ${error}`);
     }
   }
 
@@ -160,7 +160,7 @@ export class NetraOpenAIInstrumentor {
         proto.create = original;
       }
     } catch (error) {
-      Logger.error(`Failed to unpatch ${target.key}: ${error}`);
+      NetraLogger.error(`Failed to unpatch ${target.key}: ${error}`);
     }
   }
 }

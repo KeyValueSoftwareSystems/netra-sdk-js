@@ -9,7 +9,7 @@ import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
-import { Logger } from "./logger";
+import { NetraLogger } from "./netraLogger";
 import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
 import {
   FLUSH_TIMEOUT_MS,
@@ -190,7 +190,7 @@ export class Netra {
       await this._shutdownPromise;
     }
     if (this._initialized) {
-      Logger.warn("Netra.init() called more than once; ignoring subsequent calls.");
+      NetraLogger.notice("warn", "Netra.init() called more than once; ignoring subsequent calls.");
       return;
     }
 
@@ -198,7 +198,7 @@ export class Netra {
     this._config = cfg;
 
     // Wire the logger before anything else so all modules respect debugMode.
-    Logger.setDebugMode(cfg.debugMode);
+    NetraLogger.setDebugMode(cfg.debugMode);
 
     // Initialize instrumentations and get effective provider
     const effectiveProvider = initInstrumentations(
@@ -215,41 +215,41 @@ export class Netra {
     try {
       this.usage = new Usage(cfg);
     } catch (e) {
-      Logger.warn("Netra: failed to initialize usage client:", e);
+      NetraLogger.warn("Netra: failed to initialize usage client:", e);
     }
 
     try {
       this.evaluation = new Evaluation(cfg);
     } catch (e) {
-      Logger.warn("Netra: failed to initialize evaluation client:", e);
+      NetraLogger.warn("Netra: failed to initialize evaluation client:", e);
     }
 
     try {
       this.dashboard = new Dashboard(cfg);
     } catch (e) {
-      Logger.warn("Netra: failed to initialize dashboard client:", e);
+      NetraLogger.warn("Netra: failed to initialize dashboard client:", e);
     }
 
     try {
       this.simulation = new Simulation(cfg);
     } catch (e) {
-      Logger.warn("Netra: failed to initialize simulation client:", e);
+      NetraLogger.warn("Netra: failed to initialize simulation client:", e);
     }
 
     try {
       this.prompts = new Prompts(cfg);
     } catch (e) {
-      Logger.warn("Netra: failed to initialize prompts client:", e);
+      NetraLogger.warn("Netra: failed to initialize prompts client:", e);
     }
 
     try {
       this.models = new Models(cfg);
     } catch (e) {
-      Logger.warn("Netra: failed to initialize models client:", e);
+      NetraLogger.warn("Netra: failed to initialize models client:", e);
     }
 
     this._initialized = true;
-    Logger.info("Netra successfully initialized.");
+    NetraLogger.info("Netra successfully initialized.");
 
     {
       let pkgVersion = Config.LIBRARY_VERSION;
@@ -262,7 +262,7 @@ export class Netra {
       } catch {
         // keep defaults
       }
-      Logger.debug(
+      NetraLogger.debug(
         `SDK version=${pkgVersion} libraryVersion=${Config.LIBRARY_VERSION} build=langgraph-parenting-v3 packageJson=${pkgPath}`,
       );
     }
@@ -338,7 +338,7 @@ export class Netra {
     try {
       await uninstrumentAll();
     } catch (e) {
-      Logger.error("Error during uninstrumentAll:", e);
+      NetraLogger.error("Error during uninstrumentAll:", e);
     }
 
     let flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -368,7 +368,7 @@ export class Netra {
         }),
       ]);
     } catch (e) {
-      Logger.error("Error during Netra trace shutdown:", e);
+      NetraLogger.error("Error during Netra trace shutdown:", e);
     } finally {
       clearTimeout(flushTimer);
     }
@@ -377,7 +377,7 @@ export class Netra {
       this.prompts?.clearCache();
       this.models?.clearCache();
     } catch (e) {
-      Logger.error("Error clearing SDK API caches:", e);
+      NetraLogger.error("Error clearing SDK API caches:", e);
     }
 
     // Wait for the other registered exit tasks (e.g. a simulation marking its
@@ -387,7 +387,7 @@ export class Netra {
     try {
       await settleOtherExitTasks(this._flushTask);
     } catch (e) {
-      Logger.error("Error awaiting pending shutdown tasks:", e);
+      NetraLogger.error("Error awaiting pending shutdown tasks:", e);
     }
 
     this._initialized = false;
@@ -416,7 +416,7 @@ export class Netra {
 
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
-      Logger.error(`setSessionId: sessionId must be a string, got ${typeof sessionId}`);
+      NetraLogger.notice("error", `setSessionId: sessionId must be a string, got ${typeof sessionId}`);
       return;
     }
     if (sessionId) {
@@ -426,7 +426,7 @@ export class Netra {
         sessionId,
       );
     } else {
-      Logger.warn("setSessionId: Session ID must be provided for setting session_id.");
+      NetraLogger.notice("warn", "setSessionId: Session ID must be provided for setting session_id.");
     }
   }
 
@@ -436,7 +436,7 @@ export class Netra {
    */
   static setUserId(userId: string): void {
     if (typeof userId !== "string") {
-      Logger.error(`setUserId: userId must be a string, got ${typeof userId}`);
+      NetraLogger.notice("error", `setUserId: userId must be a string, got ${typeof userId}`);
       return;
     }
     if (userId) {
@@ -446,7 +446,7 @@ export class Netra {
         userId,
       );
     } else {
-      Logger.warn("setUserId: User ID must be provided for setting user_id.");
+      NetraLogger.notice("warn", "setUserId: User ID must be provided for setting user_id.");
     }
   }
 
@@ -456,7 +456,7 @@ export class Netra {
    */
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
-      Logger.error(`setTenantId: tenantId must be a string, got ${typeof tenantId}`);
+      NetraLogger.notice("error", `setTenantId: tenantId must be a string, got ${typeof tenantId}`);
       return;
     }
     if (tenantId) {
@@ -466,7 +466,7 @@ export class Netra {
         tenantId,
       );
     } else {
-      Logger.warn("setTenantId: Tenant ID must be provided for setting tenant_id.");
+      NetraLogger.notice("warn", "setTenantId: Tenant ID must be provided for setting tenant_id.");
     }
   }
 
@@ -480,7 +480,7 @@ export class Netra {
         value,
       );
     } else {
-      Logger.warn("Both key and value must be provided for custom attributes.");
+      NetraLogger.notice("warn", "Both key and value must be provided for custom attributes.");
     }
   }
 
@@ -494,7 +494,7 @@ export class Netra {
     if (eventName && attributes) {
       SessionManager.setCustomEvent(eventName, attributes);
     } else {
-      Logger.warn("Both eventName and attributes must be provided for custom events.");
+      NetraLogger.notice("warn", "Both eventName and attributes must be provided for custom events.");
     }
   }
 

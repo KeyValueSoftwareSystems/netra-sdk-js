@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { ModelsHttpClient } from "./client";
 import { ModelPricing } from "./models";
 
@@ -26,12 +26,14 @@ describe("ModelsHttpClient.getModelPricing", () => {
   let get: ReturnType<typeof vi.spyOn>;
   let isInitialized: ReturnType<typeof vi.spyOn>;
   let logError: ReturnType<typeof vi.spyOn>;
+  let logNotice: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     client = new ModelsHttpClient(new Config());
     get = vi.spyOn(client, "get");
     isInitialized = vi.spyOn(client, "isInitialized").mockReturnValue(true);
-    logError = vi.spyOn(Logger, "error").mockImplementation(() => {});
+    logError = vi.spyOn(NetraLogger, "error").mockImplementation(() => {});
+    logNotice = vi.spyOn(NetraLogger, "notice").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -87,6 +89,7 @@ describe("ModelsHttpClient.getModelPricing", () => {
 
       expect(result).toEqual([]);
       expect(logError).not.toHaveBeenCalled();
+      expect(logNotice).not.toHaveBeenCalled();
     });
   });
 
@@ -98,7 +101,8 @@ describe("ModelsHttpClient.getModelPricing", () => {
 
       expect(result).toBeNull();
       expect(get).not.toHaveBeenCalled();
-      expect(logError).toHaveBeenCalledWith(
+      expect(logNotice).toHaveBeenCalledWith(
+        "error",
         "netra.models: Models client is not initialized; cannot fetch model pricing",
       );
     });
@@ -115,7 +119,8 @@ describe("ModelsHttpClient.getModelPricing", () => {
       const result = await client.getModelPricing();
 
       expect(result).toBeNull();
-      expect(logError).toHaveBeenCalledWith(
+      expect(logNotice).toHaveBeenCalledWith(
+        "error",
         "netra.models: Failed to fetch model pricing: backend unavailable",
       );
     });
@@ -130,7 +135,8 @@ describe("ModelsHttpClient.getModelPricing", () => {
       const result = await client.getModelPricing();
 
       expect(result).toBeNull();
-      expect(logError).toHaveBeenCalledWith(
+      expect(logNotice).toHaveBeenCalledWith(
+        "error",
         "netra.models: Failed to fetch model pricing: Unknown error",
       );
     });
@@ -160,7 +166,8 @@ describe("ModelsHttpClient.getModelPricing", () => {
       const result = await client.getModelPricing();
 
       expect(result).toBeNull();
-      expect(logError).toHaveBeenCalledWith(
+      expect(logNotice).toHaveBeenCalledWith(
+        "error",
         "netra.models: Failed to fetch model pricing:",
         "network down",
       );
