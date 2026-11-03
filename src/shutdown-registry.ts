@@ -12,7 +12,7 @@
  * application is not handling the event itself.
  */
 
-import { Logger } from "./logger";
+import { NetraLogger } from "./netraLogger";
 
 /**
  * Budget for the trace flush inside `Netra.shutdown()`.
@@ -318,14 +318,14 @@ const onSignal = (sig: NodeJS.Signals): void => {
             // exit back to Node, not insisting. Let the tasks finish (still
             // bounded by the budget) and re-raise then; abandoning them here
             // loses the flush whenever the app closes faster than it.
-            Logger.debug(`netra: ${sig} handed back by the app; exiting after flush`);
+            NetraLogger.debug(`netra: ${sig} handed back by the app; exiting after flush`);
             handedBack = sig;
             return;
         }
         // Otherwise a second signal means "I meant it". Stop protecting the
         // process and let the signal take its default disposition; the
         // in-flight tasks are abandoned deliberately.
-        Logger.debug(`netra: second ${sig} during shutdown; exiting now`);
+        NetraLogger.debug(`netra: second ${sig} during shutdown; exiting now`);
         // Supersede the in-flight fire so its `.finally` does not re-raise
         // again once its abandoned tasks eventually settle.
         generation++;
@@ -342,9 +342,9 @@ const onSignal = (sig: NodeJS.Signals): void => {
     }
     const handled = appHandles(sig);
     const gen = startFire(handled ? sig : undefined);
-    Logger.log(`\nReceived ${sig}. Flushing Netra SDK...`);
+    NetraLogger.log(`\nReceived ${sig}. Flushing Netra SDK...`);
     void runTasks({ kind: "signal", signal: sig })
-        .catch((err) => Logger.error("netra: error during shutdown:", err))
+        .catch((err) => NetraLogger.error("netra: error during shutdown:", err))
         .finally(() => {
             if (gen !== generation) {
                 return; // superseded by a later signal
@@ -395,9 +395,9 @@ const onUncaughtException = (error: Error): void => {
         return;
     }
     const gen = startFire();
-    Logger.error("Uncaught exception; flushing Netra SDK before exit...");
+    NetraLogger.error("Uncaught exception; flushing Netra SDK before exit...");
     void runTasks({ kind: "uncaughtException", error })
-        .catch((err) => Logger.error("netra: error during crash shutdown:", err))
+        .catch((err) => NetraLogger.error("netra: error during crash shutdown:", err))
         .finally(() => {
             if (gen !== generation) {
                 return;
@@ -436,7 +436,7 @@ const onUnhandledRejection = (reason: unknown): void => {
     if (!appHandles("uncaughtException")) {
         const gen = startFire();
         void runTasks({ kind: "unhandledRejection", error: reason })
-            .catch((err) => Logger.error("netra: error during shutdown:", err))
+            .catch((err) => NetraLogger.error("netra: error during shutdown:", err))
             .finally(() => {
                 if (gen !== generation) {
                     return;

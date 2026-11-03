@@ -4,7 +4,7 @@
 
 import { context, trace, Span, SpanStatusCode } from "@opentelemetry/api";
 import { Config } from "./config";
-import { Logger } from "./logger";
+import { NetraLogger } from "./netraLogger";
 import { SessionManager } from "./session-manager";
 import { SpanType, DecoratorOptions } from "./types";
 import { wrapResponse } from "./utils/response-handler";
@@ -33,7 +33,7 @@ function spanHasOutput(span: Span): boolean {
       if (attrs && typeof attrs === "object" && attrs["output"]) return true;
     }
   } catch (e) {
-    Logger.warn("spanHasOutput: error inspecting span attributes:", e);
+    NetraLogger.warn("spanHasOutput: error inspecting span attributes:", e);
   }
   return false;
 }

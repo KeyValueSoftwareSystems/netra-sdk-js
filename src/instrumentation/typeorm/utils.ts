@@ -1,5 +1,5 @@
 import { Span } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 
 export function extractQuery(query: string | { query: string; parameters?: any[] }): {
   sql: string;
@@ -61,7 +61,7 @@ export function setQueryAttributes(
     try {
       span.setAttribute("db.statement.parameters", JSON.stringify(parameters));
     } catch (e) {
-      Logger.log(e);
+      NetraLogger.log(e);
     }
   }
 }
@@ -96,7 +96,7 @@ export function extractDatabaseName(dataSource: any): string | undefined {
         const dbName = url.pathname?.replace(/^\//, "");
         if (dbName) return dbName;
       } catch(e) {
-        Logger.log(e);
+        NetraLogger.log(e);
       }
     }
   }

@@ -19,7 +19,7 @@ import {
   NETRA_MCP_SERVER,
   NETRA_SPAN_NAME,
 } from "./constants";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { safeStringify } from "../../utils/serialization";
 import { setCacheWriteTtlAttributes } from "../utils";
 import { AgentSpan, SpanData } from "./types";
@@ -165,7 +165,7 @@ function setResponseAttributes(span: OTelSpan, agentSpan: AgentSpan, systemName:
   }
 
   if (!data._response && !data._input) {
-    Logger.debug(
+    NetraLogger.debug(
       "NetraAgentsTracingProcessor: response span has no _response/_input data;",
       "the @openai/agents SDK may have changed its internal fields",
     );

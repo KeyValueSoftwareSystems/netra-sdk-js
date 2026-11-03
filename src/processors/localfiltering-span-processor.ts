@@ -10,7 +10,7 @@ import type {
   ReadableSpan,
   SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import { compilePatterns, matchesAnyPattern, CompiledPatterns } from "../utils/pattern-matching";
 
 export const LOCAL_BLOCKED_SPANS_BAGGAGE_KEY = "netra.local_blocked_spans";
@@ -133,7 +133,7 @@ export class LocalFilteringSpanProcessor implements SpanProcessor {
         this.evictIfNeeded();
       }
     } catch (e) {
-      Logger.debug("LocalFilteringSpanProcessor.onStart error:", e);
+      NetraLogger.debug("LocalFilteringSpanProcessor.onStart error:", e);
     }
   }
 

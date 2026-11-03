@@ -16,7 +16,7 @@ import {
   DEFAULT_INSTRUMENTS_FOR_ROOT,
   NetraInstruments,
 } from "../config";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import {
   InstrumentationSpanProcessor,
   LlmTraceIdentifierSpanProcessor,
@@ -103,7 +103,7 @@ function patchTraceloopLangchainCallbackHandler(): void {
           ? this?.spans?.get(parentRunId)?.span
           : undefined;
         const active = trace.getSpan(context.active());
-  Logger.debug(
+  NetraLogger.debug(
           `Traceloop ${methodName}: runId=${args[2]} parentRunId=${parentRunId} parentSpan=${parentSpan ? "yes" : "no"} activeSpanId=${active?.spanContext().spanId}`,
         );
         // Always bind the current active context (or explicit parent) for this callback.
@@ -120,16 +120,16 @@ function patchTraceloopLangchainCallbackHandler(): void {
     wrapWithParentContext("handleToolStart");
 
     Handler.__netra_patched = true;
-    Logger.debug(`Patched TraceloopCallbackHandler for parent context (${sourceLabel}).`);
+    NetraLogger.debug(`Patched TraceloopCallbackHandler for parent context (${sourceLabel}).`);
   };
 
   try {
     const mod = require("@traceloop/instrumentation-langchain");
-    Logger.debug(`Loaded @traceloop/instrumentation-langchain via require from ${require.resolve("@traceloop/instrumentation-langchain")}`);
+    NetraLogger.debug(`Loaded @traceloop/instrumentation-langchain via require from ${require.resolve("@traceloop/instrumentation-langchain")}`);
     applyPatch(mod, "require");
     return;
   } catch (e) {
-    Logger.debug("require() for traceloop langchain failed, falling back to import().");
+    NetraLogger.debug("require() for traceloop langchain failed, falling back to import().");
   }
 
   import("@traceloop/instrumentation-langchain")
@@ -183,7 +183,7 @@ function disableTraceloopLangchainCallbackHandler(): void {
       );
     };
     (CallbackManager as any).__netra_disable_traceloop = true;
-    Logger.debug("Disabled Traceloop LangChain callback injection.");
+    NetraLogger.debug("Disabled Traceloop LangChain callback injection.");
   } catch {
     // no-op
   }
@@ -202,6 +202,11 @@ function disableTraceloopLangchainCallbackHandler(): void {
  * Returns a set of instrumentation-name strings, or `null` when no filtering
  * should be applied.
  */
+export const MISSING_ENDPOINT_NOTICE =
+  "NETRA_OTLP_ENDPOINT is not set, so traces will NOT be sent to Netra (spans are printed to " +
+  "the console instead) and Netra API calls are disabled. Fix: set NETRA_OTLP_ENDPOINT to " +
+  "https://api.getnetra.ai/telemetry (or https://api.eu.getnetra.ai/telemetry for EU projects).";
+
 function resolveRootInstrumentNames(
   rootInstruments?: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
@@ -212,12 +217,12 @@ function resolveRootInstrumentNames(
 
   if (blockHasAll) {
     if (rootHasAll) {
-      Logger.error(
+      NetraLogger.notice("error",
         "Netra: rootInstruments=ALL is contradicted by blockInstruments=ALL; " +
           "all root instrumentation is disabled.",
       );
     } else {
-      Logger.warn(
+      NetraLogger.warn(
         "Netra: blockInstruments contains ALL; all instrumentation will be disabled.",
       );
     }
@@ -391,12 +396,12 @@ export function initInstrumentations(
   config.setTraceloopEnv();
 
   // Debug: Log configuration being used
-  Logger.debug("Netra SDK Configuration:");
-  Logger.debug(`  App Name: ${config.appName}`);
-  Logger.debug(`  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`);
-  Logger.debug(`  API Key: ${config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"}`);
-  Logger.debug(`  Trace Content: ${config.traceContent}`);
-  Logger.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
+  NetraLogger.debug("Netra SDK Configuration:");
+  NetraLogger.debug(`  App Name: ${config.appName}`);
+  NetraLogger.debug(`  OTLP Endpoint: ${config.otlpEndpoint || "(default - localhost:3002)"}`);
+  NetraLogger.debug(`  API Key: ${config.apiKey ? "***" + config.apiKey.slice(-4) : "(not set)"}`);
+  NetraLogger.debug(`  Trace Content: ${config.traceContent}`);
+  NetraLogger.debug(`  Enable Scrubbing: ${config.enableScrubbing}`);
 
   // Initialize Traceloop SDK
   const traceloopOptions: InitializeOptions = {
@@ -415,6 +420,7 @@ export function initInstrumentations(
   let exporter: SpanExporter;
 
   if (!traceloopOptions.baseUrl || traceloopOptions.baseUrl == undefined) {
+    NetraLogger.notice("warn", MISSING_ENDPOINT_NOTICE);
     exporter = new ConsoleSpanExporter();
   } else {
     const formattedEndpoint = config.formatOtlpEndpoint();
@@ -511,36 +517,36 @@ async function initCustomInstrumentationsAsync(
   if (customInstrumentModules.mistral) {
     try {
       await mistralAIInstrumentor.instrumentAsync({ tracerProvider });
-      Logger.debug("Custom MistralAI instrumentation enabled");
+      NetraLogger.debug("Custom MistralAI instrumentation enabled");
     } catch (e) {
-      Logger.debug("Failed to initialize custom MistralAI instrumentation:", e);
+      NetraLogger.debug("Failed to initialize custom MistralAI instrumentation:", e);
     }
   }
 
   if (customInstrumentModules.openai) {
     try {
       await openAIInstrumentor.instrument({ tracerProvider });
-      Logger.debug("Custom OpenAI instrumentation enabled");
+      NetraLogger.debug("Custom OpenAI instrumentation enabled");
     } catch (e) {
-      Logger.debug("Failed to initialize custom OpenAI instrumentation:", e);
+      NetraLogger.debug("Failed to initialize custom OpenAI instrumentation:", e);
     }
   }
 
   if (customInstrumentModules.groq) {
     try {
       await groqInstrumentor.instrumentAsync({ tracerProvider });
-      Logger.debug("Custom Groq instrumentation enabled");
+      NetraLogger.debug("Custom Groq instrumentation enabled");
     } catch (e) {
-      Logger.debug("Failed to initialize custom Groq instrumentation:", e);
+      NetraLogger.debug("Failed to initialize custom Groq instrumentation:", e);
     }
   }
 
   if (customInstrumentModules.googleGenAI) {
     try {
       await googleGenAIInstrumentor.instrument({ tracerProvider });
-      Logger.debug("Custom Google GenAI instrumentation enabled");
+      NetraLogger.debug("Custom Google GenAI instrumentation enabled");
     } catch (e) {
-      Logger.debug(
+      NetraLogger.debug(
         "Failed to initialize custom Google GenAI instrumentation:",
         e,
       );
@@ -550,27 +556,27 @@ async function initCustomInstrumentationsAsync(
   if (customInstrumentModules.googleGenerativeAI) {
     try {
       await googleGenerativeAIInstrumentor.instrument({ tracerProvider });
-      Logger.debug("Custom Google Generative AI instrumentation enabled");
+      NetraLogger.debug("Custom Google Generative AI instrumentation enabled");
     } catch (e) {
-      Logger.debug("Failed to initialize custom Google Generative AI instrumentation:", e);
+      NetraLogger.debug("Failed to initialize custom Google Generative AI instrumentation:", e);
     }
   }
 
   if (customInstrumentModules.langgraph) {
     try {
       await langgraphInstrumentor.instrument({ tracerProvider });
-      Logger.debug("Custom Langgraph instrumentation enabled");
+      NetraLogger.debug("Custom Langgraph instrumentation enabled");
     } catch (e) {
-      Logger.debug("Failed to initialize custom Langgraph instrumentation:", e);
+      NetraLogger.debug("Failed to initialize custom Langgraph instrumentation:", e);
     }
   }
 
   if (customInstrumentModules.anthropic) {
     try {
       await anthropicInstrumentor.instrument({ tracerProvider });
-      Logger.debug("Custom Anthropic instrumentation enabled");
+      NetraLogger.debug("Custom Anthropic instrumentation enabled");
     } catch (e) {
-      Logger.debug("Failed to initialize custom Anthropic instrumentation:", e);
+      NetraLogger.debug("Failed to initialize custom Anthropic instrumentation:", e);
     }
   }
 
@@ -581,9 +587,9 @@ async function initCustomInstrumentationsAsync(
   ) {
     try {
       await openaiAgentsInstrumentor.instrument({ tracerProvider });
-      Logger.debug("Custom OpenAI Agents SDK instrumentation enabled");
+      NetraLogger.debug("Custom OpenAI Agents SDK instrumentation enabled");
     } catch (e) {
-      Logger.debug("Failed to initialize custom OpenAI Agents SDK instrumentation:", e);
+      NetraLogger.debug("Failed to initialize custom OpenAI Agents SDK instrumentation:", e);
     }
   }
 }
@@ -603,7 +609,7 @@ function initOpenTelemetryInstrumentations(
       netraHost = new URL(config.otlpEndpoint).host;
     }
   } catch {
-    Logger.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
+    NetraLogger.debug(`OTEL_NODE_EXCLUDED_URLS: malformed otlpEndpoint '${config.otlpEndpoint}', skipping host-based exclusion`);
   }
 
   // Comma-separated regex patterns (unanchored search). Precompiled once;
@@ -617,7 +623,7 @@ function initOpenTelemetryInstrumentations(
         return new RegExp(pattern);
       } catch {
         if (config.debugMode) {
-          Logger.debug(
+          NetraLogger.debug(
             `Invalid OTEL_NODE_EXCLUDED_URLS pattern skipped: ${pattern}`,
           );
         }
@@ -646,10 +652,10 @@ function initOpenTelemetryInstrumentations(
       });
       registerInstrumentations({ instrumentations: [_httpInstrumentation] });
       if (config.debugMode) {
-        Logger.debug("HTTP instrumentation enabled");
+        NetraLogger.debug("HTTP instrumentation enabled");
       }
     } catch (e) {
-      Logger.debug("HTTP instrumentation not available:", e);
+      NetraLogger.debug("HTTP instrumentation not available:", e);
     }
   }
 
@@ -673,11 +679,11 @@ function initOpenTelemetryInstrumentations(
       });
       registerInstrumentations({ instrumentations: [_undiciInstrumentation] });
       if (config.debugMode) {
-        Logger.debug("Undici/fetch instrumentation enabled");
+        NetraLogger.debug("Undici/fetch instrumentation enabled");
       }
     } catch (e) {
       if (config.debugMode) {
-        Logger.debug("Undici/fetch instrumentation not available:", e);
+        NetraLogger.debug("Undici/fetch instrumentation not available:", e);
       }
     }
   }
@@ -692,7 +698,7 @@ function initOpenTelemetryInstrumentations(
       const { PrismaInstrumentation } = require("@prisma/instrumentation");
       // Note: This would need to be registered with the SDK
     } catch (e) {
-      Logger.debug("Prisma instrumentation not available:", e);
+      NetraLogger.debug("Prisma instrumentation not available:", e);
     }
   }
 
@@ -704,10 +710,10 @@ function initOpenTelemetryInstrumentations(
     typeORMInstrumentor
       .instrument()
       .then(() => {
-        Logger.debug("TypeORM instrumentation successfully initialized");
+        NetraLogger.debug("TypeORM instrumentation successfully initialized");
       })
       .catch((e) => {
-        Logger.debug("TypeORM instrumentation error:", e);
+        NetraLogger.debug("TypeORM instrumentation error:", e);
       });
   }
 
@@ -721,10 +727,10 @@ function initOpenTelemetryInstrumentations(
       const { registerInstrumentations } = require("@opentelemetry/instrumentation");
       registerInstrumentations({ instrumentations: [new ExpressInstrumentation()] });
       if (config.debugMode) {
-        Logger.debug("Express instrumentation enabled");
+        NetraLogger.debug("Express instrumentation enabled");
       }
     } catch (e) {
-      Logger.debug("Express instrumentation not available:", e);
+      NetraLogger.debug("Express instrumentation not available:", e);
     }
   }
 }
@@ -796,7 +802,7 @@ function addCustomSpanProcessors(
     }
 
     if (!provider) {
-      Logger.debug(
+      NetraLogger.debug(
         "Could not access TracerProvider for adding span processors. " +
           "Session context will still be propagated via baggage.",
       );
@@ -879,11 +885,11 @@ function addCustomSpanProcessors(
     const rootSpanProcessor = new RootSpanProcessor();
     provider.addSpanProcessor(rootSpanProcessor);
 
-    Logger.debug("Custom span processors registered successfully");
+    NetraLogger.debug("Custom span processors registered successfully");
 
     return provider;
   } catch (e) {
-    Logger.debug("Failed to add custom span processors:", e);
+    NetraLogger.debug("Failed to add custom span processors:", e);
     return null;
   }
 }
@@ -897,90 +903,90 @@ export async function uninstrumentAll(): Promise<void> {
   try {
     if (openAIInstrumentor.isInstrumented()) {
       await openAIInstrumentor.uninstrument();
-      Logger.debug("Custom OpenAI instrumentation disabled");
+      NetraLogger.debug("Custom OpenAI instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument OpenAI:", e);
+    NetraLogger.debug("Failed to uninstrument OpenAI:", e);
   }
 
   // Uninstrument custom MistralAI instrumentation
   try {
     if (mistralAIInstrumentor.isInstrumented()) {
       mistralAIInstrumentor.uninstrument();
-      Logger.debug("Custom MistralAI instrumentation disabled");
+      NetraLogger.debug("Custom MistralAI instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument MistralAI:", e);
+    NetraLogger.debug("Failed to uninstrument MistralAI:", e);
   }
 
   // Uninstrument custom Groq instrumentation
   try {
     if (groqInstrumentor.isInstrumented()) {
       groqInstrumentor.uninstrument();
-      Logger.debug("Custom Groq instrumentation disabled");
+      NetraLogger.debug("Custom Groq instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument Groq:", e);
+    NetraLogger.debug("Failed to uninstrument Groq:", e);
   }
 
   // Uninstrument custom Anthropic instrumentation
   try {
     if (anthropicInstrumentor.isInstrumented()) {
       anthropicInstrumentor.uninstrument();
-      Logger.debug("Custom Anthropic instrumentation disabled");
+      NetraLogger.debug("Custom Anthropic instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument Anthropic:", e);
+    NetraLogger.debug("Failed to uninstrument Anthropic:", e);
   }
 
   // Uninstrument custom Google GenAI instrumentation
   try {
     if (googleGenAIInstrumentor.isInstrumented()) {
       googleGenAIInstrumentor.uninstrument();
-      Logger.debug("Custom Google GenAI instrumentation disabled");
+      NetraLogger.debug("Custom Google GenAI instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument Google GenAI:", e);
+    NetraLogger.debug("Failed to uninstrument Google GenAI:", e);
   }
 
   // Uninstrument custom Google Generative AI instrumentation
   try {
     if (googleGenerativeAIInstrumentor.isInstrumented()) {
       googleGenerativeAIInstrumentor.uninstrument();
-      Logger.debug("Custom Google Generative AI instrumentation disabled");
+      NetraLogger.debug("Custom Google Generative AI instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument Google Generative AI:", e);
+    NetraLogger.debug("Failed to uninstrument Google Generative AI:", e);
   }
 
   // Uninstrument custom Langgraph instrumentation
   try {
     if (langgraphInstrumentor.isInstrumented()) {
       await langgraphInstrumentor.uninstrument();
-      Logger.debug("Custom Langgraph instrumentation disabled");
+      NetraLogger.debug("Custom Langgraph instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument Langgraph:", e);
+    NetraLogger.debug("Failed to uninstrument Langgraph:", e);
   }
 
   // Uninstrument custom TypeORM instrumentation
   try {
     if (typeORMInstrumentor.isInstrumented()) {
       typeORMInstrumentor.uninstrument();
-      Logger.debug("Custom TypeORM instrumentation disabled");
+      NetraLogger.debug("Custom TypeORM instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument TypeORM:", e);
+    NetraLogger.debug("Failed to uninstrument TypeORM:", e);
   }
 
   // Uninstrument custom OpenAI Agents SDK instrumentation
   try {
     if (openaiAgentsInstrumentor.isInstrumented()) {
       openaiAgentsInstrumentor.uninstrument();
-      Logger.debug("Custom OpenAI Agents SDK instrumentation disabled");
+      NetraLogger.debug("Custom OpenAI Agents SDK instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument OpenAI Agents SDK:", e);
+    NetraLogger.debug("Failed to uninstrument OpenAI Agents SDK:", e);
   }
 
   // Uninstrument HTTP instrumentation
@@ -988,10 +994,10 @@ export async function uninstrumentAll(): Promise<void> {
     if (_httpInstrumentation) {
       _httpInstrumentation.disable();
       _httpInstrumentation = null;
-      Logger.debug("HTTP instrumentation disabled");
+      NetraLogger.debug("HTTP instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument HTTP:", e);
+    NetraLogger.debug("Failed to uninstrument HTTP:", e);
   }
 
   // Uninstrument undici/fetch instrumentation
@@ -999,9 +1005,9 @@ export async function uninstrumentAll(): Promise<void> {
     if (_undiciInstrumentation) {
       _undiciInstrumentation.disable();
       _undiciInstrumentation = null;
-      Logger.debug("Undici/fetch instrumentation disabled");
+      NetraLogger.debug("Undici/fetch instrumentation disabled");
     }
   } catch (e) {
-    Logger.debug("Failed to uninstrument undici:", e);
+    NetraLogger.debug("Failed to uninstrument undici:", e);
   }
 }

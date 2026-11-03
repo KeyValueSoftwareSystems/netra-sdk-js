@@ -4,7 +4,7 @@
  */
 
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { DashboardHttpClient } from "./client";
 import {
   ChartType,
@@ -89,7 +89,7 @@ async getSessionStats(
     sortOrder?: SortOrder,
   ): Promise<SessionStatsResult | null> {
     if (!startTime || !endTime) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: start_time and end_time are required to fetch session stats",
       );
       return null;
@@ -136,7 +136,7 @@ async getSessionStats(
     sortOrder?: SortOrder,
   ): AsyncGenerator<SessionStatsData, void, unknown> {
     if (!startTime || !endTime) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: start_time and end_time are required to iterate session stats",
       );
       return;
@@ -173,12 +173,12 @@ async getSessionStats(
 
   async getSessionSummary(filter: SessionFilterConfig): Promise<any | null> {
     if (!this.isSessionFilterConfig(filter)) {
-      Logger.error("netra.dashboard: filter must be a SessionFilterConfig");
+      NetraLogger.notice("error", "netra.dashboard: filter must be a SessionFilterConfig");
       return null;
     }
 
     if (!filter.startTime || !filter.endTime) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: start_time and end_time are required to fetch session summary",
       );
       return null;
@@ -199,7 +199,7 @@ async getSessionStats(
 
   async getSessionDetails(sessionId: string): Promise<SessionDetailsResponse | null> {
     if (!sessionId) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: session_id is required to fetch session details",
       );
       return null;

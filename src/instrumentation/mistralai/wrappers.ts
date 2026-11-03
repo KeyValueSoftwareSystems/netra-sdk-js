@@ -9,7 +9,7 @@ import {
   Tracer,
   context,
 } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { defineHidden, isPromise } from "../utils";
 import {
   modelAsDict,
@@ -71,7 +71,7 @@ function mistralWrapper(
                 span.end();
                 return value;
               } catch (error) {
-                Logger.error("netra.instrumentation.mistralai:", error);
+                NetraLogger.error("netra.instrumentation.mistralai:", error);
                 span.setStatus({
                   code: SpanStatusCode.ERROR,
                   message:
@@ -94,7 +94,7 @@ function mistralWrapper(
           span.end();
           return response;
         } catch (error) {
-          Logger.error("netra.instrumentation.mistralai:", error);
+          NetraLogger.error("netra.instrumentation.mistralai:", error);
           span.setStatus({
             code: SpanStatusCode.ERROR,
             message: error instanceof Error ? error.message : String(error),
@@ -156,7 +156,7 @@ function mistralStreamWrapper(
             }
             return new StreamingWrapper(span, stream, startTime, kwargs);
           } catch (error) {
-            Logger.error("netra.instrumentation.mistralai:", error);
+            NetraLogger.error("netra.instrumentation.mistralai:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),
@@ -176,7 +176,7 @@ function mistralStreamWrapper(
       }
       return new StreamingWrapper(span, response, startTime, kwargs);
     } catch (error) {
-      Logger.error("netra.instrumentation.mistralai:", error);
+      NetraLogger.error("netra.instrumentation.mistralai:", error);
       span.setStatus({
         code: SpanStatusCode.ERROR,
         message: error instanceof Error ? error.message : String(error),

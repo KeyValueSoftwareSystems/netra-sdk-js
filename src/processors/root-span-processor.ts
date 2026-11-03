@@ -1,6 +1,6 @@
 import { Context, Span, trace } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 /**
  * Tracks the root span for each trace keyed by traceId.
@@ -35,22 +35,22 @@ export class RootSpanProcessor implements SpanProcessor {
     try {
       const active = trace.getActiveSpan();
       if (!active) {
-        Logger.warn(`setAttributeOnRootSpan: no active span`);
+        NetraLogger.warn(`setAttributeOnRootSpan: no active span`);
         return;
       }
       const spanCtx = active.spanContext();
       if (!trace.isSpanContextValid(spanCtx)) {
-        Logger.warn(`setAttributeOnRootSpan: active span context is invalid`);
+        NetraLogger.warn(`setAttributeOnRootSpan: active span context is invalid`);
         return;
       }
       const root = RootSpanProcessor._rootSpans.get(spanCtx.traceId);
       if (!root) {
-        Logger.warn(`setAttributeOnRootSpan: no root span found for current trace`);
+        NetraLogger.warn(`setAttributeOnRootSpan: no root span found for current trace`);
         return;
       }
       root.setAttribute(key, value);
     } catch (e) {
-      Logger.error(`setAttributeOnRootSpan: failed to set '${key}':`, e);
+      NetraLogger.error(`setAttributeOnRootSpan: failed to set '${key}':`, e);
     }
   }
 
@@ -64,7 +64,7 @@ export class RootSpanProcessor implements SpanProcessor {
         RootSpanProcessor._rootSpans.set(ctx.traceId, span);
       }
     } catch (e) {
-      Logger.warn("RootSpanProcessor.onStart: unexpected error:", e);
+      NetraLogger.warn("RootSpanProcessor.onStart: unexpected error:", e);
     }
   }
 
@@ -77,7 +77,7 @@ export class RootSpanProcessor implements SpanProcessor {
         RootSpanProcessor._rootSpans.delete(ctx.traceId);
       }
     } catch (e) {
-      Logger.warn("RootSpanProcessor.onEnd: unexpected error:", e);
+      NetraLogger.warn("RootSpanProcessor.onEnd: unexpected error:", e);
     }
   }
 

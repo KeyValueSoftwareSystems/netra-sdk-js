@@ -9,7 +9,7 @@
 import { Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 // Allowed instrumentation names that we recognize and tag
 const ALLOWED_INSTRUMENTATION_NAMES = new Set([
@@ -69,14 +69,14 @@ export class InstrumentationSpanProcessor implements SpanProcessor {
                 return base;
               }
             } catch {
-              Logger.debug("InstrumentationSpanProcessor: Error extracting base name:", name);
+              NetraLogger.debug("InstrumentationSpanProcessor: Error extracting base name:", name);
             }
           }
           return name;
         }
       }
     } catch {
-      Logger.debug("InstrumentationSpanProcessor: Error detecting instrumentation name");
+      NetraLogger.debug("InstrumentationSpanProcessor: Error detecting instrumentation name");
     }
     return null;
   }
@@ -88,7 +88,7 @@ export class InstrumentationSpanProcessor implements SpanProcessor {
         span.setAttribute(`${Config.LIBRARY_NAME}.instrumentation.name`, name);
       }
     } catch (e) {
-      Logger.error(
+      NetraLogger.error(
         "InstrumentationSpanProcessor: Error on span start:",
         e,
       );

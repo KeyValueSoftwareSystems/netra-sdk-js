@@ -1,7 +1,7 @@
 import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
 import shimmer from "shimmer";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { SPAN_NAMES, InstrumentorOptions } from "./types";
 import { __version__ } from "./version";
 import {
@@ -34,7 +34,7 @@ async function resolveAnthropic(): Promise<any[]> {
       anthropicModule.Anthropic || anthropicModule.default || anthropicModule,
     );
   } catch {
-    Logger.warn("Failed to resolve Anthropic ESM module");
+    NetraLogger.warn("Failed to resolve Anthropic ESM module");
   }
 
   try {
@@ -45,7 +45,7 @@ async function resolveAnthropic(): Promise<any[]> {
       anthropicClasses.push(cjsClass);
     }
   } catch {
-    Logger.warn("Failed to resolve Anthropic CJS module");
+    NetraLogger.warn("Failed to resolve Anthropic CJS module");
   }
 
   return anthropicClasses;
@@ -65,7 +65,7 @@ export class NetraAnthropicInstrumentor {
     options: InstrumentorOptions = {},
   ): Promise<NetraAnthropicInstrumentor> {
     if (isInstrumented) {
-      Logger.warn("Anthropic is already instrumented");
+      NetraLogger.warn("Anthropic is already instrumented");
       return this;
     }
 
@@ -83,7 +83,7 @@ export class NetraAnthropicInstrumentor {
         this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
       }
     } catch (error) {
-      Logger.error(`Failed to initialize tracer: ${error}`);
+      NetraLogger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -99,7 +99,7 @@ export class NetraAnthropicInstrumentor {
 
   uninstrument(): void {
     if (!isInstrumented) {
-      Logger.warn("Anthropic is not instrumented");
+      NetraLogger.warn("Anthropic is not instrumented");
       return;
     }
 
@@ -119,13 +119,13 @@ export class NetraAnthropicInstrumentor {
 
   private _instrumentMessages(AnthropicSDK: any): void {
     if (!this.tracer) {
-      Logger.warn("Anthropic instrumentation: No tracer available");
+      NetraLogger.warn("Anthropic instrumentation: No tracer available");
       return;
     }
     try {
       const MessagesClass = AnthropicSDK.Messages;
       if (!MessagesClass?.prototype) {
-        Logger.error(
+        NetraLogger.error(
           "Anthropic instrumentation: Could not find Messages class",
         );
         return;
@@ -149,19 +149,19 @@ export class NetraAnthropicInstrumentor {
         );
       }
     } catch (error) {
-      Logger.error(`Failed to instrument messages: ${error}`);
+      NetraLogger.error(`Failed to instrument messages: ${error}`);
     }
   }
 
   private _instrumentBetaMessages(AnthropicSDK: any): void {
     if (!this.tracer) {
-      Logger.warn("Anthropic instrumentation: No tracer available");
+      NetraLogger.warn("Anthropic instrumentation: No tracer available");
       return;
     }
     try {
       const BetaMessagesClass = AnthropicSDK.Beta?.Messages;
       if (!BetaMessagesClass?.prototype) {
-        Logger.error(
+        NetraLogger.error(
           "Anthropic instrumentation: Could not find Beta Messages class",
         );
         return;
@@ -193,19 +193,19 @@ export class NetraAnthropicInstrumentor {
         );
       }
     } catch (error) {
-      Logger.error(`Failed to instrument beta: ${error}`);
+      NetraLogger.error(`Failed to instrument beta: ${error}`);
     }
   }
 
   private _instrumentBatchMessages(AnthropicSDK: any): void {
     if (!this.tracer) {
-      Logger.warn("Anthropic instrumentation: No tracer available");
+      NetraLogger.warn("Anthropic instrumentation: No tracer available");
       return;
     }
     try {
       const BatchMessageClass = AnthropicSDK.Messages?.Batches;
       if (!BatchMessageClass?.prototype) {
-        Logger.error("Anthropic instrumentation: Could not find Batches class");
+        NetraLogger.error("Anthropic instrumentation: Could not find Batches class");
         return;
       }
 
@@ -217,7 +217,7 @@ export class NetraAnthropicInstrumentor {
         );
       }
     } catch (error) {
-      Logger.error(`Failed to instrument batches: ${error}`);
+      NetraLogger.error(`Failed to instrument batches: ${error}`);
     }
   }
 
@@ -229,7 +229,7 @@ export class NetraAnthropicInstrumentor {
       if (typeof proto.create === "function") shimmer.unwrap(proto, "create");
       if (typeof proto.stream === "function") shimmer.unwrap(proto, "stream");
     } catch (error) {
-      Logger.error(`Failed to uninstrument messages: ${error}`);
+      NetraLogger.error(`Failed to uninstrument messages: ${error}`);
     }
   }
 
@@ -243,7 +243,7 @@ export class NetraAnthropicInstrumentor {
       if (typeof proto.toolRunner === "function")
         shimmer.unwrap(proto, "toolRunner");
     } catch (error) {
-      Logger.error(`Failed to uninstrument beta: ${error}`);
+      NetraLogger.error(`Failed to uninstrument beta: ${error}`);
     }
   }
 
@@ -254,7 +254,7 @@ export class NetraAnthropicInstrumentor {
 
       if (typeof proto.create === "function") shimmer.unwrap(proto, "create");
     } catch (error) {
-      Logger.error(`Failed to uninstrument batches: ${error}`);
+      NetraLogger.error(`Failed to uninstrument batches: ${error}`);
     }
   }
 }

@@ -4,7 +4,7 @@
  */
 
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { SpanWrapper } from "../../span-wrapper";
 import { EvaluationHttpClient } from "./client";
 import {
@@ -53,7 +53,7 @@ export class Evaluation {
     tags?: string[],
   ): Promise<CreateDatasetResponse | null> {
     if (!name) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Failed to create dataset: dataset name is required",
       );
       return null;
@@ -90,7 +90,7 @@ export class Evaluation {
     item: DatasetEntry,
   ): Promise<AddDatasetItemResponse | null> {
     if (!item.input) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Skipping dataset item without required 'input'",
       );
       return null;
@@ -125,7 +125,7 @@ export class Evaluation {
    */
   async getDataset(datasetId: string): Promise<GetDatasetItemsResponse | null> {
     if (!datasetId) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Failed to get dataset: dataset id is required",
       );
       return null;
@@ -142,10 +142,21 @@ export class Evaluation {
       const itemInput = item?.input;
       const itemDatasetId = item?.datasetId;
 
-      if (itemId == null || itemDatasetId == null || itemInput == null) {
-        Logger.warn(
-          "netra.evaluation: Skipping dataset item with missing required fields:",
-          item,
+      // Notices name the item, never its payload: input often holds prompts or user data.
+      const itemLabel = itemId ?? "(no id)";
+      const missingFields = (
+        [
+          ["id", itemId],
+          ["datasetId", itemDatasetId],
+          ["input", itemInput],
+        ] as const
+      )
+        .filter(([, value]) => value == null)
+        .map(([fieldName]) => fieldName);
+      if (missingFields.length > 0) {
+        NetraLogger.notice(
+          "warn",
+          `netra.evaluation: Skipping dataset item ${itemLabel}: missing required field(s): ${missingFields.join(", ")}`,
         );
         continue;
       }
@@ -158,7 +169,11 @@ export class Evaluation {
           expectedOutput: item?.expectedOutput ?? "",
         });
       } catch (exc) {
-        Logger.error("netra.evaluation: Failed to parse dataset item:", exc);
+        NetraLogger.notice(
+          "error",
+          `netra.evaluation: Skipping dataset item ${itemLabel}: failed to parse:`,
+          exc,
+        );
       }
     }
 
@@ -178,7 +193,7 @@ export class Evaluation {
     evaluatorsConfig?: EvaluatorConfig[],
   ): Promise<string | null> {
     if (!name) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Failed to create run: run name is required",
       );
       return null;
@@ -207,7 +222,7 @@ export class Evaluation {
    */
   async getRunResults(runId: string): Promise<any> {
     if (!runId) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Failed to get run: run_id is required",
       );
       return null;
@@ -267,10 +282,10 @@ export class Evaluation {
       evaluatorsConfig,
     );
     if (!runId) {
-      Logger.error("netra.evaluation: Failed to create run");
+      NetraLogger.notice("error", "netra.evaluation: Failed to create run");
       return null;
     }
-    Logger.info("netra.evaluation: Initiated test run");
+    NetraLogger.info("netra.evaluation: Initiated test run");
 
     const semaphore = new Semaphore(Math.max(1, maxConcurrency));
     const results: Array<Record<string, any>> = [];
@@ -292,7 +307,7 @@ export class Evaluation {
         );
 
         completedItems += 1;
-        Logger.info(
+        NetraLogger.info(
           `netra.evaluation: ${completedItems}/${totalItems} items processed (status=${itemResult.status})`,
         );
       } finally {
