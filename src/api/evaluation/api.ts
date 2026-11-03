@@ -142,10 +142,21 @@ export class Evaluation {
       const itemInput = item?.input;
       const itemDatasetId = item?.datasetId;
 
-      if (itemId == null || itemDatasetId == null || itemInput == null) {
-        NetraLogger.warn(
-          "netra.evaluation: Skipping dataset item with missing required fields:",
-          item,
+      // Notices name the item, never its payload: input often holds prompts or user data.
+      const itemLabel = itemId ?? "(no id)";
+      const missingFields = (
+        [
+          ["id", itemId],
+          ["datasetId", itemDatasetId],
+          ["input", itemInput],
+        ] as const
+      )
+        .filter(([, value]) => value == null)
+        .map(([fieldName]) => fieldName);
+      if (missingFields.length > 0) {
+        NetraLogger.notice(
+          "warn",
+          `netra.evaluation: Skipping dataset item ${itemLabel}: missing required field(s): ${missingFields.join(", ")}`,
         );
         continue;
       }
@@ -158,7 +169,11 @@ export class Evaluation {
           expectedOutput: item?.expectedOutput ?? "",
         });
       } catch (exc) {
-        NetraLogger.error("netra.evaluation: Failed to parse dataset item:", exc);
+        NetraLogger.notice(
+          "error",
+          `netra.evaluation: Skipping dataset item ${itemLabel}: failed to parse:`,
+          exc,
+        );
       }
     }
 
