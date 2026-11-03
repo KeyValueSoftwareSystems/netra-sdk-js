@@ -5,6 +5,9 @@
 import { NetraLogger } from "./netraLogger";
 import { SDK_VERSION } from "./version";
 
+// The only header the Netra backend's API-key guard reads. Lowercase, for case-insensitive matching.
+const NETRA_API_KEY_HEADER = "x-api-key";
+
 export interface NetraConfig {
   appName?: string;
   headers?: string | Record<string, string>;
@@ -252,17 +255,29 @@ export class Config {
     return result;
   }
 
+  /**
+   * Warn when a Netra endpoint has no API key. The key counts as present when
+   * it is set via NETRA_API_KEY or already passed as an `x-api-key` header
+   * (through `headers` or NETRA_HEADERS); header names match case-insensitively.
+   */
   private _validateApiKey(): void {
     if (
-      this.otlpEndpoint &&
-      this.otlpEndpoint.toLowerCase().includes("getnetra") &&
-      !this.apiKey
+      !this.otlpEndpoint ||
+      !this.otlpEndpoint.toLowerCase().includes("getnetra") ||
+      this.apiKey
     ) {
-      NetraLogger.notice("error",
-        "NETRA_API_KEY is not set, so Netra will reject the traces this app sends. " +
-          "Fix: create an API key in the Netra dashboard and set NETRA_API_KEY to it.",
-      );
+      return;
     }
+    const hasApiKeyHeader = Object.keys(this.headers).some(
+      (name) => name.toLowerCase() === NETRA_API_KEY_HEADER,
+    );
+    if (hasApiKeyHeader) {
+      return;
+    }
+    NetraLogger.notice("error",
+      "NETRA_API_KEY is not set, so Netra will reject the traces this app sends. " +
+        "Fix: create an API key in the Netra dashboard and set NETRA_API_KEY to it.",
+    );
   }
 
   private _setupAuthentication(): void {
