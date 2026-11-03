@@ -1,4 +1,4 @@
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 export interface ResponseCallbacks<TChunk = unknown> {
   withContext<T>(fn: () => T): T;
@@ -71,7 +71,7 @@ export function wrapAsyncIterable<T>(
       try {
         callbacks.finalize(status);
       } catch (e) {
-        Logger.error("netra: finalize callback error", e);
+        NetraLogger.error("netra: finalize callback error", e);
       }
     };
 
@@ -83,7 +83,7 @@ export function wrapAsyncIterable<T>(
             try {
               callbacks.onChunk?.(result.value);
             } catch (e) {
-              Logger.error("netra: onChunk callback error", e);
+              NetraLogger.error("netra: onChunk callback error", e);
             }
           } else {
             safeFinalize("ok");
@@ -93,7 +93,7 @@ export function wrapAsyncIterable<T>(
           try {
             callbacks.onError(e);
           } catch {
-            Logger.error("netra: onError callback error", e);
+            NetraLogger.error("netra: onError callback error", e);
           }
           safeFinalize("error");
           throw e;
@@ -110,7 +110,7 @@ export function wrapAsyncIterable<T>(
           try {
             callbacks.onError(e);
           } catch {
-            Logger.error("netra: onError callback error", e);
+            NetraLogger.error("netra: onError callback error", e);
           }
           safeFinalize("error");
           throw e;
@@ -128,7 +128,7 @@ export function wrapAsyncIterable<T>(
           try {
             callbacks.onError(err);
           } catch {
-            Logger.error("netra: onError callback error", err);
+            NetraLogger.error("netra: onError callback error", err);
           }
           safeFinalize("error");
           throw err;
@@ -188,21 +188,21 @@ export function wrapPromise<T>(
     try {
       callbacks.finalize(status);
     } catch (e) {
-      Logger.error("netra: finalize callback error", e);
+      NetraLogger.error("netra: finalize callback error", e);
     }
   }
   function safeOnSuccess(value: unknown) {
     try {
       callbacks.onSuccess?.(value);
     } catch (e) {
-      Logger.error("netra: onSuccess callback error", e);
+      NetraLogger.error("netra: onSuccess callback error", e);
     }
   }
   function safeOnError(error: unknown) {
     try {
       callbacks.onError(error);
     } catch {
-      Logger.error("netra: onError callback error", error);
+      NetraLogger.error("netra: onError callback error", error);
     }
   }
 
@@ -253,7 +253,7 @@ export function wrapPromise<T>(
           },
         );
     } catch (e) {
-      Logger.debug("netra: could not read a copy of the response body", e);
+      NetraLogger.debug("netra: could not read a copy of the response body", e);
     }
   }
 
@@ -325,12 +325,12 @@ export function wrapResponse<T>(
   try {
     callbacks.onSuccess?.(response);
   } catch (e) {
-    Logger.error("netra: onSuccess callback error", e);
+    NetraLogger.error("netra: onSuccess callback error", e);
   }
   try {
     callbacks.finalize("ok");
   } catch (e) {
-    Logger.error("netra: finalize callback error", e);
+    NetraLogger.error("netra: finalize callback error", e);
   }
   return response;
 }

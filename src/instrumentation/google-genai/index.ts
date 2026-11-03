@@ -9,7 +9,7 @@
 
 import { Tracer } from "@opentelemetry/api";
 import shimmer from "shimmer";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { BaseInstrumentor } from "../base-instrumentor";
 import { __version__ } from "./version";
 import {
@@ -42,7 +42,7 @@ export class NetraGoogleGenAIInstrumentor extends BaseInstrumentor<GoogleGenAICl
   protected applyPatches(classes: GoogleGenAIClasses, tracer: Tracer): boolean {
     const modelsProto = classes.Models?.prototype;
     if (!modelsProto) {
-      Logger.error("Google GenAI: Models.prototype not found");
+      NetraLogger.error("Google GenAI: Models.prototype not found");
       return false;
     }
 

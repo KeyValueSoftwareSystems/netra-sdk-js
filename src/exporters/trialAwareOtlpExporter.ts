@@ -3,7 +3,7 @@ import * as https from "https";
 import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
 import { ExportResult, ExportResultCode } from "@opentelemetry/core";
 import { ProtobufTraceSerializer } from "@opentelemetry/otlp-transformer";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import { isTrialBlocked, setTrialBlocked } from "./utils";
 
 const HTTP_STATUS_PAYLOAD_TOO_LARGE = 413;
@@ -116,8 +116,9 @@ export class TrialAwareOTLPExporter implements SpanExporter {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
           resultCallback({ code: ExportResultCode.SUCCESS });
         } else {
-          // Debug mode only (Logger.warn). The batch is not retried, so it is gone.
-          Logger.warn(
+          // The batch is not retried, so it is gone: always shown.
+          NetraLogger.notice(
+            "warn",
             formatExportFailure(
               res.statusCode,
               res.statusMessage,
@@ -137,7 +138,8 @@ export class TrialAwareOTLPExporter implements SpanExporter {
 
     req.on("error", (err) => {
       // No response (connection refused, DNS, TLS, socket reset): nothing else logs this.
-      Logger.warn(
+      NetraLogger.notice(
+        "warn",
         `Span export failed: ${err.message}. ` +
           `Dropped a batch of ${spans.length} spans (${requestBytes} bytes).`,
       );

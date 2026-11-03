@@ -3,7 +3,7 @@
  */
 
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { NetraHttpClient } from "../http-client";
 
 export class PromptsHttpClient extends NetraHttpClient {
@@ -16,7 +16,7 @@ export class PromptsHttpClient extends NetraHttpClient {
    */
   async getPromptVersion(name: string, label: string): Promise<any | null> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.prompts: Prompts client is not initialized; cannot fetch prompt",
       );
       return null;
@@ -33,7 +33,7 @@ export class PromptsHttpClient extends NetraHttpClient {
       if (!response.ok) {
         const errorMessage = response.data?.error?.message ?? "Unknown error";
 
-        Logger.error(`netra.prompts: Failed to fetch prompt: ${errorMessage}`);
+        NetraLogger.notice("error", `netra.prompts: Failed to fetch prompt: ${errorMessage}`);
 
         return null;
       }
@@ -42,7 +42,7 @@ export class PromptsHttpClient extends NetraHttpClient {
     } catch (err: any) {
       const message = err?.response?.data?.error?.message ?? "";
 
-      Logger.error("netra.prompts: Failed to fetch prompt:", message);
+      NetraLogger.notice("error", "netra.prompts: Failed to fetch prompt:", message);
 
       return null;
     }

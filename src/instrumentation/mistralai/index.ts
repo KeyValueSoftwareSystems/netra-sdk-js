@@ -7,7 +7,7 @@
 
 import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { __version__ } from "./version";
 import {
   agentsStreamWrapper,
@@ -52,7 +52,7 @@ async function resolveMistralAsync(): Promise<any[]> {
       mistralModule.Mistral || mistralModule.default || mistralModule
     );
   } catch {
-    Logger.warn("Failed to resolve MistralAI ESM module");
+    NetraLogger.warn("Failed to resolve MistralAI ESM module");
   }
 
   try {
@@ -63,7 +63,7 @@ async function resolveMistralAsync(): Promise<any[]> {
       mistralClasses.push(cjsClass);
     }
   } catch {
-    Logger.warn("Failed to resolve MistralAI CJS module");
+    NetraLogger.warn("Failed to resolve MistralAI CJS module");
   }
 
   return mistralClasses;
@@ -104,7 +104,7 @@ export class NetraMistralAIInstrumentor {
     options: InstrumentorOptions = {}
   ): Promise<NetraMistralAIInstrumentor> {
     if (isInstrumented) {
-      Logger.warn("MistralAI is already instrumented");
+      NetraLogger.warn("MistralAI is already instrumented");
       return this;
     }
 
@@ -124,7 +124,7 @@ export class NetraMistralAIInstrumentor {
         this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
       }
     } catch (error) {
-      Logger.error(`Failed to initialize tracer: ${error}`);
+      NetraLogger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -140,7 +140,7 @@ export class NetraMistralAIInstrumentor {
     });
 
     if (!didPatch) {
-      Logger.warn(
+      NetraLogger.warn(
         "MistralAI instrumentation initialized but no methods were patched. Is '@mistralai/mistralai' installed and compatible?"
       );
       return this;
@@ -156,14 +156,14 @@ export class NetraMistralAIInstrumentor {
    */
   instrument(options: InstrumentorOptions = {}): NetraMistralAIInstrumentor {
     if (isInstrumented) {
-      Logger.warn("MistralAI is already instrumented");
+      NetraLogger.warn("MistralAI is already instrumented");
       return this;
     }
 
     const classes = resolveMistral();
     if (classes.length === 0) {
       this.instrumentAsync(options).catch((e) => {
-        Logger.error("Failed to instrument MistralAI:", e);
+        NetraLogger.error("Failed to instrument MistralAI:", e);
       });
       return this;
     }
@@ -179,7 +179,7 @@ export class NetraMistralAIInstrumentor {
         this.tracer = trace.getTracer(INSTRUMENTATION_NAME, __version__);
       }
     } catch (error) {
-      Logger.error(`Failed to initialize tracer: ${error}`);
+      NetraLogger.error(`Failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -195,7 +195,7 @@ export class NetraMistralAIInstrumentor {
     });
 
     if (!didPatch) {
-      Logger.warn(
+      NetraLogger.warn(
         "MistralAI instrumentation initialized but no methods were patched. Is '@mistralai/mistralai' installed and compatible?"
       );
       return this;
@@ -210,7 +210,7 @@ export class NetraMistralAIInstrumentor {
    */
   uninstrument(): void {
     if (!isInstrumented) {
-      Logger.warn("MistralAI is not instrumented");
+      NetraLogger.warn("MistralAI is not instrumented");
       return;
     }
 
@@ -331,7 +331,7 @@ export class NetraMistralAIInstrumentor {
 
       return didPatch;
     } catch (error) {
-      Logger.error("Failed to instrument MistralAI chat:", error);
+      NetraLogger.error("Failed to instrument MistralAI chat:", error);
       return false;
     }
   }
@@ -368,7 +368,7 @@ export class NetraMistralAIInstrumentor {
 
       return didPatch;
     } catch (error) {
-      Logger.error("Failed to instrument MistralAI embeddings:", error);
+      NetraLogger.error("Failed to instrument MistralAI embeddings:", error);
       return false;
     }
   }
@@ -428,7 +428,7 @@ export class NetraMistralAIInstrumentor {
 
       return didPatch;
     } catch (error) {
-      Logger.error("Failed to instrument MistralAI FIM:", error);
+      NetraLogger.error("Failed to instrument MistralAI FIM:", error);
       return false;
     }
   }
@@ -488,7 +488,7 @@ export class NetraMistralAIInstrumentor {
 
       return didPatch;
     } catch (error) {
-      Logger.error("Failed to instrument MistralAI agents:", error);
+      NetraLogger.error("Failed to instrument MistralAI agents:", error);
       return false;
     }
   }
@@ -507,7 +507,7 @@ export class NetraMistralAIInstrumentor {
         ChatClass.prototype.stream = originalStream;
       }
     } catch (error) {
-      Logger.error(`Failed to uninstrument MistralAI chat: ${error}`);
+      NetraLogger.error(`Failed to uninstrument MistralAI chat: ${error}`);
     }
   }
 
@@ -520,7 +520,7 @@ export class NetraMistralAIInstrumentor {
         EmbeddingsClass.prototype.create = originalCreate;
       }
     } catch (error) {
-      Logger.error(`Failed to uninstrument MistralAI embeddings: ${error}`);
+      NetraLogger.error(`Failed to uninstrument MistralAI embeddings: ${error}`);
     }
   }
 
@@ -538,7 +538,7 @@ export class NetraMistralAIInstrumentor {
         FimClass.prototype.stream = originalStream;
       }
     } catch (error) {
-      Logger.error(`Failed to uninstrument MistralAI FIM: ${error}`);
+      NetraLogger.error(`Failed to uninstrument MistralAI FIM: ${error}`);
     }
   }
 
@@ -556,7 +556,7 @@ export class NetraMistralAIInstrumentor {
         AgentsClass.prototype.stream = originalStream;
       }
     } catch (error) {
-      Logger.error(`Failed to uninstrument MistralAI agents: ${error}`);
+      NetraLogger.error(`Failed to uninstrument MistralAI agents: ${error}`);
     }
   }
 }

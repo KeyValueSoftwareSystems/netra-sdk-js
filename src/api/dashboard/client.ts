@@ -3,7 +3,7 @@
  */
 
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { NetraHttpClient } from "../http-client";
 import {
   ChartType,
@@ -32,7 +32,7 @@ export class DashboardHttpClient extends NetraHttpClient {
     dimension?: Dimension,
   ): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: Dashboard client is not initialized; cannot execute query",
       );
       return null;
@@ -84,7 +84,7 @@ export class DashboardHttpClient extends NetraHttpClient {
 
     if (!response.ok) {
       const errorMessage = response.data?.error?.message ?? "Unknown error";
-      Logger.error(
+      NetraLogger.notice("error",
         `netra.dashboard: Failed to execute dashboard query: ${errorMessage}`,
       );
       return null;
@@ -118,7 +118,7 @@ export class DashboardHttpClient extends NetraHttpClient {
     sortOrder?: SortOrder,
   ): Promise<any | null> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: Dashboard client is not initialized; cannot get session stats",
       );
       return null;
@@ -165,7 +165,7 @@ export class DashboardHttpClient extends NetraHttpClient {
 
       if (!response.ok) {
         const errorMessage = response.data?.error?.message ?? "Unknown error";
-        Logger.error(
+        NetraLogger.notice("error",
           `netra.dashboard: Failed to execute dashboard query: ${errorMessage}`,
         );
         return null;
@@ -175,7 +175,7 @@ export class DashboardHttpClient extends NetraHttpClient {
     } catch (err: any) {
       const message = err?.response?.data?.error?.message ?? "";
 
-      Logger.error("netra.dashboard: Failed to fetch session stats:", message);
+      NetraLogger.notice("error", "netra.dashboard: Failed to fetch session stats:", message);
       return null;
     }
   }
@@ -198,7 +198,7 @@ export class DashboardHttpClient extends NetraHttpClient {
     filters?: SessionFilter[],
   ): Promise<any | null> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: Dashboard client is not initialized; cannot execute query",
       );
       return null;
@@ -227,7 +227,7 @@ export class DashboardHttpClient extends NetraHttpClient {
 
       if (!response.ok) {
         const errorMessage = response.data?.error?.message ?? "Unknown error";
-        Logger.error(
+        NetraLogger.notice("error",
           `netra.dashboard: Failed to execute dashboard query: ${errorMessage}`,
         );
         return null;
@@ -237,7 +237,7 @@ export class DashboardHttpClient extends NetraHttpClient {
     } catch (err: any) {
       const message = err?.response?.data?.error?.message ?? "";
 
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: Failed to fetch session summary:",
         message,
       );
@@ -256,7 +256,7 @@ export class DashboardHttpClient extends NetraHttpClient {
    */
   async getSessionDetails(sessionId: string): Promise<any | null> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: Dashboard client is not initialized; cannot get session details",
       );
       return null;
@@ -269,7 +269,7 @@ export class DashboardHttpClient extends NetraHttpClient {
 
       if (!response.ok) {
         const errorMessage = response.data?.error?.message ?? "Unknown error";
-        Logger.error(
+        NetraLogger.notice("error",
           `netra.dashboard: Failed to fetch session details: ${errorMessage}`,
         );
         return null;
@@ -279,7 +279,7 @@ export class DashboardHttpClient extends NetraHttpClient {
     } catch (err: any) {
       const message = err?.response?.data?.error?.message ?? "";
 
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.dashboard: Failed to fetch session details:",
         message,
       );

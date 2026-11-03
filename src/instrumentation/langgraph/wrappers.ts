@@ -17,7 +17,7 @@ import {
 
 import { createRequire } from "module";
 
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { wrapAsyncIterable } from "../../utils/response-handler";
 import {
   setResponseAttributes as setBaseResponseAttributes,
@@ -57,14 +57,14 @@ export async function loadLanggraphCallbackHandler(): Promise<boolean> {
   try {
     Base = (await import("@langchain/core/callbacks/base")).BaseCallbackHandler;
   } catch {
-    Logger.debug("@langchain/core: ESM import not available");
+    NetraLogger.debug("@langchain/core: ESM import not available");
   }
   if (!Base) {
     try {
       const req = createRequire(import.meta.url);
       Base = req("@langchain/core/callbacks/base").BaseCallbackHandler;
     } catch {
-      Logger.debug("@langchain/core: CJS require not available");
+      NetraLogger.debug("@langchain/core: CJS require not available");
     }
   }
   if (!Base) {
@@ -154,7 +154,7 @@ function createCallbackHandlerClass(
         metadata && typeof metadata === "object"
           ? Object.keys(metadata as Record<string, unknown>).join(",")
           : "n/a";
-      Logger.debug(
+      NetraLogger.debug(
         `NetraLanggraph handleChainStart: runId=${runId} parentRunId=${parentRunId} nodeName=${nodeName} nodeType=${nodeType} runName=${runNameValue || "n/a"} metadataKeys=${metadataKeys}`,
       );
 
@@ -172,7 +172,7 @@ function createCallbackHandlerClass(
         effectiveParentRunId !== runId
       ) {
         this.inferredParents.set(runId, effectiveParentRunId);
-        Logger.debug(`NetraLanggraph inferred parent: runId=${runId} parentRunId=${effectiveParentRunId}`);
+        NetraLogger.debug(`NetraLanggraph inferred parent: runId=${runId} parentRunId=${effectiveParentRunId}`);
       }
 
       const parentSpan = this.getParentSpan(effectiveParentRunId);
@@ -236,7 +236,7 @@ function createCallbackHandlerClass(
         parentRunId ?? this.inferParentRunId(parentRunId);
       {
         const llmId = llm.id?.[llm.id.length - 1] || "llm";
-        Logger.debug(`NetraLanggraph handleLLMStart: runId=${runId} parentRunId=${effectiveParentRunId} llmId=${llmId}`);
+        NetraLogger.debug(`NetraLanggraph handleLLMStart: runId=${runId} parentRunId=${effectiveParentRunId} llmId=${llmId}`);
       }
       this.addNodeAttributes(runId, {
         llmIds: llm.id,
@@ -326,7 +326,7 @@ function createCallbackHandlerClass(
         parentRunId ?? this.inferParentRunId(parentRunId);
       {
         const toolName = tool.id?.[tool.id.length - 1] || "tool";
-        Logger.debug(`NetraLanggraph handleToolStart: runId=${runId} parentRunId=${effectiveParentRunId} tool=${toolName}`);
+        NetraLogger.debug(`NetraLanggraph handleToolStart: runId=${runId} parentRunId=${effectiveParentRunId} tool=${toolName}`);
       }
       this.addNodeAttributes(runId, {
         input: parsedInput,
@@ -430,7 +430,7 @@ export class LanggraphWrapper {
     }
 
     const activeSpan = trace.getSpan(context.active());
-    Logger.debug(`LangGraph invoke start. Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
+    NetraLogger.debug(`LangGraph invoke start. Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`);
 
     // Start metadata spanning for the workflow
     // We use context.active() to parent to the current active span (e.g. request handler)
@@ -442,7 +442,7 @@ export class LanggraphWrapper {
       context.active()
     );
 
-    Logger.debug(`LangGraph span created. New TraceId: ${span.spanContext().traceId}, SpanId: ${span.spanContext().spanId}`);
+    NetraLogger.debug(`LangGraph span created. New TraceId: ${span.spanContext().traceId}, SpanId: ${span.spanContext().spanId}`);
 
     // Set the active flag to prevent nested instrumentation (e.g., when invoke calls stream internally)
     const ctxWithSpan = trace.setSpan(context.active(), span);
@@ -451,7 +451,7 @@ export class LanggraphWrapper {
     return context.with(ctxWithFlag, async () => {
       {
         const innerSpan = trace.getSpan(context.active());
-        Logger.debug(`Inside LangGraph context. Active TraceId: ${innerSpan?.spanContext().traceId}, SpanId: ${innerSpan?.spanContext().spanId}`);
+        NetraLogger.debug(`Inside LangGraph context. Active TraceId: ${innerSpan?.spanContext().traceId}, SpanId: ${innerSpan?.spanContext().spanId}`);
       }
       try {
         setGraphInputAttributes(span, input);
@@ -487,11 +487,11 @@ export class LanggraphWrapper {
   ): Promise<unknown> {
     // Skip if instrumentation is suppressed or we're already inside a LangGraph instrumented call
     if (shouldSuppressInstrumentation() || context.active().getValue(LANGGRAPH_INSTRUMENTATION_ACTIVE)) {
-      Logger.debug("LangGraph stream skipped (inside instrumented call)");
+      NetraLogger.debug("LangGraph stream skipped (inside instrumented call)");
       return await originalFunc.call(instance, input, config, ...rest);
     }
 
-    Logger.debug("LangGraph stream starting instrumentation");
+    NetraLogger.debug("LangGraph stream starting instrumentation");
 
     const span = this.tracer.startSpan(
       this.spanName,

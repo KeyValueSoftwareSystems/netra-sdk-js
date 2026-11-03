@@ -2,7 +2,7 @@
  * Configuration management for Netra SDK
  */
 
-import { Logger } from "./logger";
+import { NetraLogger } from "./netraLogger";
 import { SDK_VERSION } from "./version";
 
 export interface NetraConfig {
@@ -258,10 +258,10 @@ export class Config {
       this.otlpEndpoint.toLowerCase().includes("getnetra") &&
       !this.apiKey
     ) {
-      Logger.error(
-        "Error: Missing Netra API key, go to netra dashboard to create one",
+      NetraLogger.notice("error",
+        "NETRA_API_KEY is not set, so Netra will reject the traces this app sends. " +
+          "Fix: create an API key in the Netra dashboard and set NETRA_API_KEY to it.",
       );
-      Logger.error("Set the NETRA_API_KEY environment variable to the key");
     }
   }
 
@@ -311,7 +311,7 @@ export class Config {
     try {
       return JSON.parse(envRa);
     } catch (e) {
-      Logger.warn(`Failed to parse NETRA_RESOURCE_ATTRS: ${e}`);
+      NetraLogger.notice("warn", `Failed to parse NETRA_RESOURCE_ATTRS: ${e}`);
       return {};
     }
   }

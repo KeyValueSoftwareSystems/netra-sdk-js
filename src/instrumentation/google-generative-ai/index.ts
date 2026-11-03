@@ -8,7 +8,7 @@
 
 import { Tracer } from "@opentelemetry/api";
 import shimmer from "shimmer";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { BaseInstrumentor } from "../base-instrumentor";
 import { __version__ } from "./version";
 import {
@@ -43,7 +43,7 @@ export class NetraGoogleGenerativeAIInstrumentor extends BaseInstrumentor<Google
   protected applyPatches(classes: GoogleGenerativeAIClasses, tracer: Tracer): boolean {
     const proto = classes.GenerativeModel?.prototype;
     if (!proto) {
-      Logger.error("Google Generative AI: GenerativeModel.prototype not found");
+      NetraLogger.error("Google Generative AI: GenerativeModel.prototype not found");
       return false;
     }
 

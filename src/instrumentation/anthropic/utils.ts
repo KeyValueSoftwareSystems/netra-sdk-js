@@ -1,5 +1,5 @@
 import { Span, SpanStatusCode } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import {
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
@@ -82,7 +82,7 @@ export function processStreamChunk(
             try {
               finishedBlock.input = JSON.parse(finishedBlock.input);
             } catch {
-              Logger.warn(
+              NetraLogger.warn(
                 "netra.instrumentation.anthropic: Failed to parse tool use input",
               );
             }
@@ -116,13 +116,13 @@ export function processStreamChunk(
       }
     }
 
-    if (Logger.isDebugMode()) {
+    if (NetraLogger.isDebugMode()) {
       span.addEvent("llm.content.completion.chunk", {
         "chunk.type": chunk.type,
       });
     }
   } catch (e) {
-    Logger.error(
+    NetraLogger.error(
       "netra.instrumentation.anthropic: processStreamChunk error",
       e,
     );
@@ -151,7 +151,7 @@ export function finalizeStreamSpan(
     span.setAttribute("llm.response.duration", (endTime - startTime) / 1000);
     span.setStatus({ code });
   } catch (e) {
-    Logger.error(
+    NetraLogger.error(
       "netra.instrumentation.anthropic: finalizeStreamSpan error",
       e,
     );
@@ -167,12 +167,12 @@ export function setRequestAttributes(
 ): void {
   try {
     if (!span.isRecording()) {
-      Logger.log("Span is not recording");
+      NetraLogger.log("Span is not recording");
       return;
     }
     setBaseRequestAttributes(span, kwargs, requestType, "anthropic");
   } catch (e) {
-    Logger.error(
+    NetraLogger.error(
       "netra.instrumentation.anthropic: setRequestAttributes error",
       e,
     );
@@ -185,7 +185,7 @@ export function setResponseAttributes(
 ): void {
   try {
     if (!span.isRecording()) {
-      Logger.log("Span is not recording");
+      NetraLogger.log("Span is not recording");
       return;
     }
     if (response?.type === "message_batch") {
@@ -193,7 +193,7 @@ export function setResponseAttributes(
     }
     setBaseResponseAttributes(span, response);
   } catch (e) {
-    Logger.error(
+    NetraLogger.error(
       "netra.instrumentation.anthropic: setResponseAttributes error",
       e,
     );

@@ -4,7 +4,7 @@
  */
 
 import { Span, context, type Context as OTelContext } from "@opentelemetry/api";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import { safeStringify } from "../utils/serialization";
 import { SpanAttributes } from "./span-attributes";
 
@@ -415,7 +415,7 @@ export function writeCompletionAttributes(
         );
         completionIdx++;
       } catch (error) {
-        Logger.error("Error parsing tool content:", error);
+        NetraLogger.error("Error parsing tool content:", error);
       }
     } else {
       span.setAttribute(

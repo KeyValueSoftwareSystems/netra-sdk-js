@@ -1,6 +1,6 @@
 import { Span } from "@opentelemetry/api";
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { UsageModel } from "../../types";
 import {
   setRequestAttributes as setBaseRequestAttributes,
@@ -87,7 +87,7 @@ function resolveProviderReportedCost(
       : undefined;
 
   if (!isValidCost(upstreamCost)) {
-    Logger.debug(
+    NetraLogger.debug(
       "BYOK usage has no valid upstream_inference_cost; skipping provider-reported cost",
     );
     return undefined;

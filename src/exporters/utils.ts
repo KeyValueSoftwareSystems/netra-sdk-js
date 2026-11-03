@@ -1,7 +1,7 @@
 import { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import type { SpanContext } from "@opentelemetry/api";
 import { Config } from "../config";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 import {
   getRootBlockCandidatesFor,
   isRootBlockCandidate,
@@ -26,7 +26,7 @@ export function setTrialBlocked(blocked: boolean) {
   if (blocked) {
     if (!trialBlockedAt) {
       trialBlockedAt = Date.now();
-      Logger.warn(
+      NetraLogger.notice("warn",
         `Trial/quota exhausted: blocking span export for ${Config.TRIAL_BLOCK_DURATION_SECONDS}s`,
       );
     }

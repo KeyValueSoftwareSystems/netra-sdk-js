@@ -7,7 +7,7 @@ import {
   trace,
   Tracer,
 } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { wrapResponse } from "../../utils/response-handler";
 import { safeStringify } from "../../utils/serialization";
 import { SpanAttributes } from "../span-attributes";
@@ -203,7 +203,7 @@ class MessageStreamWrapper {
                     target.processEventData(event, args[0]);
                   }
                 } catch (e) {
-                  Logger.error(
+                  NetraLogger.error(
                     "netra.instrumentation.anthropic: event tracking error",
                     e,
                   );
@@ -304,7 +304,7 @@ class MessageStreamWrapper {
         this.finalizeSpanOnce(SpanStatusCode.ERROR);
       });
     } catch (e) {
-      Logger.error(
+      NetraLogger.error(
         "netra.instrumentation.anthropic: safety net listener registration failed",
         e,
       );
@@ -324,7 +324,7 @@ class MessageStreamWrapper {
       }
     } catch (err) {
       errorOccurred = true;
-      Logger.error("netra.instrumentation.anthropic: Stream error", err);
+      NetraLogger.error("netra.instrumentation.anthropic: Stream error", err);
       this.finalizeSpanOnce(SpanStatusCode.ERROR);
       throw err;
     } finally {
@@ -417,7 +417,7 @@ function anthropicWrapper(
       const isStreaming = attributes.stream === true;
 
       const activeSpan = trace.getSpan(currentContext);
-      Logger.debug(
+      NetraLogger.debug(
         `Anthropic invoke (${requestType}). Active TraceId: ${activeSpan?.spanContext().traceId}, SpanId: ${activeSpan?.spanContext().spanId}`,
       );
 
@@ -452,7 +452,7 @@ function anthropicWrapper(
                 onChunk: (chunk) =>
                   processStreamChunk(completeResponse, chunk, span),
                 onError: (error) => {
-                  Logger.error("netra.instrumentation.anthropic:", error);
+                  NetraLogger.error("netra.instrumentation.anthropic:", error);
                   span.setStatus({
                     code: SpanStatusCode.ERROR,
                     message:
@@ -493,7 +493,7 @@ function anthropicWrapper(
               { preserveOriginal: response },
             );
           } catch (error) {
-            Logger.error("netra.instrumentation.anthropic:", error);
+            NetraLogger.error("netra.instrumentation.anthropic:", error);
             span.setStatus({
               code: SpanStatusCode.ERROR,
               message: error instanceof Error ? error.message : String(error),

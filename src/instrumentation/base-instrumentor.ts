@@ -1,6 +1,6 @@
 import { createRequire } from "module";
 import { trace, Tracer, TracerProvider } from "@opentelemetry/api";
-import { Logger } from "../logger";
+import { NetraLogger } from "../netraLogger";
 
 export interface InstrumentorOptions {
   tracerProvider?: TracerProvider;
@@ -89,7 +89,7 @@ export abstract class BaseInstrumentor<TClasses> {
 
   async instrument(options: InstrumentorOptions = {}): Promise<this> {
     if (this._isInstrumented) {
-      Logger.warn(`${this.displayName} is already instrumented`);
+      NetraLogger.warn(`${this.displayName} is already instrumented`);
       return this;
     }
 
@@ -112,7 +112,7 @@ export abstract class BaseInstrumentor<TClasses> {
     this._instrumentPromise = null;
 
     if (!this._isInstrumented) {
-      Logger.warn(`${this.displayName} is not instrumented`);
+      NetraLogger.warn(`${this.displayName} is not instrumented`);
       return;
     }
 
@@ -120,14 +120,14 @@ export abstract class BaseInstrumentor<TClasses> {
       try {
         this.removePatches(classes);
       } catch (error) {
-        Logger.error(`${this.displayName}: failed to remove patches: ${error}`);
+        NetraLogger.error(`${this.displayName}: failed to remove patches: ${error}`);
       }
     }
 
     try {
       this.onUninstrument();
     } catch (error) {
-      Logger.error(`${this.displayName}: onUninstrument failed: ${error}`);
+      NetraLogger.error(`${this.displayName}: onUninstrument failed: ${error}`);
     } finally {
       this._resolvedClasses = [];
       this._isInstrumented = false;
@@ -160,7 +160,7 @@ export abstract class BaseInstrumentor<TClasses> {
             this.instrumentationVersion,
           );
     } catch (error) {
-      Logger.error(`${this.displayName}: failed to initialize tracer: ${error}`);
+      NetraLogger.error(`${this.displayName}: failed to initialize tracer: ${error}`);
       return this;
     }
 
@@ -171,11 +171,11 @@ export abstract class BaseInstrumentor<TClasses> {
           anyWrapped = true;
         }
       } catch (error) {
-        Logger.error(`${this.displayName}: patch failed: ${error}`);
+        NetraLogger.error(`${this.displayName}: patch failed: ${error}`);
         try {
           this.removePatches(classes);
         } catch {
-          Logger.error(`${this.displayName}: failed to remove patches: ${error}`);
+          NetraLogger.error(`${this.displayName}: failed to remove patches: ${error}`);
         }
       }
     }
@@ -202,7 +202,7 @@ export abstract class BaseInstrumentor<TClasses> {
         this._resolvedClasses.push(classes);
       }
     } catch {
-      Logger.debug(`${this.displayName}: ESM import not available`);
+      NetraLogger.debug(`${this.displayName}: ESM import not available`);
     }
 
     // CJS
@@ -219,7 +219,7 @@ export abstract class BaseInstrumentor<TClasses> {
         }
       }
     } catch {
-      Logger.debug(`${this.displayName}: CJS require not available`);
+      NetraLogger.debug(`${this.displayName}: CJS require not available`);
     }
 
     return this._resolvedClasses;

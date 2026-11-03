@@ -19,7 +19,7 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { wrapResponse } from "../../utils/response-handler";
 import {
   createSuppressedContext,
@@ -230,7 +230,7 @@ function streamWrapperFactory(
                       (endTime - startTime) / 1000,
                     );
                   } catch (e) {
-                    Logger.error(`${LOG_PREFIX}: stream finalize error`, e);
+                    NetraLogger.error(`${LOG_PREFIX}: stream finalize error`, e);
                   }
                   if (status === "ok") {
                     span.setStatus({ code: SpanStatusCode.OK });

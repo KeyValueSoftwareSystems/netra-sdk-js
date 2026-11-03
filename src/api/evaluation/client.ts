@@ -3,7 +3,7 @@
  */
 
 import { Config } from "../../config";
-import { Logger } from "../../logger";
+import { NetraLogger } from "../../netraLogger";
 import { NetraHttpClient } from "../http-client";
 import { EntryStatus, EvaluationScore, RunStatus } from "./models";
 
@@ -17,7 +17,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
    */
   async getDataset(datasetId: string): Promise<any[]> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         `netra.evaluation: Evaluation client is not initialized; cannot fetch dataset '${datasetId}'`,
       );
       return [];
@@ -36,7 +36,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
     evaluatorsConfig?: Record<string, any>[],
   ): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         `netra.evaluation: Evaluation client is not initialized; cannot create run for dataset '${datasetId}'`,
       );
       return { success: false };
@@ -61,7 +61,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
    */
   async createDataset(name: string, tags?: string[]): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Evaluation client is not initialized; cannot create dataset",
       );
       return { success: false };
@@ -89,7 +89,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
     itemPayload: Record<string, any>,
   ): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         `netra.evaluation: Evaluation client is not initialized; cannot add item to dataset '${datasetId}'`,
       );
       return { success: false };
@@ -114,7 +114,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
    */
   async getRunResults(runId: string): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Evaluation client is not initialized; cannot fetch run",
       );
       return { success: false };
@@ -125,18 +125,18 @@ export class EvaluationHttpClient extends NetraHttpClient {
       if (!response.ok) {
         const errorMessage =
           response.data?.error?.message ?? "Unknown error";
-        Logger.error(
+        NetraLogger.notice("error",
           `netra.evaluation: Failed to fetch run results for run '${runId}': ${errorMessage}`,
         );
         return null;
       }
       const data = this.extractData(response, null);
       if (data !== null) {
-        Logger.info("netra.evaluation: Run fetched successfully");
+        NetraLogger.info("netra.evaluation: Run fetched successfully");
       }
       return data;
     } catch {
-      Logger.error(
+      NetraLogger.notice("error",
         `netra.evaluation: Failed to fetch run results for run '${runId}'`,
       );
       return null;
@@ -148,7 +148,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
    */
   async postRunItem(runId: string, payload: Record<string, any>): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Evaluation client is not initialized; cannot post run item",
       );
       return { success: false };
@@ -179,7 +179,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
     evaluatorResults: Array<Record<string, any>>,
   ): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Evaluation client is not initialized; cannot submit local evaluations",
       );
       return { success: false };
@@ -203,7 +203,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
    */
   async postRunStatus(runId: string, status: string): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Evaluation client is not initialized; cannot post run status",
       );
       return { success: false };
@@ -221,7 +221,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
 
     const data = this.extractData(response, { success: false });
     if (data && typeof data === "object") {
-      Logger.info("netra.evaluation: Completed test run successfully");
+      NetraLogger.info("netra.evaluation: Completed test run successfully");
     }
     return data;
   }
@@ -231,7 +231,7 @@ export class EvaluationHttpClient extends NetraHttpClient {
    */
   async getSpanById(spanId: string): Promise<any> {
     if (!this.isInitialized()) {
-      Logger.error(
+      NetraLogger.notice("error",
         "netra.evaluation: Evaluation client is not initialized; cannot get span",
       );
       return null;
