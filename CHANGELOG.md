@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] - 2026-11-04
+
+### Changed
+
+- **Problems You Have to Fix Are Logged Outside Debug Mode**: Messages that say the app is misconfigured or a call failed are now printed whether or not debug mode is on, through `console.warn` or `console.error` with the `[Netra]` prefix. They cover: `NETRA_OTLP_ENDPOINT` not set (spans fall back to the console exporter and Netra API calls are disabled), `NETRA_API_KEY` missing for a Netra endpoint, span batches that were dropped (debug mode only in `1.12.1`), an unparsable `NETRA_RESOURCE_ATTRS`, `rootInstruments=ALL` contradicted by `blockInstruments=ALL`, `Netra.init()` called more than once, invalid arguments to public methods (`setSessionId`, `setUserId`, `setTenantId`, and the dashboard, evaluation, simulation, usage, prompts and models clients), and failed calls to the Netra APIs. A missing endpoint used to print `NETRA_OTLP_ENDPOINT is required for API calls` once per API client; it is now one message at init.
+- **Internal Errors Print Only in Debug Mode**: Before, every internal error was printed with `console.error`, even with debug mode off. Errors the developer cannot act on, such as a failure while uninstrumenting or flushing during `shutdown()`, are now printed only in debug mode (`debugMode: true` or `NETRA_DEBUG=true`). Problems the developer has to fix are still printed, as described above.
+
+### Fixed
+
+- **No False Missing-API-Key Error When the Key Is Sent as a Header**: The missing `NETRA_API_KEY` error was printed even when the key was already passed as an `x-api-key` header through `headers` or `NETRA_HEADERS`. Such a header now counts as a key; the header name is matched case-insensitively.
+
 ## [1.12.1] - 2026-11-02
 
 ### Changed

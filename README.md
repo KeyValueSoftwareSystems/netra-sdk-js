@@ -22,6 +22,19 @@ npm install netra-sdk
 
 ## 🚀 Quick Start
 
+### Set the Endpoint and API Key
+
+Set these before you call `Netra.init()`, wherever your app runs (your shell, Docker containers, CI jobs). Without `NETRA_OTLP_ENDPOINT`, the SDK prints spans to the console instead of sending them to Netra, and your dashboard stays empty.
+
+```bash
+# US region
+export NETRA_OTLP_ENDPOINT="https://api.getnetra.ai/telemetry"
+# EU region: export NETRA_OTLP_ENDPOINT="https://api.eu.getnetra.ai/telemetry"
+export NETRA_API_KEY="your-api-key-here"
+```
+
+If the endpoint is not set, the SDK prints a warning at startup that names `NETRA_OTLP_ENDPOINT`. See [Logging](#-logging).
+
 ### Basic Setup
 
 Initialize the Netra SDK at the start of your application (entry point). The `init()` method is async and waits for all instrumentations to be ready before returning:
@@ -31,7 +44,7 @@ import { Netra, NetraInstruments } from "netra-sdk";
 
 await Netra.init({
   appName: "my-ai-app",
-  headers: `x-api-key=${process.env.NETRA_API_KEY}`, // Optional: Send traces to Netra Platform
+  headers: `x-api-key=${process.env.NETRA_API_KEY}`,
   environment: "production",
   // Optional: Select specific instruments
   instruments: new Set([NetraInstruments.OPENAI, NetraInstruments.LANGCHAIN]),
@@ -279,10 +292,18 @@ You can configure the SDK using environment variables:
 
 | Variable | Description |
 |----------|-------------|
+| `NETRA_OTLP_ENDPOINT` | Netra endpoint: `https://api.getnetra.ai/telemetry` (US) or `https://api.eu.getnetra.ai/telemetry` (EU). Required to send traces to Netra; falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`, and if neither is set, spans are printed to the console |
 | `NETRA_API_KEY` | API Key for Netra Platform |
 | `NETRA_APP_NAME` | Name of your application |
 | `NETRA_ENV` | Environment (e.g., prod, dev) |
 | `NETRA_TRACE_CONTENT` | Capture prompt/completion content (default: true) |
+| `NETRA_DEBUG` | Enable debug logging (default: false) |
+
+## 📝 Logging
+
+Outside debug mode the SDK keeps its internal logs quiet. Problems you have to fix are still printed through `console.warn` or `console.error`, with the `[Netra]` prefix. They include a missing `NETRA_OTLP_ENDPOINT` or `NETRA_API_KEY`, span batches that were dropped, invalid arguments to public methods, and failed Netra API calls.
+
+To see the SDK's full internal logs, pass `debugMode: true` to `Netra.init()` or set `NETRA_DEBUG=true`.
 
 ## 🤝 License
 
