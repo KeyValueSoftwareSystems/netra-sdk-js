@@ -33,8 +33,6 @@ export NETRA_OTLP_ENDPOINT="https://api.getnetra.ai/telemetry"
 export NETRA_API_KEY="your-api-key-here"
 ```
 
-If the endpoint is not set, the SDK prints a warning at startup that names `NETRA_OTLP_ENDPOINT`. See [Logging](#-logging).
-
 ### Basic Setup
 
 Initialize the Netra SDK at the start of your application (entry point). The `init()` method is async and waits for all instrumentations to be ready before returning:
@@ -297,13 +295,6 @@ You can configure the SDK using environment variables:
 | `NETRA_APP_NAME` | Name of your application |
 | `NETRA_ENV` | Environment (e.g., prod, dev) |
 | `NETRA_TRACE_CONTENT` | Capture prompt/completion content (default: true) |
-| `NETRA_DEBUG` | Enable debug logging (default: false) |
-
-## 📝 Logging
-
-Outside debug mode the SDK keeps its internal logs quiet. Problems you have to fix are still printed through `console.warn` or `console.error`, with the `[Netra]` prefix. They include a missing `NETRA_OTLP_ENDPOINT` or `NETRA_API_KEY`, span batches that were dropped, invalid arguments to public methods, and failed Netra API calls.
-
-To see the SDK's full internal logs, pass `debugMode: true` to `Netra.init()` or set `NETRA_DEBUG=true`.
 
 ## 🤝 License
 
