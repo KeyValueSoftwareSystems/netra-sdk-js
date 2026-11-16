@@ -2,7 +2,12 @@ import { createRequire } from "module";
 import { trace, Tracer } from "@opentelemetry/api";
 import { NetraLogger } from "../../netraLogger";
 import { __version__ } from "./version";
-import { chatWrapper, embeddingsWrapper, responsesWrapper } from "./wrappers";
+import {
+  chatWrapper,
+  decisionsWrapper,
+  embeddingsWrapper,
+  responsesWrapper,
+} from "./wrappers";
 import { InstrumentorOptions, PatchTarget } from "./types";
 
 const INSTRUMENTATION_NAME = "netra.instrumentation.openai";
@@ -58,6 +63,14 @@ const PATCH_TARGETS: PatchTarget[] = [
     key: "responses.create",
     getPrototype: (O) => O.Responses?.prototype,
     wrapperFactory: responsesWrapper,
+    optional: true,
+  },
+  {
+    // The Decisions API only exists in openai >= 7.30.0, so its absence on
+    // older installs is expected and must not be reported as a failure.
+    key: "decisions.create",
+    getPrototype: (O) => O.Decisions?.prototype,
+    wrapperFactory: decisionsWrapper,
     optional: true,
   },
 ];
@@ -169,6 +182,7 @@ export const openAIInstrumentor = new NetraOpenAIInstrumentor();
 
 export {
   chatWrapper,
+  decisionsWrapper,
   embeddingsWrapper,
   responsesWrapper,
   StreamingWrapper,
