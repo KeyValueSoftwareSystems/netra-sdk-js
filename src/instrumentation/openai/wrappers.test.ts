@@ -113,6 +113,14 @@ const DECISION_PARAMS = {
   questions: QUESTIONS,
 };
 
+/** Split a decision `input` attribute into its input entries and the questions its last entry holds. */
+function decisionInput(inputJson: unknown): { entries: any[]; questions: unknown } {
+  const all = JSON.parse(inputJson as string) as any[];
+  const questionsEntry = all[all.length - 1];
+  expect(questionsEntry.role).toBe("user");
+  return { entries: all.slice(0, -1), questions: JSON.parse(questionsEntry.content) };
+}
+
 async function collect(iterable: AsyncIterable<any>): Promise<any[]> {
   const out: any[] = [];
   for await (const item of iterable) out.push(item);
@@ -384,10 +392,11 @@ describe("OpenAI instrumentation", () => {
       expect(span.attributes["gen_ai.usage.completion_tokens"]).toBe(6);
       expect(typeof span.attributes["llm.response.duration"]).toBe("number");
 
-      expect(JSON.parse(span.attributes["input"] as string)).toEqual([
-        { role: "user", content: DECISION_PARAMS.input },
-      ]);
-      expect(JSON.parse(span.attributes["gen_ai.decision.questions"] as string)).toEqual(QUESTIONS);
+      // The questions are the last `input` entry, after the input they are asked about.
+      const { entries, questions } = decisionInput(span.attributes["input"]);
+      expect(entries).toEqual([{ role: "user", content: DECISION_PARAMS.input }]);
+      expect(questions).toEqual(QUESTIONS);
+      expect(span.attributes["gen_ai.decision.questions"]).toBeUndefined();
 
       const output = JSON.parse(span.attributes["output"] as string);
       expect(output).toHaveLength(1);
@@ -422,7 +431,9 @@ describe("OpenAI instrumentation", () => {
       });
 
       const [span] = tracing.spans("openai.decision");
-      expect(JSON.parse(span.attributes["input"] as string)).toEqual([
+      const { entries, questions } = decisionInput(span.attributes["input"]);
+      expect(questions).toEqual(QUESTIONS);
+      expect(entries).toEqual([
         { role: "developer", content: "Classify support tickets." },
         {
           role: "user",

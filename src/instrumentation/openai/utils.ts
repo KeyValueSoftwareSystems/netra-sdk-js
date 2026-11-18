@@ -16,9 +16,6 @@ const PROVIDER_REPORTED_USAGE_TYPE = "total";
 const CUSTOM_USAGE_ATTRIBUTE = `${Config.LIBRARY_NAME}.usage`;
 
 const DECISION_REQUEST_TYPE = "decision";
-// Decisions API (`client.decisions.create`): the questions asked about the input,
-// recorded as one JSON array. The answers are recorded as the span's `output`.
-export const GEN_AI_DECISION_QUESTIONS = "gen_ai.decision.questions";
 // Structured conversation attributes: one JSON array of `{"role", "content"}` entries
 // each, replacing the per-message indexed `gen_ai.prompt.N.*` / `gen_ai.completion.N.*` keys.
 const INPUT_ATTRIBUTE = "input";
@@ -32,6 +29,16 @@ const DECISION_TOOL_OUTPUT_TYPES = new Set(["function_call_output", "custom_tool
 // A data URL's header (`data:<mime>;base64,`) is short; only this many leading
 // characters are scanned for its comma so a large non-data-URL string is not walked.
 const MAX_DATA_URL_HEADER_LEN = 256;
+// Decisions API (`client.decisions.create`): the questions are recorded as the last
+// `input` entry and the answers as the `output` entry, each holding a JSON array.
+const DECISION_QUESTIONS_ROLE = "user";
+const DECISION_ANSWERS_ROLE = "assistant";
+// The questions entry may take at most 1/N of the `input` attribute, leaving the rest for the input items.
+const DECISION_QUESTIONS_MAX_SHARE = 2;
+// Used when NETRA_SPAN_ATTRIBUTE_MAX_SIZE is not a positive number; matches Config's default.
+const DEFAULT_ATTRIBUTE_MAX_SIZE = 30000;
+// Separator `JSON.stringify` puts between array items; used when arrays are assembled from pre-encoded items.
+const JSON_ITEM_SEPARATOR = ",";
 
 /** A decision input entry: tool calls and their outputs also carry the call id. */
 type DecisionInputMessage = TracedMessage & { tool_call_id?: string };
@@ -88,11 +95,12 @@ export function setResponseAttributes(
 }
 
 /**
- * Record a Decisions API request's input and questions without ever failing the call.
+ * Record a Decisions API request's input and questions as `input`, without ever failing the call.
  *
  * Both are caller content, so nothing is recorded when content tracing is off.
- * This runs before the OpenAI call, so any failure is logged and the remaining
- * attributes are left unset instead of aborting the user's request.
+ * This runs before the OpenAI call, so any failure is logged instead of
+ * aborting the user's request; questions that cannot be serialised leave the
+ * input items still recorded.
  */
 function setDecisionRequestAttributes(
   span: Span,
@@ -100,72 +108,100 @@ function setDecisionRequestAttributes(
 ): void {
   if (!isTraceContentEnabled()) return;
 
+  let questionsEntry: string | undefined;
   try {
-    const messages = buildDecisionInput(kwargs.input);
-    if (messages.length > 0) {
-      span.setAttribute(INPUT_ATTRIBUTE, safeStringify(messages));
-    }
-  } catch (error) {
-    NetraLogger.warn("Failed to record OpenAI decision input:", error);
-  }
-
-  try {
-    const questions = kwargs.questions;
-    if (Array.isArray(questions) && questions.length > 0) {
-      span.setAttribute(
-        GEN_AI_DECISION_QUESTIONS,
-        safeStringify(withoutInlineData(questions)),
-      );
-    }
+    questionsEntry = decisionQuestionsEntry(kwargs.questions);
   } catch (error) {
     NetraLogger.warn("Failed to record OpenAI decision questions:", error);
   }
+
+  try {
+    const inputJson = buildDecisionInput(kwargs.input, questionsEntry);
+    if (inputJson !== undefined) span.setAttribute(INPUT_ATTRIBUTE, inputJson);
+  } catch (error) {
+    NetraLogger.warn("Failed to record OpenAI decision input:", error);
+  }
+}
+
+/** The attribute length limit decision capture budgets against. */
+function attributeMaxSize(): number {
+  const size = Config.SPAN_ATTRIBUTE_MAX_SIZE;
+  return Number.isFinite(size) && size > 0 ? size : DEFAULT_ATTRIBUTE_MAX_SIZE;
 }
 
 /**
- * Build the input messages for a Decisions API request.
+ * Build the `input` attribute JSON for a Decisions API request.
  *
  * `input` is either a string (recorded as one user message) or a list of
  * messages, function / custom tool calls and their outputs. Tool calls are
  * recorded as assistant entries holding `{"name", "arguments"}` and tool
  * outputs as `tool` entries; both carry their `call_id` as `tool_call_id`.
+ * `questionsEntry`, the already-encoded questions entry, is appended last so
+ * the questions read after the content they are asked about.
+ *
+ * The result never exceeds the attribute size limit. The questions entry's
+ * room is set aside first, so a long input never pushes the questions out;
+ * each input entry's content is then cut to the budget the earlier entries
+ * left over and later entries are dropped once it is used up, so the
+ * attribute stays valid JSON and a multi-megabyte input is never encoded in full.
+ *
+ * @returns A JSON array of `{"role", "content"[, "tool_call_id"]}` entries,
+ *          or undefined when there is nothing to record.
  */
-export function buildDecisionInput(input: unknown): DecisionInputMessage[] {
+export function buildDecisionInput(
+  input: unknown,
+  questionsEntry?: string,
+): string | undefined {
+  let items: unknown[] = [];
   if (typeof input === "string") {
-    return input.length > 0 ? [{ role: "user", content: input }] : [];
+    if (input.length > 0) items = [{ role: "user", content: input }];
+  } else if (Array.isArray(input)) {
+    items = input;
   }
-  if (!Array.isArray(input)) return [];
 
-  const messages: DecisionInputMessage[] = [];
-  for (const item of input) {
+  const encodedEntries: string[] = [];
+  let remaining = attributeMaxSize() - "[]".length;
+  if (questionsEntry) remaining -= questionsEntry.length + JSON_ITEM_SEPARATOR.length;
+  for (const item of items) {
+    const budget = remaining - (encodedEntries.length > 0 ? JSON_ITEM_SEPARATOR.length : 0);
+    if (budget <= 0) break;
     if (!isDict(item)) continue;
-    const entry = decisionInputEntry(item);
-    if (entry) messages.push(entry);
+    const entry = decisionInputEntry(item, budget);
+    if (!entry) continue;
+    const encoded = encodeEntryWithin(entry, budget);
+    if (encoded === undefined) break;
+    encodedEntries.push(encoded);
+    remaining = budget - encoded.length;
   }
-  return messages;
+
+  if (questionsEntry) encodedEntries.push(questionsEntry);
+  return encodedEntries.length > 0 ? joinJsonArray(encodedEntries) : undefined;
 }
 
-/** Convert one Decisions API input item to a message, or undefined to skip it. */
+/**
+ * Convert one Decisions API input item to a message, or undefined to skip it.
+ * The message's `content` is at most `maxContentLen` characters long.
+ */
 function decisionInputEntry(
   item: Record<string, unknown>,
+  maxContentLen: number,
 ): DecisionInputMessage | undefined {
   const itemType = typeof item.type === "string" && item.type ? item.type : "message";
   let entry: DecisionInputMessage;
 
   if (itemType in DECISION_TOOL_CALL_ARGUMENT_KEYS) {
-    const args = item[DECISION_TOOL_CALL_ARGUMENT_KEYS[itemType]] ?? "";
-    entry = {
-      role: "assistant",
-      content: JSON.stringify({ name: item.name ?? "", arguments: args }),
-    };
+    let args = item[DECISION_TOOL_CALL_ARGUMENT_KEYS[itemType]] ?? "";
+    if (typeof args === "string") args = sliceText(args, maxContentLen);
+    const call = toJson({ name: item.name ?? "", arguments: args });
+    entry = { role: "assistant", content: sliceText(call, maxContentLen) };
   } else if (DECISION_TOOL_OUTPUT_TYPES.has(itemType)) {
     if (!item.output) return undefined;
-    entry = { role: "tool", content: asPromptContent(item.output) };
+    entry = { role: "tool", content: asPromptContent(item.output, maxContentLen) };
   } else {
     if (!item.content) return undefined;
     entry = {
       role: typeof item.role === "string" && item.role ? item.role : "user",
-      content: asPromptContent(item.content),
+      content: asPromptContent(item.content, maxContentLen),
     };
   }
 
@@ -175,10 +211,161 @@ function decisionInputEntry(
   return entry;
 }
 
-/** Render message content as a string: text as-is, content parts as JSON with inline data elided. */
-function asPromptContent(content: unknown): string {
-  const elided = withoutInlineData(content);
-  return typeof elided === "string" ? elided : safeStringify(elided);
+/**
+ * Render message content as a string of at most `maxLen` characters.
+ *
+ * Text is kept as-is and content parts become JSON, with inline data elided
+ * and at most `maxLen` characters of text across all parts kept before
+ * anything is encoded.
+ */
+function asPromptContent(content: unknown, maxLen: number): string {
+  const elided = withoutInlineData(content, new CharBudget(maxLen));
+  const rendered = typeof elided === "string" ? elided : toJson(elided);
+  return sliceText(rendered, maxLen);
+}
+
+/**
+ * JSON-encode `entry`, shortening its `content` until the encoding fits `maxLen`.
+ *
+ * Escaping makes the encoded content longer than the raw text (quotes,
+ * backslashes and control characters), so the content is cut in proportion to
+ * how far over the limit the encoding is and re-encoded.
+ *
+ * @returns The encoded entry, or undefined when not even an empty `content` fits.
+ */
+function encodeEntryWithin(entry: DecisionInputMessage, maxLen: number): string | undefined {
+  let content = entry.content;
+  const overhead = JSON.stringify({ ...entry, content: "" }).length;
+  if (overhead > maxLen) return undefined;
+  const contentBudget = maxLen - overhead;
+  for (;;) {
+    const encoded = JSON.stringify({ ...entry, content });
+    const encodedContentLen = encoded.length - overhead;
+    if (encodedContentLen <= contentBudget) return encoded;
+    const keep = Math.floor((content.length * contentBudget) / encodedContentLen);
+    content = sliceText(content, Math.min(keep, content.length - 1));
+  }
+}
+
+/** Join already-encoded JSON values into a JSON array, formatted as `JSON.stringify` would. */
+function joinJsonArray(encodedItems: string[]): string {
+  return "[" + encodedItems.join(JSON_ITEM_SEPARATOR) + "]";
+}
+
+/**
+ * How many leading items fit in a JSON array of at most `maxLen` characters.
+ * `itemLengths` are the encoded length of each item; the array adds its
+ * brackets and a separator between items.
+ */
+function fittingPrefixLen(itemLengths: number[], maxLen: number): number {
+  let used = "[]".length;
+  for (let count = 0; count < itemLengths.length; count++) {
+    used += itemLengths[count] + (count > 0 ? JSON_ITEM_SEPARATOR.length : 0);
+    if (used > maxLen) return count;
+  }
+  return itemLengths.length;
+}
+
+/**
+ * JSON-encode `items` in order, stopping once they no longer fit a `maxLen` array.
+ *
+ * Inline data is elided first, and each item's text is copied only up to the
+ * room left in the array, so no item costs more to encode than the attribute
+ * could still hold. Items are kept whole: an item whose text alone uses up
+ * that room cannot fit once encoded, so it and everything after it is left out.
+ */
+function encodeItemsWithin(items: unknown[], maxLen: number): string[] {
+  const encoded: string[] = [];
+  let used = "[]".length;
+  for (const item of items) {
+    const separatorLen = encoded.length > 0 ? JSON_ITEM_SEPARATOR.length : 0;
+    const budget = new CharBudget(maxLen - used - separatorLen);
+    const copy = withoutInlineData(item, budget);
+    if (budget.remaining <= 0) break;
+    const value = toJson(copy);
+    used += value.length + separatorLen;
+    if (used > maxLen) break;
+    encoded.push(value);
+  }
+  return encoded;
+}
+
+/**
+ * Encode `{"role": role, "content": "<JSON array of items>"}` in at most `maxLen` characters.
+ *
+ * The items' JSON is escaped again inside `content`, so each item is sized as
+ * such and only the leading items that fit are kept, whole, so `content` stays
+ * valid JSON.
+ *
+ * @returns The encoded entry, or undefined when `items` is non-empty and not
+ *          even the first item fits.
+ */
+function itemsEntry(items: unknown[], role: string, maxLen: number): string | undefined {
+  const encoded = encodeItemsWithin(items, maxLen);
+  const envelopeLen = JSON.stringify({ role, content: "" }).length;
+  const escapedLengths = encoded.map((value) => JSON.stringify(value).length - '""'.length);
+  const kept = encoded.slice(0, fittingPrefixLen(escapedLengths, maxLen - envelopeLen));
+  if (items.length > 0 && kept.length === 0) return undefined;
+  return JSON.stringify({ role, content: joinJsonArray(kept) });
+}
+
+/**
+ * Encode the Decisions API `questions` as the `user` entry that ends the `input` attribute.
+ *
+ * Its `content` is the questions as a JSON array, recorded as given (`type`,
+ * `instructions`, `name` and the `choices` / `levels` they offer) with inline
+ * images in their instructions replaced by a placeholder. The entry may use at
+ * most half the attribute size, so however many questions are asked the input
+ * they are about still has room; whole questions are dropped from the end past that.
+ *
+ * @returns The encoded entry, or undefined when there are no questions to record.
+ */
+export function decisionQuestionsEntry(questions: unknown): string | undefined {
+  if (!Array.isArray(questions) || questions.length === 0) return undefined;
+  const maxLen = Math.floor(attributeMaxSize() / DECISION_QUESTIONS_MAX_SHARE) - "[]".length;
+  return itemsEntry(questions, DECISION_QUESTIONS_ROLE, maxLen);
+}
+
+/**
+ * JSON-encode `value` as valid JSON, whatever it holds.
+ *
+ * Functions, symbols and bigints become strings; anything `JSON.stringify`
+ * still cannot encode is recorded as a JSON string of its `safeStringify` text.
+ */
+function toJson(value: unknown): string {
+  try {
+    const json = JSON.stringify(value, (_key, val) => {
+      if (typeof val === "bigint") return val.toString();
+      if (typeof val === "function") return `[Function: ${val.name || "anonymous"}]`;
+      if (typeof val === "symbol") return val.toString();
+      return val;
+    });
+    if (json !== undefined) return json;
+  } catch {
+    // Fall through to a string rendering below.
+  }
+  return JSON.stringify(safeStringify(value));
+}
+
+/** Cut `text` to at most `maxLen` UTF-16 units without splitting a surrogate pair. */
+function sliceText(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  let end = Math.max(maxLen, 0);
+  const lastCode = text.charCodeAt(end - 1);
+  if (end > 0 && lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
+  return text.slice(0, end);
+}
+
+/** Characters of string content one copy may still keep, shared across the whole walk. */
+class CharBudget {
+  constructor(public remaining: number) {}
+
+  /** Return as much of `text` as the budget still allows, and charge it. */
+  take(text: string): string {
+    const kept = sliceText(text, this.remaining);
+    this.remaining -= kept.length;
+    return kept;
+  }
 }
 
 /**
@@ -199,20 +386,40 @@ function dataUrlPlaceholder(value: string): string | undefined {
  *
  * Image parts usually carry their bytes as base64 data URLs; serialising those
  * in full only for the attribute length limit to cut them leaves unreadable
- * base64 on the span. The caller's objects are never mutated.
+ * base64 on the span. When a `budget` is given, all the strings in the copy
+ * together keep at most that many characters, and array items past the point
+ * it runs out are left out, so serialising the copy never encodes more text
+ * than the attribute could hold, however the content is split into parts.
+ * The caller's objects are never mutated.
  */
-function withoutInlineData(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (typeof value === "string") return dataUrlPlaceholder(value) ?? value;
+function withoutInlineData(
+  value: unknown,
+  budget?: CharBudget,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (typeof value === "string") {
+    const placeholder = dataUrlPlaceholder(value);
+    if (placeholder !== undefined) {
+      if (budget) budget.remaining -= placeholder.length;
+      return placeholder;
+    }
+    return budget ? budget.take(value) : value;
+  }
   if (value === null || typeof value !== "object") return value;
   if (seen.has(value)) return "[Circular]";
   seen.add(value);
 
   let copy: unknown = value;
   if (Array.isArray(value)) {
-    copy = value.map((item) => withoutInlineData(item, seen));
+    const items: unknown[] = [];
+    for (const item of value) {
+      if (budget && budget.remaining <= 0) break;
+      items.push(withoutInlineData(item, budget, seen));
+    }
+    copy = items;
   } else if (isPlainObject(value)) {
     copy = Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, withoutInlineData(item, seen)]),
+      Object.entries(value).map(([key, item]) => [key, withoutInlineData(item, budget, seen)]),
     );
   }
   seen.delete(value);
@@ -229,7 +436,10 @@ function isPlainObject(value: object): value is Record<string, unknown> {
  *
  * `output` holds a single assistant entry whose `content` is the answers as a
  * JSON array; each answer is a predicate, choice, score or refusal object, as
- * returned. Responses without an `answers` list (every other OpenAI API) are ignored.
+ * returned. Only as many whole answers as fit the attribute size are kept
+ * (counting the escaping the nested JSON needs), so the attribute stays valid
+ * JSON. Nothing is recorded when not even one answer fits. Responses without
+ * an `answers` list (every other OpenAI API) are ignored.
  */
 function setDecisionAnswerAttributes(
   span: Span,
@@ -239,10 +449,8 @@ function setDecisionAnswerAttributes(
   if (!Array.isArray(answers) || !isTraceContentEnabled()) return;
 
   try {
-    span.setAttribute(
-      OUTPUT_ATTRIBUTE,
-      JSON.stringify([{ role: "assistant", content: safeStringify(answers) }]),
-    );
+    const entry = itemsEntry(answers, DECISION_ANSWERS_ROLE, attributeMaxSize() - "[]".length);
+    if (entry !== undefined) span.setAttribute(OUTPUT_ATTRIBUTE, joinJsonArray([entry]));
   } catch (error) {
     // Runs after the call succeeded; never cost the user their response.
     NetraLogger.warn("Failed to record OpenAI decision answers:", error);
