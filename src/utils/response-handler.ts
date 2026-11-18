@@ -46,7 +46,6 @@ export function isAPIPromise(value: unknown): value is APIPromiseLike {
   );
 }
 
-<<<<<<< HEAD
 /**
  * The `APIPromise` returned by the TypeSafe SDK (`@typesafe-ai/sdk`): a
  * Promise subclass that parses the body only once it is awaited, with
@@ -66,8 +65,6 @@ export function isMappableAPIPromise(value: unknown): value is MappableAPIPromis
   );
 }
 
-=======
->>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
 const ITERATOR_METHODS = new Set(["next", "return", "throw"]);
 
 /**
@@ -188,12 +185,8 @@ export function wrapAsyncIterable<T>(
  * If the resolved value is async-iterable, wraps it with `wrapAsyncIterable`.
  *
  * With `deriveAPIPromise`, an `APIPromise` is never replaced: the result is
-<<<<<<< HEAD
  * derived from it with `_thenUnwrap` (Stainless SDKs) or `map` (TypeSafe SDK),
  * so every SDK method keeps working and
-=======
- * derived from it with `_thenUnwrap`, so every SDK method keeps working and
->>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
  * the caller's body is parsed only when the caller consumes it. Provider
  * wrappers that return the SDK's promise to the app opt in to this.
  *
@@ -233,7 +226,6 @@ export function wrapPromise<T>(
     }
   }
 
-<<<<<<< HEAD
   function onDerivedValue(value: unknown): unknown {
     if (isAsyncIterable(value)) {
       return wrapAsyncIterable(value, { ...callbacks, finalize: safeFinalize });
@@ -263,40 +255,14 @@ export function wrapPromise<T>(
     // asResponse() hands back the raw response promise without starting a body parse.
     promise.asResponse().then(observeJSONBody, onResponseError);
     return promise.map(onDerivedValue);
-=======
-  if (options?.deriveAPIPromise && isAPIPromise(promise)) {
-    // Failures are seen on the raw response promise, which never reads the body.
-    promise.responsePromise.then(observeJSONBody, (error) => {
-      safeOnError(error);
-      safeFinalize("error");
-    });
-    return promise._thenUnwrap((value) => {
-      if (isAsyncIterable(value)) {
-        return wrapAsyncIterable(value, { ...callbacks, finalize: safeFinalize });
-      }
-      if (!finalized) {
-        safeOnSuccess(value);
-        safeFinalize("ok");
-      }
-      return value;
-    });
->>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
   }
 
   // Read a copy of a JSON body so the span ends when the response arrives,
   // even if the caller reads the result late or never. The caller's own body
-<<<<<<< HEAD
   // is left unread. This runs before any caller handler on the response
   // promise, so the body is still unused when it is cloned.
   function observeJSONBody(response: any) {
     try {
-=======
-  // is left unread. This runs before any caller handler on responsePromise,
-  // so the body is still unused when it is cloned.
-  function observeJSONBody(props: any) {
-    try {
-      const response = props?.response;
->>>>>>> 166f73f ([#1964] fix: Keep provider SDK return objects intact in instrumentation (#153))
       const contentType = String(response?.headers?.get?.("content-type") ?? "");
       if (typeof response?.clone !== "function" || !contentType.includes("json")) {
         return;
