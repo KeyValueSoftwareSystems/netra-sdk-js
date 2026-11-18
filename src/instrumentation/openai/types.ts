@@ -1,6 +1,6 @@
 import { Tracer, TracerProvider } from "@opentelemetry/api";
 
-export type OpenAIRequestType = "chat" | "embedding" | "response";
+export type OpenAIRequestType = "chat" | "embedding" | "response" | "decision";
 
 export interface Message {
   role: string;
