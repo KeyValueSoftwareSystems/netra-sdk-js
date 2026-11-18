@@ -25,6 +25,7 @@ const SPAN_NAMES: Record<OpenAIRequestType, string> = {
   chat: "openai.chat",
   embedding: "openai.embedding",
   response: "openai.response",
+  decision: "openai.decision",
 };
 
 const STREAMING_TYPES = new Set<OpenAIRequestType>(["chat", "response"]);
@@ -349,3 +350,7 @@ export const embeddingsWrapper = (tracer: Tracer): WrapperFn =>
 
 export const responsesWrapper = (tracer: Tracer): WrapperFn =>
   openAIWrapper(tracer, "response");
+
+/** Decisions API (`client.decisions.create`). It has no streaming mode, so each call is one span. */
+export const decisionsWrapper = (tracer: Tracer): WrapperFn =>
+  openAIWrapper(tracer, "decision");
