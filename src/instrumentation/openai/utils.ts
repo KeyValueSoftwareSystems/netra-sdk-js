@@ -9,8 +9,6 @@ import {
   setRequestAttributes as setBaseRequestAttributes,
   setResponseAttributes as setBaseResponseAttributes,
   TracedMessage,
-  writeCompletionAttributes,
-  writePromptAttributes,
 } from "../utils";
 
 /** A provider-reported cost covers the whole call (prompt, completion, cache read and write). */
@@ -18,10 +16,13 @@ const PROVIDER_REPORTED_USAGE_TYPE = "total";
 const CUSTOM_USAGE_ATTRIBUTE = `${Config.LIBRARY_NAME}.usage`;
 
 const DECISION_REQUEST_TYPE = "decision";
-// Decisions API (`client.decisions.create`): the questions asked about the input and
-// the typed answers returned for them, each recorded as one JSON array.
+// Decisions API (`client.decisions.create`): the questions asked about the input,
+// recorded as one JSON array. The answers are recorded as the span's `output`.
 export const GEN_AI_DECISION_QUESTIONS = "gen_ai.decision.questions";
-export const GEN_AI_DECISION_ANSWERS = "gen_ai.decision.answers";
+// Structured conversation attributes: one JSON array of `{"role", "content"}` entries
+// each, replacing the per-message indexed `gen_ai.prompt.N.*` / `gen_ai.completion.N.*` keys.
+const INPUT_ATTRIBUTE = "input";
+const OUTPUT_ATTRIBUTE = "output";
 // Decision input item types that carry a tool invocation, mapped to the key holding its arguments.
 const DECISION_TOOL_CALL_ARGUMENT_KEYS: Record<string, string> = {
   function_call: "arguments",
@@ -100,7 +101,10 @@ function setDecisionRequestAttributes(
   if (!isTraceContentEnabled()) return;
 
   try {
-    writePromptAttributes(span, buildDecisionInput(kwargs.input));
+    const messages = buildDecisionInput(kwargs.input);
+    if (messages.length > 0) {
+      span.setAttribute(INPUT_ATTRIBUTE, safeStringify(messages));
+    }
   } catch (error) {
     NetraLogger.warn("Failed to record OpenAI decision input:", error);
   }
@@ -221,12 +225,11 @@ function isPlainObject(value: object): value is Record<string, unknown> {
 }
 
 /**
- * Record a Decisions API response's `answers`, in question order.
+ * Record a Decisions API response's `answers`, in question order, as the span's `output`.
  *
- * The answers are recorded twice: as one JSON array under
- * `gen_ai.decision.answers` for querying, and as the span's single assistant
- * completion so they show up alongside the input like any other model output.
- * Responses without an `answers` list (every other OpenAI API) are ignored.
+ * `output` holds a single assistant entry whose `content` is the answers as a
+ * JSON array; each answer is a predicate, choice, score or refusal object, as
+ * returned. Responses without an `answers` list (every other OpenAI API) are ignored.
  */
 function setDecisionAnswerAttributes(
   span: Span,
@@ -236,9 +239,10 @@ function setDecisionAnswerAttributes(
   if (!Array.isArray(answers) || !isTraceContentEnabled()) return;
 
   try {
-    const serialised = safeStringify(answers);
-    span.setAttribute(GEN_AI_DECISION_ANSWERS, serialised);
-    writeCompletionAttributes(span, [{ role: "assistant", content: serialised }]);
+    span.setAttribute(
+      OUTPUT_ATTRIBUTE,
+      JSON.stringify([{ role: "assistant", content: safeStringify(answers) }]),
+    );
   } catch (error) {
     // Runs after the call succeeded; never cost the user their response.
     NetraLogger.warn("Failed to record OpenAI decision answers:", error);

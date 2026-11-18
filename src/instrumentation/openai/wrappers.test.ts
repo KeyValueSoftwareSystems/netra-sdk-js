@@ -387,15 +387,18 @@ describe("OpenAI instrumentation", () => {
       expect(JSON.parse(span.attributes["input"] as string)).toEqual([
         { role: "user", content: DECISION_PARAMS.input },
       ]);
-      expect(span.attributes["gen_ai.prompt.0.role"]).toBe("user");
       expect(JSON.parse(span.attributes["gen_ai.decision.questions"] as string)).toEqual(QUESTIONS);
 
-      const answers = span.attributes["gen_ai.decision.answers"] as string;
-      expect(JSON.parse(answers)).toEqual(DECISION.answers);
-      expect(JSON.parse(span.attributes["output"] as string)).toEqual([
-        { role: "assistant", content: answers },
-      ]);
-      expect(span.attributes["gen_ai.completion.0.content"]).toBe(answers);
+      const output = JSON.parse(span.attributes["output"] as string);
+      expect(output).toHaveLength(1);
+      expect(output[0].role).toBe("assistant");
+      expect(JSON.parse(output[0].content)).toEqual(DECISION.answers);
+
+      // Input and answers live only in `input` / `output`, not in per-message indexed keys.
+      const keys = Object.keys(span.attributes);
+      expect(keys.filter((k) => k.startsWith("gen_ai.prompt."))).toEqual([]);
+      expect(keys.filter((k) => k.startsWith("gen_ai.completion."))).toEqual([]);
+      expect(span.attributes["gen_ai.decision.answers"]).toBeUndefined();
     });
 
     it("records mixed input items, eliding inline image data", async () => {
@@ -466,10 +469,7 @@ describe("OpenAI instrumentation", () => {
       for (const key of [
         "input",
         "output",
-        "gen_ai.prompt.0.content",
-        "gen_ai.completion.0.content",
         "gen_ai.decision.questions",
-        "gen_ai.decision.answers",
       ]) {
         expect(span.attributes[key]).toBeUndefined();
       }
