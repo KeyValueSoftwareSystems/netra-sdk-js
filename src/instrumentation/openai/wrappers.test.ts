@@ -17,6 +17,7 @@ import {
   setupTracing,
   startMockServer,
 } from "../../__fixtures__/llm-test-utils";
+import { NetraLogger } from "../../netraLogger";
 import { NetraOpenAIInstrumentor } from "./index";
 
 const PARAMS = {
@@ -57,6 +58,69 @@ const CHUNKS = [
   { data: "[DONE]" },
 ];
 
+/**
+ * The Decisions API ships in openai >= 7.30.0 and the dev dependency is 6.x, so
+ * this mirrors v7's `Decisions` resource: a `create` that POSTs to /decisions
+ * through the real client and returns its APIPromise.
+ */
+class StubDecisions {
+  constructor(private readonly _client: OpenAI) {}
+
+  create(body: Record<string, unknown>, options?: Record<string, unknown>) {
+    return (this._client as any).post("/decisions", { body, ...options });
+  }
+}
+
+type DecisionsClient = OpenAI & { decisions: StubDecisions };
+
+const QUESTIONS = [
+  { type: "predicate", name: "is_complaint", instructions: "The customer is complaining." },
+  {
+    type: "choice",
+    name: "team",
+    instructions: "Which team should handle this ticket?",
+    choices: [{ value: "billing" }, { value: "technical" }],
+  },
+];
+
+const DECISION = {
+  model: "gpt-decision-test",
+  answers: [
+    { type: "predicate", name: "is_complaint", probability: 0.97 },
+    {
+      type: "choice",
+      name: "team",
+      choice: "billing",
+      confidence: 0.9,
+      probabilities: [
+        { value: "billing", probability: 0.9 },
+        { value: "technical", probability: 0.1 },
+      ],
+    },
+  ],
+  usage: {
+    input_tokens: 40,
+    input_tokens_details: { cached_tokens: 8, cache_write_tokens: 0 },
+    output_tokens: 6,
+    output_tokens_details: { reasoning_tokens: 0 },
+    total_tokens: 46,
+  },
+};
+
+const DECISION_PARAMS = {
+  model: "gpt-decision-test",
+  input: "I was charged twice this month. Fix this today!",
+  questions: QUESTIONS,
+};
+
+/** Split a decision `input` attribute into its input entries and the questions its last entry holds. */
+function decisionInput(inputJson: unknown): { entries: any[]; questions: unknown } {
+  const all = JSON.parse(inputJson as string) as any[];
+  const questionsEntry = all[all.length - 1];
+  expect(questionsEntry.role).toBe("user");
+  return { entries: all.slice(0, -1), questions: JSON.parse(questionsEntry.content) };
+}
+
 async function collect(iterable: AsyncIterable<any>): Promise<any[]> {
   const out: any[] = [];
   for await (const item of iterable) out.push(item);
@@ -66,7 +130,7 @@ async function collect(iterable: AsyncIterable<any>): Promise<any[]> {
 describe("OpenAI instrumentation", () => {
   let tracing: ReturnType<typeof setupTracing>;
   let server: MockServer;
-  let client: OpenAI;
+  let client: DecisionsClient;
   let rejections: ReturnType<typeof captureUnhandledRejections>;
   const instrumentor = new NetraOpenAIInstrumentor();
 
@@ -74,12 +138,15 @@ describe("OpenAI instrumentation", () => {
     vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
     tracing = setupTracing();
     server = await startMockServer();
+    (OpenAI as any).Decisions = StubDecisions;
     await instrumentor.instrument({ tracerProvider: tracing.provider });
-    client = new OpenAI({ apiKey: "test", baseURL: `${server.url}/v1`, maxRetries: 0 });
+    client = new OpenAI({ apiKey: "test", baseURL: `${server.url}/v1`, maxRetries: 0 }) as DecisionsClient;
+    client.decisions = new StubDecisions(client);
   });
 
   afterAll(async () => {
     await instrumentor.uninstrument();
+    delete (OpenAI as any).Decisions;
     await server.close();
     await tracing.teardown();
     vi.unstubAllEnvs();
@@ -296,5 +363,163 @@ describe("OpenAI instrumentation", () => {
 
       expect(tracing.spans("openai.chat")).toHaveLength(2);
     });
+  });
+
+  describe("decisions", () => {
+    let requestPath: string | undefined;
+
+    beforeEach(() => {
+      requestPath = undefined;
+      server.handle((req, res) => {
+        requestPath = req.url;
+        sendJSON(res, 200, DECISION);
+      });
+    });
+
+    it("records a decision span with input, questions, answers and usage", async () => {
+      const decision = await client.decisions.create(DECISION_PARAMS);
+
+      expect(decision.answers[1].choice).toBe("billing");
+      expect(requestPath).toBe("/v1/decisions");
+
+      const [span] = tracing.spans("openai.decision");
+      expect(span.status.code).toBe(SpanStatusCode.OK);
+      expect(span.attributes["llm.request.type"]).toBe("decision");
+      expect(span.attributes["gen_ai.system"]).toBe("openai");
+      expect(span.attributes["gen_ai.request.model"]).toBe("gpt-decision-test");
+      expect(span.attributes["gen_ai.response.model"]).toBe("gpt-decision-test");
+      expect(span.attributes["gen_ai.usage.prompt_tokens"]).toBe(40);
+      expect(span.attributes["gen_ai.usage.completion_tokens"]).toBe(6);
+      expect(typeof span.attributes["llm.response.duration"]).toBe("number");
+
+      // The questions are the last `input` entry, after the input they are asked about.
+      const { entries, questions } = decisionInput(span.attributes["input"]);
+      expect(entries).toEqual([{ role: "user", content: DECISION_PARAMS.input }]);
+      expect(questions).toEqual(QUESTIONS);
+      expect(span.attributes["gen_ai.decision.questions"]).toBeUndefined();
+
+      const output = JSON.parse(span.attributes["output"] as string);
+      expect(output).toHaveLength(1);
+      expect(output[0].role).toBe("assistant");
+      expect(JSON.parse(output[0].content)).toEqual(DECISION.answers);
+
+      // Input and answers live only in `input` / `output`, not in per-message indexed keys.
+      const keys = Object.keys(span.attributes);
+      expect(keys.filter((k) => k.startsWith("gen_ai.prompt."))).toEqual([]);
+      expect(keys.filter((k) => k.startsWith("gen_ai.completion."))).toEqual([]);
+      expect(span.attributes["gen_ai.decision.answers"]).toBeUndefined();
+    });
+
+    it("records mixed input items, eliding inline image data", async () => {
+      await client.decisions.create({
+        ...DECISION_PARAMS,
+        input: [
+          { role: "developer", content: "Classify support tickets." },
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "See attached." },
+              { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgo=" },
+            ],
+          },
+          { type: "function_call", call_id: "call_1", name: "lookup_order", arguments: '{"id":7}' },
+          { type: "function_call_output", call_id: "call_1", output: "order 7: paid twice" },
+          { type: "custom_tool_call", call_id: "call_2", name: "grep", input: "refund" },
+          { type: "custom_tool_call_output", call_id: "call_2", output: "" },
+          { role: "user", content: "" },
+        ],
+      });
+
+      const [span] = tracing.spans("openai.decision");
+      const { entries, questions } = decisionInput(span.attributes["input"]);
+      expect(questions).toEqual(QUESTIONS);
+      expect(entries).toEqual([
+        { role: "developer", content: "Classify support tickets." },
+        {
+          role: "user",
+          content: JSON.stringify([
+            { type: "input_text", text: "See attached." },
+            { type: "input_image", image_url: "[image]" },
+          ]),
+        },
+        {
+          role: "assistant",
+          content: JSON.stringify({ name: "lookup_order", arguments: '{"id":7}' }),
+          tool_call_id: "call_1",
+        },
+        { role: "tool", content: "order 7: paid twice", tool_call_id: "call_1" },
+        {
+          role: "assistant",
+          content: JSON.stringify({ name: "grep", arguments: "refund" }),
+          tool_call_id: "call_2",
+        },
+      ]);
+    });
+
+    it("create().withResponse() returns the decision and the raw response", async () => {
+      const { data, response } = await client.decisions
+        .create(DECISION_PARAMS)
+        .withResponse();
+
+      expect(data.model).toBe("gpt-decision-test");
+      expect(response.status).toBe(200);
+      expect(tracing.spans("openai.decision")).toHaveLength(1);
+    });
+
+    it("records no content when content tracing is off", async () => {
+      vi.stubEnv("TRACELOOP_TRACE_CONTENT", "false");
+      try {
+        await client.decisions.create(DECISION_PARAMS);
+      } finally {
+        vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+      }
+
+      const [span] = tracing.spans("openai.decision");
+      expect(span.attributes["gen_ai.request.model"]).toBe("gpt-decision-test");
+      expect(span.attributes["gen_ai.usage.prompt_tokens"]).toBe(40);
+      for (const key of [
+        "input",
+        "output",
+        "gen_ai.decision.questions",
+      ]) {
+        expect(span.attributes[key]).toBeUndefined();
+      }
+    });
+
+    it("reaches the caller unchanged on error and is recorded on the span", async () => {
+      server.handle((_req, res) =>
+        sendJSON(res, 429, { error: { message: "Rate limited", type: "rate_limit" } }),
+      );
+
+      await expect(client.decisions.create(DECISION_PARAMS)).rejects.toBeInstanceOf(
+        OpenAI.RateLimitError,
+      );
+
+      const [span] = tracing.spans("openai.decision");
+      expect(span.status.code).toBe(SpanStatusCode.ERROR);
+      expect(span.events.some((e) => e.name === "exception")).toBe(true);
+    });
+  });
+});
+
+describe("OpenAI instrumentation without the Decisions API", () => {
+  it("skips decisions.create quietly on openai versions that lack it", async () => {
+    const errorSpy = vi.spyOn(NetraLogger, "error");
+    const tracing = setupTracing();
+    const instrumentor = new NetraOpenAIInstrumentor();
+    try {
+      expect((OpenAI as any).Decisions).toBeUndefined();
+      await instrumentor.instrument({ tracerProvider: tracing.provider });
+
+      expect(instrumentor.isInstrumented()).toBe(true);
+      const decisionErrors = errorSpy.mock.calls.filter((call) =>
+        String(call[0]).includes("decisions"),
+      );
+      expect(decisionErrors).toEqual([]);
+    } finally {
+      await instrumentor.uninstrument();
+      await tracing.teardown();
+      errorSpy.mockRestore();
+    }
   });
 });
