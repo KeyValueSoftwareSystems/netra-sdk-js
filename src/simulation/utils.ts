@@ -1,6 +1,12 @@
 import axios from "axios";
 import { createLimit, LimitFunction } from "../utils/concurrency-limit";
 import { NetraLogger } from "../netraLogger";
+import {
+    assertSafeDownloadUrl,
+    checkDownloadUrlSync,
+    MAX_DOWNLOAD_REDIRECTS,
+    maxDownloadBytes,
+} from "./download-guard";
 import { FileData, ProcessedFile } from "./models";
 import { BaseTask } from "./task";
 
@@ -89,10 +95,20 @@ async function _downloadSingleFile(
     signal?: AbortSignal,
 ): Promise<ProcessedFile> {
     try {
+        // Scheme, host and resolved addresses are checked first, and again
+        // for every redirect; size and redirect count are bounded (JS-SEC-017).
+        await assertSafeDownloadUrl(fileData.downloadUrl);
+        const maxBytes = maxDownloadBytes();
         const response = await axios.get(fileData.downloadUrl, {
             responseType: "arraybuffer",
             timeout: timeoutMs,
             signal,
+            maxRedirects: MAX_DOWNLOAD_REDIRECTS,
+            maxContentLength: maxBytes,
+            maxBodyLength: maxBytes,
+            beforeRedirect: (options: Record<string, any>) => {
+                checkDownloadUrlSync(String(options.href ?? `${options.protocol}//${options.hostname}${options.path ?? ""}`));
+            },
         });
 
         const encoded = Buffer.from(response.data).toString("base64");

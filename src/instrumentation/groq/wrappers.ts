@@ -6,6 +6,7 @@ import {
   modelAsDict,
   isPromise,
   shouldSuppressInstrumentation,
+  isValidChoiceIndex,
 } from "../utils";
 import {
   isAsyncIterable,
@@ -213,6 +214,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     if (Array.isArray(chunkChoices)) {
       chunkChoices.forEach((choice: any) => {
         const index = Number(choice.index || 0);
+        if (!isValidChoiceIndex(index)) return;
         this.ensureChoice(index);
 
         const delta = choice.delta || {};
@@ -244,7 +246,11 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
       this.completeResponse.usage = chunkDict.response.usage || {};
     }
 
-    this.span.addEvent("llm.content.completion.chunk");
+    // Per-chunk events only in debug mode, as for Anthropic and google-genai:
+    // past the event limit each one still allocates and shifts (JS-PERF-014).
+    if (NetraLogger.isDebugMode()) {
+      this.span.addEvent("llm.content.completion.chunk");
+    }
   }
 
   private ensureChoice(index: number): void {
@@ -299,6 +305,7 @@ class AsyncStreamCollector {
     if (Array.isArray(chunkChoices)) {
       chunkChoices.forEach((choice: any) => {
         const index = Number(choice.index || 0);
+        if (!isValidChoiceIndex(index)) return;
         this.ensureChoice(index);
         const delta = (choice.delta || {}) as Record<string, unknown>;
         if (typeof delta === "object" && delta.content) {
@@ -342,7 +349,11 @@ class AsyncStreamCollector {
         this.completeResponse.usage = usage;
       });
     }
-    this.span.addEvent("llm.content.completion.chunk");
+    // Per-chunk events only in debug mode, as for Anthropic and google-genai:
+    // past the event limit each one still allocates and shifts (JS-PERF-014).
+    if (NetraLogger.isDebugMode()) {
+      this.span.addEvent("llm.content.completion.chunk");
+    }
   }
 
   private ensureChoice(index: number): void {

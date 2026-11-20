@@ -10,6 +10,14 @@ import { NetraLogger } from "../netraLogger";
  * root span.
  */
 export class RootSpanProcessor implements SpanProcessor {
+  /**
+   * Upper bound on tracked roots. A root that never ends (a stream nobody
+   * reads, `Netra.startSpan()` without `end()`) would otherwise stay here for
+   * the life of the process (JS-MEM-005). Past the cap the oldest entry is
+   * dropped, which only costs that trace its root-level annotations.
+   */
+  static readonly MAX_TRACKED_ROOTS = 10_000;
+
   private static readonly _rootSpans = new Map<string, Span>();
 
   static getRootSpanByTraceId(traceId: string): Span | undefined {
@@ -62,6 +70,10 @@ export class RootSpanProcessor implements SpanProcessor {
       // setdefault: first span with no valid parent wins
       if (!RootSpanProcessor._rootSpans.has(ctx.traceId)) {
         RootSpanProcessor._rootSpans.set(ctx.traceId, span);
+        if (RootSpanProcessor._rootSpans.size > RootSpanProcessor.MAX_TRACKED_ROOTS) {
+          const oldest = RootSpanProcessor._rootSpans.keys().next().value;
+          if (oldest !== undefined) RootSpanProcessor._rootSpans.delete(oldest);
+        }
       }
     } catch (e) {
       NetraLogger.warn("RootSpanProcessor.onStart: unexpected error:", e);

@@ -186,7 +186,8 @@ describe("NetraLogger", () => {
       const server = await startServer([]);
       const closedUrl = server.url;
       await server.close(); // nothing listens on this port any more: ECONNREFUSED
-      const exporter = new TrialAwareOTLPExporter({ url: closedUrl });
+      // A short deadline leaves no room for a retry, so each export fails once.
+      const exporter = new TrialAwareOTLPExporter({ url: closedUrl, timeoutMillis: 500 });
 
       await exportOnce(exporter);
       await exportOnce(exporter);

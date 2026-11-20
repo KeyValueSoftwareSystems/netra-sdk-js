@@ -37,6 +37,7 @@ import {
   setGraphOutputAttributes,
   setLlmRequestAttributes,
   setToolAttributes,
+  stringifyForSpan,
 } from "./utils";
 
 type AnyFunc = (...args: any[]) => any;
@@ -534,7 +535,7 @@ export class LanggraphWrapper {
           if (status === "ok" && traceContent) {
             span.setAttribute(
               NetraLanggraphAttributes.entityOutput,
-              JSON.stringify({ outputs: output }),
+              stringifyForSpan({ outputs: output }),
             );
           }
         } finally {

@@ -8,6 +8,7 @@ import {
 } from "../utils/pattern-matching";
 import {
   addBlockedTraceId,
+  clearBlockedTraceIds,
   findRootSpansBlocked,
   getTraceId,
   isTraceIdBlocked,
@@ -153,6 +154,7 @@ export class FilteringSpanExporter implements SpanExporter {
   shutdown(): Promise<void> {
     this.rememberedBlockedParentMap.clear();
     this.localPatternCache.clear();
+    clearBlockedTraceIds();
     return this.exporter.shutdown();
   }
 

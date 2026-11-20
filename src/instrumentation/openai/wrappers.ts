@@ -7,11 +7,13 @@ import {
   context,
   trace,
 } from "@opentelemetry/api";
+import { NetraLogger } from "../../netraLogger";
 import {
   defineHidden,
   isPromise,
   modelAsDict,
   shouldSuppressInstrumentation,
+  isValidChoiceIndex,
 } from "../utils";
 import {
   isAsyncIterable,
@@ -102,6 +104,7 @@ abstract class BaseStreamHandler {
     if (Array.isArray(chunkChoices)) {
       for (const choice of chunkChoices as Array<Record<string, unknown>>) {
         const index = Number(choice.index ?? 0);
+        if (!isValidChoiceIndex(index)) continue;
         this.ensureChoice(index);
         const delta = (choice.delta ?? {}) as Record<string, unknown>;
         if (delta.content) {
@@ -146,7 +149,11 @@ abstract class BaseStreamHandler {
       this.completeResponse.usage = responseChunk.usage ?? {};
     }
 
-    this.span.addEvent("llm.content.completion.chunk");
+    // Per-chunk events only in debug mode, as for Anthropic and google-genai:
+    // past the event limit each one still allocates and shifts (JS-PERF-014).
+    if (NetraLogger.isDebugMode()) {
+      this.span.addEvent("llm.content.completion.chunk");
+    }
   }
 
   protected ensureChoice(index: number): void {

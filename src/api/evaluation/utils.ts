@@ -2,21 +2,19 @@
  * Evaluation Utility Functions
  */
 
-import { propagation, context as otelContext } from "@opentelemetry/api";
 import { NetraLogger } from "../../netraLogger";
+import { getSessionValue } from "../../processors/session-span-processor";
 import { DatasetRecord, EvaluatorConfig, ItemContext } from "./models";
 
 /**
- * Get the session ID from the OpenTelemetry baggage
+ * The session id the app set with `Netra.setSessionId()` or
+ * `Netra.withSession()` for the current async context. Session values are no
+ * longer kept in W3C baggage, where a caller could forge them (JS-SEC-001),
+ * so they are read from the SDK's private context value.
  */
 export function getSessionIdFromBaggage(): string | undefined {
-    const ctx = otelContext.active();
-    const baggageObj = propagation.getBaggage(ctx);
-    const sessionId = baggageObj?.getEntry("session_id")?.value;
-    if (typeof sessionId === "string" && sessionId) {
-        return sessionId;
-    }
-    return undefined;
+    const sessionId = getSessionValue("session_id");
+    return typeof sessionId === "string" && sessionId ? sessionId : undefined;
 }
 
 /**

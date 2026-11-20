@@ -2,11 +2,37 @@
  * Configuration management for Netra SDK
  */
 
+import { setTraceContentEnabled } from "./instrumentation/utils";
 import { NetraLogger } from "./netraLogger";
 import { SDK_VERSION } from "./version";
 
 // The only header the Netra backend's API-key guard reads. Lowercase, for case-insensitive matching.
 const NETRA_API_KEY_HEADER = "x-api-key";
+const NETRA_HOST_SUFFIX = "getnetra.ai";
+
+/**
+ * True when `endpoint` is a Netra-hosted URL (`getnetra.ai` or a subdomain).
+ * Decided on the parsed hostname: a substring test on the whole URL would
+ * also match `https://collector.example/getnetra` (JS-SEC-006).
+ */
+export function isNetraHost(endpoint: string | undefined): boolean {
+  if (!endpoint) return false;
+  try {
+    const host = new URL(endpoint.trim()).hostname.toLowerCase();
+    return host === NETRA_HOST_SUFFIX || host.endsWith(`.${NETRA_HOST_SUFFIX}`);
+  } catch {
+    return false;
+  }
+}
+
+/** decodeURIComponent that returns the input unchanged on malformed escapes (JS-PERF-008). */
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 export interface NetraConfig {
   appName?: string;
@@ -163,6 +189,8 @@ export class Config {
 
   appName: string;
   otlpEndpoint?: string;
+  /** Which variable `otlpEndpoint` came from. */
+  otlpEndpointSource?: "NETRA_OTLP_ENDPOINT" | "OTEL_EXPORTER_OTLP_ENDPOINT";
   apiKey?: string;
   headers: Record<string, string>;
   disableBatch: boolean;
@@ -176,7 +204,7 @@ export class Config {
   constructor(config: NetraConfig = {}) {
     this.appName = this._getAppName(config.appName);
     this.otlpEndpoint = this._getOtlpEndpoint();
-    this.apiKey = process.env.NETRA_API_KEY;
+    this.apiKey = this._getApiKey();
     this.headers = this._parseHeaders(config.headers);
     this.disableBatch = this._getBoolConfig(
       config.disableBatch,
@@ -206,7 +234,10 @@ export class Config {
 
     this._validateApiKey();
     this._setupAuthentication();
-    this._setTraceContentEnv();
+    // Kept in-process, not in TRACELOOP_TRACE_CONTENT: overwriting that shared
+    // env var changed other tracing tools' behaviour and leaked into child
+    // processes (JS-SEC-007).
+    setTraceContentEnabled(this.traceContent);
   }
 
   private _getAppName(appName?: string): string {
@@ -220,9 +251,41 @@ export class Config {
   }
 
   private _getOtlpEndpoint(): string | undefined {
-    return (
-      process.env.NETRA_OTLP_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
-    );
+    if (process.env.NETRA_OTLP_ENDPOINT) {
+      this.otlpEndpointSource = "NETRA_OTLP_ENDPOINT";
+      return process.env.NETRA_OTLP_ENDPOINT;
+    }
+    if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+      this.otlpEndpointSource = "OTEL_EXPORTER_OTLP_ENDPOINT";
+      return process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    }
+    return undefined;
+  }
+
+  /**
+   * NETRA_API_KEY, unless the endpoint only came from the generic
+   * OTEL_EXPORTER_OTLP_ENDPOINT and is not a Netra host. That variable usually
+   * points at another vendor or a shared collector, which must not receive a
+   * working Netra key (JS-SEC-006). An explicit NETRA_OTLP_ENDPOINT, including
+   * a self-hosted Netra, keeps receiving it.
+   */
+  private _getApiKey(): string | undefined {
+    const key = process.env.NETRA_API_KEY;
+    if (
+      key &&
+      this.otlpEndpointSource === "OTEL_EXPORTER_OTLP_ENDPOINT" &&
+      !isNetraHost(this.otlpEndpoint)
+    ) {
+      let host = "that endpoint";
+      try { host = new URL(String(this.otlpEndpoint).trim()).host; } catch { /* keep generic */ }
+      NetraLogger.notice(
+        "warn",
+        `NETRA_API_KEY is not sent to ${host}: it comes from OTEL_EXPORTER_OTLP_ENDPOINT and is not a Netra endpoint. ` +
+          "Fix: set NETRA_OTLP_ENDPOINT to https://api.getnetra.ai/telemetry (or your Netra endpoint).",
+      );
+      return undefined;
+    }
+    return key;
   }
 
   private _parseHeaders(
@@ -240,7 +303,9 @@ export class Config {
       return this._parseEnvHeaders(headers);
     }
 
-    return headers;
+    // A copy: authentication headers are added below, and must not be written
+    // into the object the application passed in (JS-SEC-022).
+    return { ...headers };
   }
 
   private _parseEnvHeaders(headers: string): Record<string, string> {
@@ -261,11 +326,7 @@ export class Config {
    * (through `headers` or NETRA_HEADERS); header names match case-insensitively.
    */
   private _validateApiKey(): void {
-    if (
-      !this.otlpEndpoint ||
-      !this.otlpEndpoint.toLowerCase().includes("getnetra") ||
-      this.apiKey
-    ) {
+    if (!this.otlpEndpoint || !isNetraHost(this.otlpEndpoint) || this.apiKey) {
       return;
     }
     const hasApiKeyHeader = Object.keys(this.headers).some(
@@ -285,7 +346,7 @@ export class Config {
       return;
     }
 
-    const isNetra = this.otlpEndpoint.toLowerCase().includes("getnetra");
+    const isNetra = isNetraHost(this.otlpEndpoint);
     const authKey = isNetra ? "x-api-key" : "Authorization";
     const authValue = isNetra ? this.apiKey : `Bearer ${this.apiKey}`;
 
@@ -331,10 +392,6 @@ export class Config {
     }
   }
 
-  private _setTraceContentEnv(): void {
-    process.env.TRACELOOP_TRACE_CONTENT = this.traceContent ? "true" : "false";
-  }
-
   /**
    * Format the OTLP endpoint URL by appending /v1/traces if not already present
    */
@@ -357,34 +414,24 @@ export class Config {
   }
 
   /**
-   * Set Traceloop environment variables based on Netra config.
-   * This ensures the Traceloop SDK picks up our configuration.
+   * Prepare the environment for Traceloop's `initialize()` and return a
+   * function that restores it. Call the restore function right after
+   * `initialize()` returns.
+   *
+   * Only OTEL_RESOURCE_ATTRIBUTES is set: Traceloop's NodeSDK reads it while
+   * starting, which is how service.name, deployment.environment and custom
+   * resource attributes reach the Resource. Restoring it afterwards keeps it
+   * out of child processes. The endpoint, API key and headers are passed to
+   * Traceloop directly and are no longer copied into TRACELOOP_* variables,
+   * which every child process inherited (JS-SEC-007).
    */
-  public setTraceloopEnv(): void {
-    // Set TRACELOOP_BASE_URL so Traceloop SDK uses our endpoint
-    if (this.otlpEndpoint && !process.env.TRACELOOP_BASE_URL) {
-      process.env.TRACELOOP_BASE_URL = this.otlpEndpoint;
-    }
-
-    // Set TRACELOOP_API_KEY if we have one
-    if (this.apiKey && !process.env.TRACELOOP_API_KEY) {
-      process.env.TRACELOOP_API_KEY = this.apiKey;
-    }
-
-    // Set headers for Traceloop
-    if (
-      Object.keys(this.headers).length > 0 &&
-      !process.env.TRACELOOP_HEADERS
-    ) {
-      const headerStr = Object.entries(this.headers)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(",");
-      process.env.TRACELOOP_HEADERS = headerStr;
-    }
-
-    // Set OTEL_RESOURCE_ATTRIBUTES so the TracerProvider Resource carries
-    // service.name and deployment.environment attributes.
+  public setTraceloopEnv(): () => void {
+    const previous = process.env.OTEL_RESOURCE_ATTRIBUTES;
     this._setResourceAttributesEnv();
+    return () => {
+      if (previous === undefined) delete process.env.OTEL_RESOURCE_ATTRIBUTES;
+      else process.env.OTEL_RESOURCE_ATTRIBUTES = previous;
+    };
   }
 
   private _setResourceAttributesEnv(): void {
@@ -405,9 +452,9 @@ export class Config {
       for (const pair of existing.split(",")) {
         const eqIdx = pair.indexOf("=");
         if (eqIdx <= 0) continue;
-        const key = decodeURIComponent(pair.slice(0, eqIdx).trim());
+        const key = safeDecodeURIComponent(pair.slice(0, eqIdx).trim());
         if (key) {
-          attrs[key] = decodeURIComponent(pair.slice(eqIdx + 1).trim());
+          attrs[key] = safeDecodeURIComponent(pair.slice(eqIdx + 1).trim());
         }
       }
     }

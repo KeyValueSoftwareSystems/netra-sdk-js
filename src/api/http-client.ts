@@ -19,6 +19,37 @@ export interface HttpResponse<T = any> {
   ok: boolean;
 }
 
+const MAX_GET_ATTEMPTS = 3;
+const RETRY_BASE_MS = 500;
+const MAX_REDIRECTS = 3;
+/** API responses larger than this are rejected rather than buffered. */
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+/** Read a response body as text, failing once it passes `maxBytes`. */
+async function readBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(`response of ${declared} bytes exceeds the ${maxBytes}-byte limit`);
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`response exceeds the ${maxBytes}-byte limit`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export class NetraHttpClient {
   private baseUrl: string;
   private headers: Record<string, string>;
@@ -120,26 +151,7 @@ export class NetraHttpClient {
     }
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(
-        () => controller.abort(),
-        this.timeout * 1000
-      );
-
-      const response = await fetch(url.toString(), {
-        method: "GET",
-        headers: injectTraceContextHeaders(this.headers),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      const data = await response.json();
-      return {
-        data,
-        status: response.status,
-        ok: response.ok,
-      };
+      return await this.request<T>("GET", url);
     } catch (error) {
       NetraLogger.notice("error", `netra: GET ${path} failed:`, error);
       return { data: {} as T, status: 0, ok: false };
@@ -161,31 +173,76 @@ export class NetraHttpClient {
     const url = new URL(path, this.baseUrl);
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(
-        () => controller.abort(),
-        this.timeout * 1000
-      );
-
-      const response = await fetch(url.toString(), {
-        method: "POST",
-        headers: injectTraceContextHeaders(this.headers),
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      const data = await response.json();
-      return {
-        data,
-        status: response.status,
-        ok: response.ok,
-      };
+      return await this.request<T>("POST", url, body ? JSON.stringify(body) : undefined);
     } catch (error) {
       NetraLogger.notice("error", `netra: POST ${path} failed:`, error);
       return { data: {} as T, status: 0, ok: false };
     }
+  }
+
+  /**
+   * One API call within `this.timeout` seconds, body read included
+   * (JS-PERF-009). GETs are retried on network errors, 429 and 502/503/504;
+   * POSTs are not, since they may not be idempotent. Redirects are followed
+   * only within the API's own origin, so `x-api-key` never reaches another
+   * host (JS-SEC-017).
+   */
+  private async request<T>(method: "GET" | "POST", url: URL, body?: string): Promise<HttpResponse<T>> {
+    const deadline = Date.now() + this.timeout * 1000;
+    const maxAttempts = method === "GET" ? MAX_GET_ATTEMPTS : 1;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), remaining);
+      try {
+        const response = await this.fetchSameOrigin(url, {
+          method,
+          headers: injectTraceContextHeaders(this.headers),
+          body,
+          signal: controller.signal,
+        });
+        const text = await readBodyCapped(response, MAX_RESPONSE_BYTES);
+        if (method === "GET" && RETRYABLE_STATUSES.has(response.status) && attempt < maxAttempts) {
+          lastError = new Error(`HTTP ${response.status}`);
+        } else {
+          return {
+            data: (text ? JSON.parse(text) : {}) as T,
+            status: response.status,
+            ok: response.ok,
+          };
+        }
+      } catch (error) {
+        lastError = error;
+        if (controller.signal.aborted || attempt >= maxAttempts) break;
+      } finally {
+        // Always cleared: a timer left armed after a failed request kept the
+        // process alive for up to the full timeout.
+        clearTimeout(timeoutId);
+      }
+      const wait = Math.round(RETRY_BASE_MS * 2 ** (attempt - 1) * (0.8 + Math.random() * 0.4));
+      if (Date.now() + wait >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+    throw lastError ?? new Error(`timed out after ${this.timeout}s`);
+  }
+
+  private async fetchSameOrigin(url: URL, init: RequestInit): Promise<Response> {
+    let current = url;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const response = await fetch(current.toString(), { ...init, redirect: "manual" });
+      if (response.status < 300 || response.status >= 400) return response;
+      const location = response.headers.get("location");
+      if (!location) return response;
+      const next = new URL(location, current);
+      if (next.origin !== current.origin) {
+        throw new Error(`refusing to follow a redirect to another origin (${next.origin})`);
+      }
+      current = next;
+    }
+    throw new Error("too many redirects");
   }
 
   /**

@@ -6,7 +6,7 @@ import { context, trace, Span, SpanStatusCode } from "@opentelemetry/api";
 import { Config } from "./config";
 import { isTraceContentEnabled } from "./instrumentation/utils";
 import { NetraLogger } from "./netraLogger";
-import { SessionManager } from "./session-manager";
+import { runWithEntity, SessionManager } from "./session-manager";
 import { SpanType, DecoratorOptions } from "./types";
 import { wrapResponse } from "./utils/response-handler";
 import { safeStringify } from "./utils/serialization";
@@ -39,11 +39,18 @@ function spanHasOutput(span: Span): boolean {
   return false;
 }
 
+/**
+ * Serialize at most twice the attribute limit: enough for the serialization
+ * layer to cut the value as valid JSON, without stringifying huge arguments
+ * or results in full first (JS-MEM-007, JS-PERF-012).
+ */
+const serializeBudget = (): number => Config.SPAN_ATTRIBUTE_MAX_SIZE * 2;
+
 function addInputAttributes(span: Span, args: any[], entityType: string): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
   // traceContent: false must keep function arguments out of the trace (JS-SEC-004).
   if (args.length > 0 && isTraceContentEnabled()) {
-    span.setAttribute("input", safeStringify(args));
+    span.setAttribute("input", safeStringify(args, { maxLength: serializeBudget() }));
   }
 }
 
@@ -51,7 +58,7 @@ function addOutputAttributes(span: Span, result: any): void {
   // Skip if the user already set output explicitly inside the decorated function
   if (result === undefined || !isTraceContentEnabled() || spanHasOutput(span)) return;
   try {
-    span.setAttribute("output", safeStringify(result));
+    span.setAttribute("output", safeStringify(result, { maxLength: serializeBudget() }));
   } catch (e) {
     span.setAttribute("output_error", String(e));
   }
@@ -97,14 +104,14 @@ function createFunctionWrapper<T extends AnyFunction>(
   const cleanup = (span: Span) => {
     span.end();
     SessionManager.unregisterSpan(spanName, span);
-    SessionManager.popEntity(entityType);
   };
 
   const wrapperFn = isAsync
     ? async function (this: any, ...args: any[]) {
-        SessionManager.pushEntity(entityType, spanName);
         const tracer = trace.getTracer(moduleName);
-        return tracer.startActiveSpan(spanName, async (span) => {
+        // Each call gets its own entity scope, so concurrent calls cannot see
+        // or pop each other's workflow/agent/task names (JS-SEC-018).
+        return runWithEntity(entityType, spanName, () => tracer.startActiveSpan(spanName, async (span) => {
           try {
             initSpan(span);
             addInputAttributes(span, args, entityType);
@@ -121,12 +128,11 @@ function createFunctionWrapper<T extends AnyFunction>(
             cleanup(span);
             throw e;
           }
-        });
+        }));
       }
     : function (this: any, ...args: any[]) {
-        SessionManager.pushEntity(entityType, spanName);
         const tracer = trace.getTracer(moduleName);
-        return tracer.startActiveSpan(spanName, (span) => {
+        return runWithEntity(entityType, spanName, () => tracer.startActiveSpan(spanName, (span) => {
           try {
             initSpan(span);
             addInputAttributes(span, args, entityType);
@@ -143,7 +149,7 @@ function createFunctionWrapper<T extends AnyFunction>(
             cleanup(span);
             throw e;
           }
-        });
+        }));
       };
   return wrapperFn as T;
 }

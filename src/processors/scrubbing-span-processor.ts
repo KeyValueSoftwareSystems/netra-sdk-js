@@ -29,8 +29,9 @@ const SENSITIVE_PATTERNS: Record<string, RegExp> = {
       "|(?:sk-[A-Za-z0-9]{16,})", // sk-... tokens
     "g",
   ),
-  // Email addresses
-  email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/gi,
+  // Email addresses. Every repeat is bounded and the domain is matched label
+  // by label, so input like "a.a.a.…" cannot backtrack quadratically (JS-SEC-009).
+  email: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}/g,
   // Phone numbers (US format)
   phone: /(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}/g,
   // Credit cards (Visa, Mastercard, Amex, Discover)
@@ -49,41 +50,35 @@ const SENSITIVE_PATTERNS: Record<string, RegExp> = {
 // Generic pattern for long digit sequences (credit/debit cards)
 const LONG_DIGIT_PATTERN = /(?<!\d)\d{13,19}(?!\d)/g;
 
-// Sensitive attribute keys that should have their values scrubbed
-const SENSITIVE_KEYS = new Set([
+// Attribute-name parts whose values are scrubbed. Matched against whole parts
+// of the name (split on non-alphanumerics), not as substrings: substring
+// matching on "key" and "span" also scrubbed keys such as `netra.span.type`
+// (JS-SEC-021).
+const SENSITIVE_KEY_PARTS = new Set([
   "password",
   "passwd",
   "pwd",
   "secret",
-  "key",
-  "api_key",
   "auth",
   "authorization",
   "bearer",
   "credential",
-  "private_key",
-  "access_token",
-  "refresh_token",
-  "session_token",
-  "x-api-key",
-  "x-auth-token",
+  "credentials",
   "cookie",
-  "set-cookie",
-  "span",
 ]);
+
+// Multi-part sensitive names, matched as whole parts with any separator.
+const SENSITIVE_KEY_PHRASES =
+  /(?:^|[^a-z0-9])(?:api[-_]?key|apikey|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|id[-_]?token|x[-_]api[-_]key|x[-_]auth[-_]token|set[-_]cookie|client[-_]?secret)(?:$|[^a-z0-9])/;
 
 const SCRUB_REPLACEMENT = "[SCRUBBED]";
 
 type SetAttributeFn = (key: string, value: AttributeValue) => Span;
 
-function isSensitiveKey(key: string): boolean {
+export function isSensitiveKey(key: string): boolean {
   const keyLower = key.toLowerCase();
-  for (const sensitiveKey of SENSITIVE_KEYS) {
-    if (keyLower.includes(sensitiveKey)) {
-      return true;
-    }
-  }
-  return false;
+  if (SENSITIVE_KEY_PHRASES.test(keyLower)) return true;
+  return keyLower.split(/[^a-z0-9]+/).some((part) => SENSITIVE_KEY_PARTS.has(part));
 }
 
 function scrubStringValue(value: string): string {
@@ -92,14 +87,11 @@ function scrubStringValue(value: string): string {
   // Early catch-all for contiguous 13-19 digit sequences (credit/debit cards)
   scrubbed = scrubbed.replace(LONG_DIGIT_PATTERN, SCRUB_REPLACEMENT);
 
-  // Apply all sensitive patterns
+  // Apply all sensitive patterns (one replace pass each; a separate test()
+  // pass doubled the work)
   for (const pattern of Object.values(SENSITIVE_PATTERNS)) {
-    // Reset lastIndex for global patterns
     pattern.lastIndex = 0;
-    if (pattern.test(scrubbed)) {
-      pattern.lastIndex = 0;
-      scrubbed = scrubbed.replace(pattern, SCRUB_REPLACEMENT);
-    }
+    scrubbed = scrubbed.replace(pattern, SCRUB_REPLACEMENT);
   }
 
   return scrubbed;
@@ -140,12 +132,74 @@ function scrubValue(key: string, value: AttributeValue): AttributeValue {
   return scrubAny(key, value) as AttributeValue;
 }
 
+function scrubAttributes(attrs: unknown): unknown {
+  if (!attrs || typeof attrs !== "object" || Array.isArray(attrs)) return attrs;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(attrs as Record<string, unknown>)) {
+    out[k] = v === undefined ? v : scrubValue(k, v as AttributeValue);
+  }
+  return out;
+}
+
 export class ScrubbingSpanProcessor implements SpanProcessor {
   onStart(span: Span, _parentContext: Context): void {
     try {
       this.wrapSetAttribute(span);
+      this.wrapOtherWriters(span);
+      this.scrubInitialState(span);
     } catch (e) {
       NetraLogger.error("ScrubbingSpanProcessor.onStart error:", e);
+    }
+  }
+
+  /**
+   * Attributes passed to startSpan() and the span name are set before
+   * onStart, so the setAttribute wrapper never saw them (JS-SEC-021).
+   */
+  private scrubInitialState(span: Span): void {
+    const attrs = (span as any).attributes;
+    if (attrs && typeof attrs === "object") {
+      for (const [k, v] of Object.entries(attrs)) {
+        if (v === undefined) continue;
+        const scrubbed = scrubValue(k, v as AttributeValue);
+        if (scrubbed !== v) span.setAttribute(k, scrubbed);
+      }
+    }
+    const name = (span as any).name;
+    if (typeof name === "string") {
+      const scrubbedName = scrubStringValue(name);
+      if (scrubbedName !== name) span.updateName(scrubbedName);
+    }
+  }
+
+  /**
+   * Events (including the exception event recordException adds), status
+   * messages and renamed spans are scrubbed too (JS-SEC-021).
+   */
+  private wrapOtherWriters(span: Span): void {
+    const s = span as any;
+    const addEvent = s.addEvent?.bind(span);
+    if (addEvent) {
+      s.addEvent = (name: string, attributesOrTime?: unknown, time?: unknown) => {
+        try {
+          return addEvent(name, scrubAttributes(attributesOrTime), time);
+        } catch {
+          return addEvent(name, attributesOrTime, time);
+        }
+      };
+    }
+    const setStatus = s.setStatus?.bind(span);
+    if (setStatus) {
+      s.setStatus = (status: { code: number; message?: string }) =>
+        setStatus(
+          status && typeof status.message === "string"
+            ? { ...status, message: scrubStringValue(status.message) }
+            : status,
+        );
+    }
+    const updateName = s.updateName?.bind(span);
+    if (updateName) {
+      s.updateName = (name: string) => updateName(typeof name === "string" ? scrubStringValue(name) : name);
     }
   }
 

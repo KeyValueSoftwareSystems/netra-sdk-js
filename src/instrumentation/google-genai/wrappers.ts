@@ -25,6 +25,7 @@ import {
   createSuppressedContext,
   modelAsDict,
   shouldSuppressInstrumentation,
+  isTraceContentEnabled,
 } from "../utils";
 import { GoogleGenAIRequestType, SPAN_NAMES } from "./types";
 import {
@@ -56,7 +57,9 @@ function buildParams(args: any[], self: Record<string, unknown>): Record<string,
   // Chat.getHistory(true) returns the internal history array including
   // the pending user message.  Wrapped in try/catch in case the SDK
   // changes the method signature or it has unexpected side-effects.
-  try {
+  // Only read when content is traced: it may copy the whole history and is
+  // used for nothing else (JS-PERF-013).
+  if (isTraceContentEnabled()) try {
     const history =
       typeof (self as any).getHistory === "function"
         ? (self as any).getHistory(true)

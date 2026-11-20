@@ -167,6 +167,15 @@ async getSessionStats(
         break;
       }
 
+      // A page that claims more without a new cursor would request the same
+      // page again forever (JS-PERF-011).
+      if (!result.nextCursor || result.nextCursor === cursor) {
+        NetraLogger.warn(
+          "netra.dashboard: session stats reported more pages without a new cursor; stopping",
+        );
+        break;
+      }
+
       cursor = result.nextCursor;
     }
   }

@@ -43,6 +43,15 @@ export interface SimulationOptions {
 /**
  * Public API for running multi-turn conversation simulations.
  */
+
+const DEFAULT_MAX_CONVERSATION_TURNS = 100;
+
+/** Most turns one simulated conversation may take (NETRA_SIMULATION_MAX_TURNS). */
+function maxConversationTurns(): number {
+    const value = Number(process.env.NETRA_SIMULATION_MAX_TURNS);
+    return Number.isInteger(value) && value > 0 ? value : DEFAULT_MAX_CONVERSATION_TURNS;
+}
+
 export class Simulation {
     private _config: Config;
     private _client: SimulationHttpClient;
@@ -435,8 +444,19 @@ export class Simulation {
         let turnId = initialTurnId;
         let sessionId: string | null = null;
         let rawFiles: FileData[] = initialFiles ?? [];
+        const maxTurns = maxConversationTurns();
 
-        while (true) {
+        for (let turn = 1; ; turn++) {
+            // The backend decides when a conversation ends; this bounds a
+            // conversation it never stops (JS-PERF-011).
+            if (turn > maxTurns) {
+                const errorMsg = `Conversation exceeded ${maxTurns} turns (NETRA_SIMULATION_MAX_TURNS)`;
+                NetraLogger.notice("error", `${LOG_PREFIX}: ${errorMsg}, run_item_id=${runItemId}`);
+                await this._client.reportFailure(runId, runItemId, errorMsg);
+                const itemResult: ConversationResult = { runItemId, success: false, error: errorMsg, turnId };
+                await this._runAfterHooks(runId, runItemId, datasetItemId, hooks, itemResult as any, setupContext);
+                return itemResult;
+            }
             const span = new SpanWrapper(
                 SPAN_NAME,
                 { [Config.TRACE_ORIGIN_KEY]: Config.TRACE_ORIGIN_EVALUATION },
@@ -488,8 +508,11 @@ export class Simulation {
                     return itemResult;
                 }
 
-                message = response.nextUserMessage!;
-                turnId = response.nextTurnId!;
+                if (!response.nextTurnId || response.nextUserMessage === undefined || response.nextUserMessage === null) {
+                    throw new Error("Conversation response has no next turn and did not stop");
+                }
+                message = response.nextUserMessage;
+                turnId = response.nextTurnId;
                 rawFiles = response.nextFiles || [];
             } catch (error) {
                 const errorMsg = error instanceof Error ? error.message : String(error);

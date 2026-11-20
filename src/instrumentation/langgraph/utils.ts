@@ -2,6 +2,16 @@ import { Span } from "@opentelemetry/api";
 import type { ChainValues } from "@langchain/core/utils/types";
 import { SpanAttributes } from "../span-attributes";
 import { isTraceContentEnabled } from "../utils";
+import { Config } from "../../config";
+import { safeStringify } from "../../utils/serialization";
+
+/**
+ * Never throws (circular or BigInt graph state used to fail the app's call,
+ * JS-PERF-005) and stops after twice the attribute limit (JS-PERF-012).
+ */
+export function stringifyForSpan(value: unknown): string {
+  return safeStringify(value, { maxLength: Config.SPAN_ATTRIBUTE_MAX_SIZE * 2 });
+}
 
 export const NetraLanggraphAttributes = {
   spanType: "netra.span.type",
@@ -25,7 +35,7 @@ export function setGraphInputAttributes(
   if (!isTraceContentEnabled()) return;
   span.setAttribute(
     NetraLanggraphAttributes.entityInput,
-    JSON.stringify({ inputs }),
+    stringifyForSpan({ inputs }),
   );
 }
 
@@ -36,7 +46,7 @@ export function setGraphOutputAttributes(
   if (!isTraceContentEnabled()) return;
   span.setAttribute(
     NetraLanggraphAttributes.entityOutput,
-    JSON.stringify({ outputs }),
+    stringifyForSpan({ outputs }),
   );
 }
 
@@ -87,7 +97,7 @@ export function setChainInputAttributes(
   }
   span.setAttribute(
     NetraLanggraphAttributes.entityInput,
-    JSON.stringify(entityInputs),
+    stringifyForSpan(entityInputs),
   );
 }
 
@@ -106,7 +116,7 @@ export function setChainOutputAttributes(
   }
   span.setAttribute(
     NetraLanggraphAttributes.entityOutput,
-    JSON.stringify(entityOutputs),
+    stringifyForSpan(entityOutputs),
   );
 }
 
@@ -130,7 +140,7 @@ export function setToolAttributes(
   }
 
   const entityInputs: Record<string, any> = {
-    input_str: JSON.stringify(input),
+    input_str: stringifyForSpan(input),
     metadata: filteredMetadata,
     tags: filteredTags,
   };
@@ -142,11 +152,11 @@ export function setToolAttributes(
 
   span.setAttribute(
     NetraLanggraphAttributes.entityInput,
-    JSON.stringify(entityInputs),
+    stringifyForSpan(entityInputs),
   );
   span.setAttribute(
     NetraLanggraphAttributes.entityOutput,
-    JSON.stringify(entityOutputs),
+    stringifyForSpan(entityOutputs),
   );
 }
 

@@ -1,5 +1,6 @@
 import { AttributeValue, Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { Config } from "../config";
 import { isTraceContentEnabled } from "../instrumentation/utils";
 import { NetraLogger } from "../netraLogger";
 
@@ -23,7 +24,19 @@ const NETRA_ROOT_OUTPUT = "netra.root.output";
 const NETRA_ENTITY_INPUT = "netra.entity.input";
 const NETRA_ENTITY_OUTPUT = "netra.entity.output";
 
-const MAX_PARSE_LEN = 1_000_000;
+/**
+ * Longest entity input/output JSON parsed to extract `inputs`/`outputs`.
+ * Larger values are kept as-is and cut by the serialization layer, instead of
+ * being parsed and re-stringified in full (JS-PERF-012).
+ */
+const maxParseLen = (): number => Config.SPAN_ATTRIBUTE_MAX_SIZE * 2;
+
+/** One prompt/completion field, cut to the attribute size limit (JS-MEM-006). */
+function capField(value: AttributeValue): string {
+  const str = String(value);
+  const max = Config.SPAN_ATTRIBUTE_MAX_SIZE;
+  return str.length > max ? str.slice(0, max) : str;
+}
 
 /**
  * Keys that carry prompts, completions, function I/O or other user content.
@@ -79,7 +92,7 @@ function buildMessages(indexMap: Map<number, Record<string, string>>): string {
 function extractTraceloopInput(raw: AttributeValue): string {
   try {
     const str = String(raw);
-    if (typeof raw === "string" && str.length > MAX_PARSE_LEN) return str;
+    if (typeof raw === "string" && str.length > maxParseLen()) return str;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     const payload =
       parsed && typeof parsed === "object" && "inputs" in parsed
@@ -94,7 +107,7 @@ function extractTraceloopInput(raw: AttributeValue): string {
 function extractTraceloopOutput(raw: AttributeValue): string {
   try {
     const str = String(raw);
-    if (typeof raw === "string" && str.length > MAX_PARSE_LEN) return str;
+    if (typeof raw === "string" && str.length > maxParseLen()) return str;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     const payload =
       parsed && typeof parsed === "object" && "outputs" in parsed
@@ -173,6 +186,45 @@ export class SpanIOProcessor implements SpanProcessor {
     const outputIsEmpty = (): boolean =>
       isEmpty(((span as any).attributes ?? {})["output"]);
 
+    // input/output are rebuilt from the accumulated messages once per burst
+    // of writes (a microtask later, or at end()), not after every message:
+    // rebuilding on each write was quadratic in the number of messages
+    // (JS-PERF-002).
+    let inputDirty = false;
+    let outputDirty = false;
+    let flushScheduled = false;
+    const flush = (): void => {
+      flushScheduled = false;
+      try {
+        if (inputDirty && prompts) {
+          inputDirty = false;
+          if (!inputLocked() && (inputIsEmpty() || genAiOwnsInput)) {
+            original("input", buildMessages(prompts));
+            genAiOwnsInput = true;
+          }
+        }
+        if (outputDirty && completions) {
+          outputDirty = false;
+          if (!outputLocked() && (outputIsEmpty() || genAiOwnsOutput)) {
+            original("output", buildMessages(completions));
+            genAiOwnsOutput = true;
+          }
+        }
+      } catch (e) {
+        NetraLogger.debug("SpanIOProcessor: error rebuilding input/output", e);
+      }
+    };
+    const scheduleFlush = (): void => {
+      if (flushScheduled) return;
+      flushScheduled = true;
+      queueMicrotask(flush);
+    };
+    const originalEnd = span.end.bind(span);
+    (span as any).end = (endTime?: Parameters<Span["end"]>[0]) => {
+      if (inputDirty || outputDirty) flush();
+      return originalEnd(endTime);
+    };
+
     const patched = (key: string, value: AttributeValue): Span => {
       try {
         // Priority 0: traceContent disabled → content never reaches the span.
@@ -234,11 +286,9 @@ export class SpanIOProcessor implements SpanProcessor {
             entry = {};
             prompts.set(idx, entry);
           }
-          entry[field] = String(value);
-          if (!inputLocked() && (inputIsEmpty() || genAiOwnsInput)) {
-            original("input", buildMessages(prompts));
-            genAiOwnsInput = true;
-          }
+          entry[field] = capField(value);
+          inputDirty = true;
+          scheduleFlush();
           return span;
         }
 
@@ -254,11 +304,9 @@ export class SpanIOProcessor implements SpanProcessor {
             entry = {};
             completions.set(idx, entry);
           }
-          entry[field] = String(value);
-          if (!outputLocked() && (outputIsEmpty() || genAiOwnsOutput)) {
-            original("output", buildMessages(completions));
-            genAiOwnsOutput = true;
-          }
+          entry[field] = capField(value);
+          outputDirty = true;
+          scheduleFlush();
           return span;
         }
 

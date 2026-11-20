@@ -107,7 +107,28 @@ export interface TracedMessage {
   content: string;
 }
 
+/** Most choices tracked for one streamed response. */
+export const MAX_STREAM_CHOICES = 128;
+
+/**
+ * Whether a streamed `choice.index` is usable. A misbehaving server could
+ * send a huge index, and filling the choices array up to it allocated memory
+ * without bound (JS-MEM-009).
+ */
+export function isValidChoiceIndex(index: number): boolean {
+  return Number.isInteger(index) && index >= 0 && index < MAX_STREAM_CHOICES;
+}
+
+/** The `traceContent` setting of the active Netra config, once one exists. */
+let configuredTraceContent: boolean | undefined;
+
+/** Set by `Config`; `undefined` falls back to the environment. */
+export function setTraceContentEnabled(enabled: boolean | undefined): void {
+  configuredTraceContent = enabled;
+}
+
 export function isTraceContentEnabled(): boolean {
+  if (configuredTraceContent !== undefined) return configuredTraceContent;
   const raw =
     process.env.TRACELOOP_TRACE_CONTENT ??
     process.env.NETRA_TRACE_CONTENT ??
@@ -495,7 +516,24 @@ export function sanitizeToolsForTrace(tools: unknown[]): unknown[] {
 
 // Request Attributes
 
+/**
+ * Records the request on the span. Never throws: recording must not fail
+ * the app's call, and this runs before the request is sent (JS-PERF-005).
+ */
 export function setRequestAttributes(
+  span: Span,
+  kwargs: Record<string, unknown>,
+  requestType: string,
+  system: string,
+): void {
+  try {
+    writeRequestAttributes(span, kwargs, requestType, system);
+  } catch (e) {
+    NetraLogger.debug(`netra.instrumentation.${system}: could not record request attributes`, e);
+  }
+}
+
+function writeRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
   requestType: string,
@@ -523,7 +561,7 @@ export function setRequestAttributes(
   if (kwargs.reasoning !== undefined) {
     span.setAttribute(
       SpanAttributes.LLM_REQUEST_REASONING,
-      JSON.stringify(kwargs.reasoning),
+      safeStringify(kwargs.reasoning),
     );
   }
 
