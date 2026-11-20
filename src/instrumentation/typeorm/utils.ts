@@ -1,5 +1,17 @@
 import { Span } from "@opentelemetry/api";
 import { NetraLogger } from "../../netraLogger";
+import { isTraceContentEnabled } from "../utils";
+
+/**
+ * Query parameter values are application data (emails, reset tokens, ...).
+ * They are recorded only when content tracing is on and the app opts in with
+ * NETRA_TRACE_DB_PARAMETERS=true, as OpenTelemetry's database conventions make
+ * parameter capture opt-in (JS-SEC-016).
+ */
+export function shouldRecordDbParameters(): boolean {
+  const raw = String(process.env.NETRA_TRACE_DB_PARAMETERS ?? "").toLowerCase();
+  return isTraceContentEnabled() && (raw === "1" || raw === "true");
+}
 
 export function extractQuery(query: string | { query: string; parameters?: any[] }): {
   sql: string;
@@ -58,10 +70,13 @@ export function setQueryAttributes(
   span.setAttribute("db.statement", sanitizeQuery(sql));
 
   if (parameters && parameters.length > 0) {
-    try {
-      span.setAttribute("db.statement.parameters", JSON.stringify(parameters));
-    } catch (e) {
-      NetraLogger.log(e);
+    span.setAttribute("db.statement.parameters.count", parameters.length);
+    if (shouldRecordDbParameters()) {
+      try {
+        span.setAttribute("db.statement.parameters", JSON.stringify(parameters));
+      } catch (e) {
+        NetraLogger.log(e);
+      }
     }
   }
 }

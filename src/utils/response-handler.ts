@@ -21,6 +21,17 @@ export function isPromise<T = unknown>(value: unknown): value is Promise<T> {
 }
 
 /**
+ * A real Promise (including subclasses such as the provider SDKs' APIPromise,
+ * and promises from another realm), as opposed to any object with a `then`
+ * method. Query builders (Knex, Prisma, Mongoose, ...) are lazy thenables:
+ * calling `then` runs the query (JS-SEC-010).
+ */
+export function isNativePromise<T = unknown>(value: unknown): value is Promise<T> {
+  if (value == null || typeof (value as any).then !== "function") return false;
+  return value instanceof Promise || Object.prototype.toString.call(value) === "[object Promise]";
+}
+
+/**
  * The `APIPromise` returned by Stainless-generated SDKs (OpenAI, Anthropic,
  * Groq): a Promise subclass whose extra methods (`.withResponse()`,
  * `.asResponse()`, `._thenUnwrap()`) the SDKs' own helpers such as
@@ -49,6 +60,42 @@ export function isAPIPromise(value: unknown): value is APIPromiseLike {
 const ITERATOR_METHODS = new Set(["next", "return", "throw"]);
 
 /**
+ * Ends the span of a stream the app dropped without reading to the end or
+ * cancelling: once the stream object is garbage-collected, nothing can read
+ * it any more, so its span is finalized. Without this the span was never
+ * ended or exported and stayed in memory (JS-MEM-003).
+ */
+interface FinalizationRegistryLike<T> {
+  register(target: object, held: T, unregisterToken?: object): void;
+  unregister(unregisterToken: object): void;
+}
+type FinalizationRegistryCtor = new <T>(cleanup: (held: T) => void) => FinalizationRegistryLike<T>;
+// Reached through globalThis: the project's TS lib predates ES2021 weakrefs.
+const FinalizationRegistryImpl = (globalThis as { FinalizationRegistry?: FinalizationRegistryCtor })
+  .FinalizationRegistry;
+const abandonedStreams: FinalizationRegistryLike<() => void> | undefined =
+  FinalizationRegistryImpl
+    ? new FinalizationRegistryImpl<() => void>((finalize) => {
+        try {
+          finalize();
+        } catch (e) {
+          NetraLogger.debug("netra: finalizing an abandoned stream failed", e);
+        }
+      })
+    : undefined;
+
+const NETRA_STREAM_OWNER = Symbol("netra.streamOwner");
+
+/** Make `holder` keep `target` reachable (a hidden, non-enumerable reference). */
+function keepAlive(holder: object, target: object): void {
+  try {
+    Object.defineProperty(holder, NETRA_STREAM_OWNER, { value: target });
+  } catch {
+    // A frozen or non-extensible holder: nothing more can be done.
+  }
+}
+
+/**
  * Wrap an async iterable with lifecycle callbacks.
  * Returns a Proxy that preserves the original object's full interface
  * while intercepting iteration methods.
@@ -61,21 +108,52 @@ export function wrapAsyncIterable<T>(
   source: AsyncIterable<T>,
   callbacks: ResponseCallbacks<T>,
 ): any {
-  function createWrappedIterator(): AsyncIterator<T> {
+  // One stream, one finalize, however it is consumed (iteration, a reader,
+  // cancel(), or garbage collection).
+  const state = { settled: false };
+  const unregisterToken = {};
+  const finalizeOnce = (status: "ok" | "error") => {
+    if (state.settled) return;
+    state.settled = true;
+    abandonedStreams?.unregister(unregisterToken);
+    try {
+      callbacks.finalize(status);
+    } catch (e) {
+      NetraLogger.error("netra: finalize callback error", e);
+    }
+  };
+  const safeOnChunk = (chunk: T) => {
+    try {
+      callbacks.onChunk?.(chunk);
+    } catch (e) {
+      NetraLogger.error("netra: onChunk callback error", e);
+    }
+  };
+  const safeOnError = (e: unknown) => {
+    try {
+      callbacks.onError(e);
+    } catch {
+      NetraLogger.error("netra: onError callback error", e);
+    }
+  };
+
+  /**
+   * `owner` is the wrapped stream the iterator came from. The iterator keeps
+   * a strong reference to it: `for await (const c of await create(...))`
+   * holds only the iterator, and without this reference the stream could be
+   * garbage-collected mid-loop, ending its span after the first chunk.
+   */
+  function createWrappedIterator(owner?: object): AsyncIterator<T> {
     const iterator = source[Symbol.asyncIterator]();
     let done = false;
 
     const safeFinalize = (status: "ok" | "error") => {
       if (done) return;
       done = true;
-      try {
-        callbacks.finalize(status);
-      } catch (e) {
-        NetraLogger.error("netra: finalize callback error", e);
-      }
+      finalizeOnce(status);
     };
 
-    return {
+    const wrapped: AsyncIterator<T> = {
       async next(value?: any) {
         try {
           const result = await callbacks.withContext(() => iterator.next(value));
@@ -135,14 +213,73 @@ export function wrapAsyncIterable<T>(
         }
       },
     };
+    if (owner) keepAlive(wrapped, owner);
+    return wrapped;
   }
 
   let directIterator: AsyncIterator<T> | null = null;
 
-  return new Proxy(source, {
+  /**
+   * ReadableStream-style streams (LangGraph's IterableReadableStream) can be
+   * read with getReader() or cancelled without ever iterating; observe those
+   * paths too so the span still ends (JS-MEM-003).
+   */
+  const wrapReader = (reader: any, owner: object): any => {
+    if (!reader || typeof reader.read !== "function") return reader;
+    // The handler holds the stream it came from, so an app that keeps only
+    // the reader does not let the stream (and its span) be finalized early.
+    return new Proxy(reader, {
+      owner,
+      get(r, prop) {
+        const value = r[prop];
+        if (prop === "read" && typeof value === "function") {
+          return async (...args: any[]) => {
+            try {
+              const result = await callbacks.withContext(() => value.apply(r, args));
+              if (result?.done) finalizeOnce("ok");
+              else safeOnChunk(result?.value);
+              return result;
+            } catch (e) {
+              safeOnError(e);
+              finalizeOnce("error");
+              throw e;
+            }
+          };
+        }
+        if (prop === "cancel" && typeof value === "function") {
+          return async (...args: any[]) => {
+            try {
+              return await value.apply(r, args);
+            } finally {
+              finalizeOnce("ok");
+            }
+          };
+        }
+        return typeof value === "function" ? value.bind(r) : value;
+      },
+    } as ProxyHandler<any> & { owner: object });
+  };
+
+  // `proxy` must stay out of every closure created in this function: the
+  // registry's held callback closes over this scope, and a reference to the
+  // proxy from there would keep it alive forever. The handler reaches it as
+  // `receiver` instead.
+  const proxy = new Proxy(source, {
     get(target, prop, receiver) {
       if (prop === Symbol.asyncIterator) {
-        return () => createWrappedIterator();
+        return () => createWrappedIterator(receiver);
+      }
+      if (prop === "getReader" && typeof (target as any).getReader === "function") {
+        return (...args: any[]) => wrapReader((target as any).getReader(...args), receiver);
+      }
+      if (prop === "cancel" && typeof (target as any).cancel === "function") {
+        return async (...args: any[]) => {
+          try {
+            return await (target as any).cancel(...args);
+          } finally {
+            finalizeOnce("ok");
+          }
+        };
       }
       if (typeof prop === "string" && ITERATOR_METHODS.has(prop)) {
         if (!directIterator) directIterator = createWrappedIterator();
@@ -159,6 +296,8 @@ export function wrapAsyncIterable<T>(
       return value;
     },
   });
+  abandonedStreams?.register(proxy, () => finalizeOnce("ok"), unregisterToken);
+  return proxy;
 }
 
 /**
@@ -257,11 +396,16 @@ export function wrapPromise<T>(
     }
   }
 
+  // The stream the promise resolved to, and its wrapper, for `.withResponse()`.
+  let rawStream: unknown;
+  let wrappedStream: unknown;
   const instrumentedPromise = (async () => {
     try {
       const value = await promise;
       if (isAsyncIterable(value)) {
-        return wrapAsyncIterable(value as any, callbacks);
+        rawStream = value;
+        wrappedStream = wrapAsyncIterable(value as any, { ...callbacks, finalize: safeFinalize });
+        return wrappedStream;
       }
       safeOnSuccess(value);
       safeFinalize("ok");
@@ -282,13 +426,51 @@ export function wrapPromise<T>(
   // The caller still sees the error through its own then/catch.
   instrumentedPromise.catch(() => {});
 
-  const original = options.preserveOriginal;
+  const original = options.preserveOriginal as any;
   return new Proxy(instrumentedPromise, {
     get(target, prop, receiver) {
       if (prop === "then" || prop === "catch" || prop === "finally") {
         const value = Reflect.get(target, prop, receiver);
         if (typeof value === "function") return value.bind(target);
         return value;
+      }
+      // `.withResponse()` resolves to the SDK's own stream, which Netra never
+      // sees being read, so the span never ended (JS-MEM-003). Hand back the
+      // same result with a wrapped stream.
+      if (prop === "withResponse" && typeof original.withResponse === "function") {
+        return async (...args: any[]) => {
+          const result = await original.withResponse(...args);
+          if (result && isAsyncIterable(result.data)) {
+            // The SDK caches its parsed result, so `data` is the stream this
+            // promise already wrapped. Hand back that one wrapper: a second
+            // wrapper would leave the first unreferenced, and its
+            // garbage-collection finalizer would end the span mid-read.
+            await instrumentedPromise.catch(() => {});
+            if (result.data === rawStream && wrappedStream) {
+              return { ...result, data: wrappedStream };
+            }
+            const data = wrapAsyncIterable(result.data, { ...callbacks, finalize: safeFinalize });
+            // A different stream object: keep the unused first wrapper alive as
+            // long as this one, so its finalizer cannot end the span early.
+            if (wrappedStream && typeof wrappedStream === "object") keepAlive(data, wrappedStream);
+            return { ...result, data };
+          }
+          return result;
+        };
+      }
+      // `.asResponse()` on a stream: the app reads the raw bytes itself and
+      // nothing more can be observed, so end the span once the call returns.
+      if (prop === "asResponse" && typeof original.asResponse === "function") {
+        return async (...args: any[]) => {
+          const response = await original.asResponse(...args);
+          instrumentedPromise.then(
+            (value) => {
+              if (isAsyncIterable(value)) safeFinalize("ok");
+            },
+            () => {},
+          );
+          return response;
+        };
       }
       const originalValue = (original as any)[prop];
       if (originalValue !== undefined) {
@@ -318,8 +500,20 @@ export function wrapResponse<T>(
     return wrapAsyncIterable(response as any, callbacks) as T;
   }
 
-  if (isPromise(response)) {
+  if (isNativePromise(response)) {
     return wrapPromise(response as any, callbacks, options) as T;
+  }
+
+  if (isPromise(response)) {
+    // A lazy thenable: awaiting it would run it early, outside the caller's
+    // control (for example outside a database transaction). Hand it back
+    // untouched; the span ends now, without an output (JS-SEC-010).
+    try {
+      callbacks.finalize("ok");
+    } catch (e) {
+      NetraLogger.error("netra: finalize callback error", e);
+    }
+    return response;
   }
 
   try {

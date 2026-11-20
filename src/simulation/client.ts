@@ -43,10 +43,20 @@ export class SimulationHttpClient {
         const timeout = this._getTimeout();
 
         try {
+            const apiOrigin = new URL(baseURL).origin;
             const instance = axios.create({
                 baseURL,
                 headers,
                 timeout,
+                // Redirects stay on the API's origin, so x-api-key is never
+                // sent to another host (JS-SEC-017).
+                maxRedirects: 3,
+                beforeRedirect: (options: Record<string, any>) => {
+                    const target = String(options.href ?? `${options.protocol}//${options.host ?? options.hostname}${options.path ?? ""}`);
+                    if (new URL(target).origin !== apiOrigin) {
+                        throw new Error(`refusing to follow a redirect to another origin (${new URL(target).origin})`);
+                    }
+                },
             });
 
             // Inject W3C trace context (traceparent/tracestate) into every

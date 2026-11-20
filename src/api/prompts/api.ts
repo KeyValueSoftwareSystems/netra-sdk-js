@@ -12,6 +12,7 @@ export class Prompts {
   private config: Config;
   private client: PromptsHttpClient;
   private cache: TTLCache<PromptResponse>;
+  private readonly inFlight = new Map<string, Promise<PromptResponse | null>>();
 
   constructor(config: Config) {
     this.config = config;
@@ -40,27 +41,42 @@ export class Prompts {
 
     const label = params.label ?? "production";
     const useCache = params.useCache === true;
-    const cacheKey = `prompt:${params.name}:${label}`;
+    // JSON keeps name and label apart: with a ":" join, name "a:b" + label
+    // "c" and name "a" + label "b:c" shared one entry (JS-SEC-023).
+    const cacheKey = `prompt:${JSON.stringify([params.name, label])}`;
 
-    if (useCache) {
-      const cached = this.cache.get(cacheKey);
-      if (cached !== undefined) {
-        return cached;
-      }
+    if (!useCache) {
+      return this.fetchPrompt(params.name, label);
     }
 
-    const result = await this.client.getPromptVersion(params.name, label);
+    const cached = this.cache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
 
+    // Concurrent misses for the same key share one request instead of each
+    // fetching the prompt (JS-PERF-015).
+    let pending = this.inFlight.get(cacheKey);
+    if (!pending) {
+      pending = this.fetchPrompt(params.name, label)
+        .then((data) => {
+          if (data !== null) this.cache.set(cacheKey, data, params.cacheTtl);
+          return data;
+        })
+        .finally(() => this.inFlight.delete(cacheKey));
+      this.inFlight.set(cacheKey, pending);
+    }
+    const data = await pending;
+    if (data === null) return null;
+    // Each caller gets its own copy from the cache, as a cache hit does.
+    return this.cache.get(cacheKey) ?? structuredClone(data);
+  }
+
+  private async fetchPrompt(name: string, label: string): Promise<PromptResponse | null> {
+    const result = await this.client.getPromptVersion(name, label);
     if (!result) {
       return null;
     }
-
-    const data = result.data ?? null;
-
-    if (data !== null && useCache) {
-      this.cache.set(cacheKey, data, params.cacheTtl);
-    }
-
-    return data;
+    return result.data ?? null;
   }
 }

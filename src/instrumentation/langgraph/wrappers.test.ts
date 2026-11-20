@@ -120,4 +120,30 @@ describe("LangGraph instrumentation", () => {
       expect(JSON.stringify(span.attributes)).not.toContain("SECRET");
     }
   });
+
+  // JS-MEM-003: reading through getReader() or cancelling never iterated the
+  // stream, so the workflow span was never ended or exported.
+  it("ends the span when the stream is read through getReader()", async () => {
+    const stream: any = await graph.stream({ question: "reader" });
+    const reader = stream.getReader();
+    for (let r = await reader.read(); !r.done; r = await reader.read()) { /* drain */ }
+
+    expect(tracing.spans(WORKFLOW)).toHaveLength(1);
+  });
+
+  it("ends the span when a reader is cancelled", async () => {
+    const stream: any = await graph.stream({ question: "reader-cancel" });
+    const reader = stream.getReader();
+    await reader.read();
+    await reader.cancel();
+
+    expect(tracing.spans(WORKFLOW)).toHaveLength(1);
+  });
+
+  it("ends the span when the stream is cancelled without being read", async () => {
+    const stream: any = await graph.stream({ question: "cancel" });
+    await stream.cancel();
+
+    expect(tracing.spans(WORKFLOW)).toHaveLength(1);
+  });
 });

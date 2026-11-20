@@ -300,10 +300,34 @@ You can configure the SDK using environment variables:
 | Variable | Description |
 |----------|-------------|
 | `NETRA_OTLP_ENDPOINT` | Netra endpoint: `https://api.getnetra.ai/telemetry` (US) or `https://api.eu.getnetra.ai/telemetry` (EU). Required to send traces to Netra; falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`, and if neither is set, spans are printed to the console |
-| `NETRA_API_KEY` | API Key for Netra Platform |
+| `NETRA_API_KEY` | API Key for Netra Platform. Not sent to an endpoint that comes only from `OTEL_EXPORTER_OTLP_ENDPOINT` unless it is a Netra host (`*.getnetra.ai`) |
 | `NETRA_APP_NAME` | Name of your application |
 | `NETRA_ENV` | Environment (e.g., prod, dev) |
 | `NETRA_TRACE_CONTENT` | Capture prompt/completion content (default: true) |
+| `NETRA_TRACE_DB_PARAMETERS` | Record database query parameter values on TypeORM spans (default: false). Takes effect only while content capture is on; otherwise only the parameter count is recorded |
+| `OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` | Time limit in ms for sending one batch of spans, retries included (default: 10000; falls back to `OTEL_EXPORTER_OTLP_TIMEOUT`) |
+| `NETRA_SIMULATION_MAX_TURNS` | Most turns one simulated conversation may take before it is marked failed (default: 100) |
+| `NETRA_SIMULATION_MAX_FILE_BYTES` | Largest simulation attachment downloaded, in bytes (default: 52428800, 50 MiB). Attachments must use https and may not point to private or local addresses |
+
+## 🔒 Security Notes
+
+**Pin patched OpenTelemetry packages in your app.** `@traceloop/node-server-sdk` (a dependency of this SDK) still depends on `@opentelemetry/sdk-node` 0.203, which brings in OpenTelemetry packages with published advisories. npm does not apply a library's own `overrides` to your install, so add them to your application's `package.json`:
+
+```json
+{
+  "overrides": {
+    "@opentelemetry/sdk-node": "^0.222.0",
+    "@opentelemetry/core": "^2.11.0",
+    "@opentelemetry/propagator-jaeger": "^2.11.0",
+    "@opentelemetry/exporter-prometheus": "^0.222.0"
+  }
+}
+```
+
+**Call `Netra.init()` before other OpenTelemetry setup.** If another `TracerProvider` is registered first, Netra prints a warning, does not add its processors to that provider, and receives no spans.
+
+**OpenAI Agents native tracing.** By default (`netra-strict`), Netra replaces the Agents SDK's trace processors so traces are not also sent to OpenAI. Processors your app adds with `addTraceProcessor()` before `Netra.init()` are replaced too; add them after `Netra.init()`, or set `NATIVE_TRACING_MODE=netra` or `both` to keep them.
+
 
 ## 🤝 License
 

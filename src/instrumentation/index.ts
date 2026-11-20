@@ -8,7 +8,9 @@ import {
   SpanExporter,
   SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { initialize, InitializeOptions } from "@traceloop/node-server-sdk";
+// Type-only: the Traceloop SDK and its dependency tree are loaded on the
+// first Netra.init(), not when netra-sdk is imported (JS-PERF-007).
+import type { InitializeOptions } from "@traceloop/node-server-sdk";
 import { createRequire } from "module";
 import {
   Config,
@@ -38,7 +40,6 @@ import { openaiAgentsInstrumentor } from "./openai-agents";
 import { typeORMInstrumentor } from "./typeorm";
 import { FilteringSpanExporter, TrialAwareOTLPExporter } from "../exporters";
 import { LocalFilteringSpanProcessor } from "../processors/localfiltering-span-processor";
-import { propagation } from "@opentelemetry/api";
 import {
   CompositePropagator,
   W3CTraceContextPropagator,
@@ -83,11 +84,63 @@ function isPackageInstalled(packageName: string): boolean {
  */
 export let instrumentationsReady: Promise<void> = Promise.resolve();
 
-propagation.setGlobalPropagator(
-  new CompositePropagator({
+/** The OTLP exporter of the current init, if one was created. */
+let activeOtlpExporter: TrialAwareOTLPExporter | undefined;
+
+/**
+ * Abort span uploads still in flight. Used by `Netra.shutdown()` once its
+ * flush budget is spent, so a hung endpoint cannot keep the process alive.
+ */
+export function abortPendingExports(): void {
+  activeOtlpExporter?.abortPending();
+}
+
+/**
+ * W3C trace context plus Netra's baggage propagator. Handed to Traceloop's
+ * NodeSDK, which registers it when Netra.init() starts tracing. It used to be
+ * registered as soon as the module was imported, which overrode a propagator
+ * the app installed later, even if Netra was never initialized (JS-SEC-011).
+ */
+export function createNetraPropagator(): CompositePropagator {
+  return new CompositePropagator({
     propagators: [new W3CTraceContextPropagator(), new NetraBaggagePropagator()],
-  }),
-);
+  });
+}
+
+/** True once Traceloop's one-shot initialize() has run in this process. */
+let traceloopStarted = false;
+/** The TracerProvider Traceloop registered, if it became the global one. */
+let netraTracerProvider: unknown;
+/** The filtering processor whose blocked-parent map the live exporter reads. */
+let liveLocalFiltering: LocalFilteringSpanProcessor | undefined;
+/** Processors Netra added to the provider in the last init. */
+let netraProcessors: SpanProcessor[] = [];
+
+function currentTracerDelegate(): unknown {
+  const provider = trace.getTracerProvider() as any;
+  return typeof provider?.getDelegate === "function" ? provider.getDelegate() : provider;
+}
+
+/**
+ * Remove the processors added by an earlier init, so a re-init does not run
+ * every span through another full set (JS-MEM-008). Returns false when the
+ * provider does not allow removal, in which case nothing new should be added.
+ */
+function removePreviousNetraProcessors(delegate: any): boolean {
+  if (netraProcessors.length === 0) return true;
+  const active = delegate?._activeSpanProcessor?._spanProcessors;
+  if (!Array.isArray(active)) return false;
+  for (const processor of netraProcessors) {
+    const idx = active.indexOf(processor);
+    if (idx !== -1) active.splice(idx, 1);
+    // The live exporter keeps reading this filter's map; it is re-added below.
+    if (processor !== liveLocalFiltering) {
+      processor.shutdown().catch(() => {});
+    }
+  }
+  netraProcessors = [];
+  return true;
+}
 
 function patchTraceloopLangchainCallbackHandler(): void {
   const applyPatch = (mod: any, sourceLabel: string) => {
@@ -146,6 +199,11 @@ function disableTraceloopLangchainCallbackHandler(): void {
     const callbackManagerModule = require("@langchain/core/callbacks/manager");
     const CallbackManager = callbackManagerModule?.CallbackManager;
     if (!CallbackManager || (CallbackManager as any).__netra_disable_traceloop) {
+      return;
+    }
+    // Only undo Traceloop's own patch: leave the app's @langchain/core alone
+    // when Traceloop did not touch it (JS-SEC-025).
+    if (!(CallbackManager as any)._traceloopPatched) {
       return;
     }
     const originalConfigureSync = (CallbackManager as any)._configureSync;
@@ -393,7 +451,7 @@ export function initInstrumentations(
 
   // Set Traceloop environment variables before initializing
   // This ensures the SDK picks up our configuration
-  config.setTraceloopEnv();
+  const restoreTraceloopEnv = config.setTraceloopEnv();
 
   // Debug: Log configuration being used
   NetraLogger.debug("Netra SDK Configuration:");
@@ -418,47 +476,66 @@ export function initInstrumentations(
     // endpoint is set, sending the Netra API key there and crashing the app
     // with an unhandled rejection if the host is unreachable (JS-PERF-001).
     traceloopSyncEnabled: false,
+    propagator: createNetraPropagator(),
   };
-  // ---- updated exporter setup (Python-equivalent) ----
+  const providerBefore = currentTracerDelegate();
 
-  // 1) Pick base exporter (Console fallback OR TrialAware(OTLP))
-  let exporter: SpanExporter;
+  if (!traceloopStarted) {
+    // ---- exporter setup (Python-equivalent) ----
 
-  if (!traceloopOptions.baseUrl || traceloopOptions.baseUrl == undefined) {
-    NetraLogger.notice("warn", MISSING_ENDPOINT_NOTICE);
-    exporter = new ConsoleSpanExporter();
+    // 1) Pick base exporter (Console fallback OR TrialAware(OTLP))
+    let exporter: SpanExporter;
+
+    if (!traceloopOptions.baseUrl || traceloopOptions.baseUrl == undefined) {
+      NetraLogger.notice("warn", MISSING_ENDPOINT_NOTICE);
+      exporter = new ConsoleSpanExporter();
+    } else {
+      const formattedEndpoint = config.formatOtlpEndpoint();
+
+      // In TS, we pass the config directly to our custom class
+      // because it handles the HTTP transport itself to catch the error body.
+      activeOtlpExporter = new TrialAwareOTLPExporter({
+        url: formattedEndpoint,
+        headers: config.headers,
+      });
+      exporter = activeOtlpExporter;
+    }
+
+    // 2) Always attempt filtering (even for Console fallback). This
+    //    LocalFilteringSpanProcessor is the one registered on the provider
+    //    below, so the exporter's blocked-parent map is actually filled.
+    const globalBlockedPatterns = config.blockedSpans ?? [];
+    liveLocalFiltering = new LocalFilteringSpanProcessor(globalBlockedPatterns);
+    const originalExporter = exporter;
+
+    try {
+      exporter = new FilteringSpanExporter(
+        exporter,
+        globalBlockedPatterns,
+        liveLocalFiltering.blockedParentMap,
+      );
+    } catch {
+      exporter = originalExporter;
+    }
+
+    traceloopOptions.exporter = exporter;
   } else {
-    const formattedEndpoint = config.formatOtlpEndpoint();
-
-    // In TS, we pass the config directly to our custom class
-    // because it handles the HTTP transport itself to catch the error body.
-    exporter = new TrialAwareOTLPExporter({
-      url: formattedEndpoint,
-      headers: config.headers,
-    });
+    // Traceloop's initialize() runs once per process; the exporter created by
+    // the first Netra.init() stays in use.
+    NetraLogger.debug("Netra re-initialized: reusing the exporter from the first init.");
   }
-
-  // 2) Always attempt filtering (even for Console fallback)
-  //    The LocalFilteringSpanProcessor is instantiated below and its
-  //    blockedParentMap is injected into FilteringSpanExporter so the
-  //    two can share reparenting state without module-level globals.
-  const globalBlockedPatterns = config.blockedSpans ?? [];
-  const localFilteringSpanProcessor = new LocalFilteringSpanProcessor(globalBlockedPatterns);
-  const originalExporter = exporter;
 
   try {
-    exporter = new FilteringSpanExporter(
-      exporter,
-      globalBlockedPatterns,
-      localFilteringSpanProcessor.blockedParentMap,
-    );
-  } catch {
-    exporter = originalExporter;
+    if (!traceloopStarted) {
+      const { initialize } = require("@traceloop/node-server-sdk") as typeof import("@traceloop/node-server-sdk");
+      initialize(traceloopOptions);
+      traceloopStarted = true;
+      const providerAfter = currentTracerDelegate();
+      netraTracerProvider = providerAfter !== providerBefore ? providerAfter : undefined;
+    }
+  } finally {
+    restoreTraceloopEnv();
   }
-
-  traceloopOptions.exporter = exporter;
-
-  initialize(traceloopOptions);
 
   if (instrumentModules.langchain) {
     patchTraceloopLangchainCallbackHandler();
@@ -466,16 +543,32 @@ export function initInstrumentations(
     disableTraceloopLangchainCallbackHandler();
   }
 
-  // ---- rest stays same ----
   const tracerProvider = trace.getTracerProvider();
 
-  // Add custom span processors to the TracerProvider
-  // The Traceloop SDK creates a BasicTracerProvider internally
-  const effectiveProvider = addCustomSpanProcessors(
-    tracerProvider,
-    config,
-    resolvedRootNames,
-  );
+  // Netra's processors go only on the provider Traceloop created. When the
+  // app registered its own provider first, Traceloop's could not become the
+  // global one; adding Netra's processors to the app's provider rewrote the
+  // app's own spans without sending anything to Netra (JS-SEC-011).
+  let effectiveProvider: TracerProviderWithProcessors | null = null;
+  const delegate = currentTracerDelegate();
+  if (netraTracerProvider === undefined || delegate !== netraTracerProvider) {
+    NetraLogger.notice(
+      "warn",
+      "Another OpenTelemetry TracerProvider was registered before Netra.init(), so Netra could not register its own " +
+        "and will not receive spans. Netra's span processors were not added to the other provider. " +
+        "Fix: call Netra.init() before any other OpenTelemetry setup.",
+    );
+  } else if (!removePreviousNetraProcessors(delegate)) {
+    NetraLogger.debug("Netra processors from an earlier init could not be removed; keeping them.");
+    effectiveProvider = delegate as TracerProviderWithProcessors;
+  } else {
+    effectiveProvider = addCustomSpanProcessors(
+      tracerProvider,
+      config,
+      resolvedRootNames,
+      liveLocalFiltering ?? new LocalFilteringSpanProcessor(config.blockedSpans ?? []),
+    );
+  }
 
   // Initialize custom instrumentations asynchronously
   // We use async initialization to ensure we get the same ES module instances
@@ -750,6 +843,7 @@ function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   config: Config,
   rootInstrumentNames: Set<string> | null,
+  localFilteringSpanProcessor: LocalFilteringSpanProcessor,
 ): TracerProviderWithProcessors | null {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
@@ -836,16 +930,23 @@ function addCustomSpanProcessors(
     // Processors that only CALL setAttribute (not wrap) must be registered AFTER
     // all wrapping processors so their writes flow through the full chain.
 
-    // 0. Local Filtering Span Processor - filters spans based on local context
-    const localFilteringSpanProcessor = new LocalFilteringSpanProcessor();
-    provider.addSpanProcessor(localFilteringSpanProcessor);
+    // Every processor added is remembered, so a later init can remove it.
+    const added: SpanProcessor[] = [];
+    const register = (processor: SpanProcessor) => {
+      provider!.addSpanProcessor(processor);
+      added.push(processor);
+    };
+
+    // 0. Local Filtering Span Processor - filters spans based on local
+    //    context. The same instance whose map the exporter reads.
+    register(localFilteringSpanProcessor);
 
     // 0.5. Root Instrument Filter Processor - blocks root spans from non-allowed instrumentations
     if (rootInstrumentNames !== null) {
       const rootFilterProcessor = new RootInstrumentFilterProcessor(
         rootInstrumentNames,
       );
-      provider.addSpanProcessor(rootFilterProcessor);
+      register(rootFilterProcessor);
     }
 
     // 1. Scrubbing Span Processor (wraps setAttribute — innermost layer)
@@ -853,43 +954,44 @@ function addCustomSpanProcessors(
     //    before they reach OTel storage.
     if (config.enableScrubbing) {
       const scrubbingProcessor = new ScrubbingSpanProcessor();
-      provider.addSpanProcessor(scrubbingProcessor);
+      register(scrubbingProcessor);
     }
 
     // 2. Serialization Span Processor (wraps setAttribute — middle layer)
     //    Serializes objects to JSON strings and truncates values at write time.
     //    Runs before scrubbing so the scrubber receives string values.
     const serializationProcessor = new SerializationSpanProcessor();
-    provider.addSpanProcessor(serializationProcessor);
+    register(serializationProcessor);
 
     // 3. Span I/O Processor (wraps setAttribute — outermost layer)
     //    Routes IO-related attributes, assembles input/output from gen_ai.*
     //    and traceloop.* keys. Assembled values flow through serialize → scrub.
     const spanIOProcessor = new SpanIOProcessor(config.traceContent);
-    provider.addSpanProcessor(spanIOProcessor);
+    register(spanIOProcessor);
 
     // 4. Instrumentation Span Processor - tags instrumentation name.
     //    Runs AFTER wrappers are in place so its setAttribute calls flow
     //    through the full chain.
     const instrumentationProcessor = new InstrumentationSpanProcessor();
-    provider.addSpanProcessor(instrumentationProcessor);
+    register(instrumentationProcessor);
 
     // 5. Session Span Processor - adds session context (session_id, user_id, etc.)
     //    Runs AFTER wrappers so session attributes flow through scrub→serialize.
     const sessionProcessor = new SessionSpanProcessor(config.environment);
-    provider.addSpanProcessor(sessionProcessor);
+    register(sessionProcessor);
 
     // 6. LLM Trace Identifier Span Processor - marks root spans containing LLM calls.
     //    Uses setAttribute on root span in onEnd (root span is still recording).
     const llmTraceProcessor = new LlmTraceIdentifierSpanProcessor();
-    provider.addSpanProcessor(llmTraceProcessor);
+    register(llmTraceProcessor);
 
     // 7. Root Span Processor - tracks root span per trace.
     //    Registered AFTER LlmTraceIdentifierSpanProcessor so onEnd cleanup
     //    runs after LLM annotation is complete.
     const rootSpanProcessor = new RootSpanProcessor();
-    provider.addSpanProcessor(rootSpanProcessor);
+    register(rootSpanProcessor);
 
+    netraProcessors = added;
     NetraLogger.debug("Custom span processors registered successfully");
 
     return provider;

@@ -12,7 +12,19 @@ import {
 export { INVALID_SPAN_ID };
 
 let trialBlockedAt: number | null = null;
-const blockedTraceIds = new Set<string>();
+
+/**
+ * Trace ids seen during a quota block, with the time each stops being blocked.
+ * Bounded by a TTL and a size cap; the set used to grow for as long as the
+ * process ran (JS-MEM-004).
+ */
+const blockedTraceIds = new Map<string, number>();
+const MAX_BLOCKED_TRACE_IDS = 10_000;
+
+/** How long a trace id stays blocked: long enough for a trace to finish. */
+function blockedTraceTtlMs(): number {
+  return Config.TRIAL_BLOCK_DURATION_SECONDS * 2 * 1000;
+}
 
 /**
  * Set the trial-blocked status, with automatic expiration.
@@ -63,12 +75,35 @@ export function isTrialBlocked(): boolean {
  * block clears will be exported again.
  */
 export function addBlockedTraceId(traceId: string) {
-  blockedTraceIds.add(traceId);
+  // Re-insert so the Map's insertion order stays oldest-first for eviction.
+  blockedTraceIds.delete(traceId);
+  blockedTraceIds.set(traceId, Date.now() + blockedTraceTtlMs());
+  while (blockedTraceIds.size > MAX_BLOCKED_TRACE_IDS) {
+    const oldest = blockedTraceIds.keys().next().value;
+    if (oldest === undefined) break;
+    blockedTraceIds.delete(oldest);
+  }
 }
 
 /** Check whether a trace ID is in the blocked list. */
 export function isTraceIdBlocked(traceId: string): boolean {
-  return blockedTraceIds.has(traceId);
+  const expiresAt = blockedTraceIds.get(traceId);
+  if (expiresAt === undefined) return false;
+  if (Date.now() >= expiresAt) {
+    blockedTraceIds.delete(traceId);
+    return false;
+  }
+  return true;
+}
+
+/** Forget every blocked trace id (used on shutdown and in tests). */
+export function clearBlockedTraceIds(): void {
+  blockedTraceIds.clear();
+}
+
+/** Number of blocked trace ids currently remembered. */
+export function blockedTraceIdCount(): number {
+  return blockedTraceIds.size;
 }
 
 export function getTraceId(span: ReadableSpan): string {

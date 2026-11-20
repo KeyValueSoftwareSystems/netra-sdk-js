@@ -10,7 +10,9 @@ import {
   context,
 } from "@opentelemetry/api";
 import { NetraLogger } from "../../netraLogger";
-import { defineHidden, isPromise } from "../utils";
+import { defineHidden, isPromise,
+  isValidChoiceIndex,
+} from "../utils";
 import {
   isAsyncIterable,
   wrapResponse,
@@ -331,6 +333,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
       if (Array.isArray(dataChoices)) {
         for (const choice of dataChoices) {
           const index = Number(choice.index || 0);
+          if (!isValidChoiceIndex(index)) continue;
           this.ensureChoice(index);
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
@@ -366,6 +369,7 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
     if (Array.isArray(chunkChoices) && chunkChoices.length > 0) {
       for (const choice of chunkChoices) {
         const index = Number(choice.index || 0);
+        if (!isValidChoiceIndex(index)) continue;
         this.ensureChoice(index);
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
@@ -393,7 +397,11 @@ export class StreamingWrapper implements Iterable<unknown>, Iterator<unknown> {
       this.completeResponse.usage = chunkDict.usage;
     }
 
-    this.span.addEvent("llm.content.completion.chunk");
+    // Per-chunk events only in debug mode, as for Anthropic and google-genai:
+    // past the event limit each one still allocates and shifts (JS-PERF-014).
+    if (NetraLogger.isDebugMode()) {
+      this.span.addEvent("llm.content.completion.chunk");
+    }
   }
 
   private finalizeSpan(error?: unknown): void {
@@ -479,6 +487,7 @@ class AsyncStreamCollector {
       if (Array.isArray(dataChoices)) {
         for (const choice of dataChoices) {
           const index = Number(choice.index || 0);
+          if (!isValidChoiceIndex(index)) continue;
           this.ensureChoice(index);
 
           const delta = (choice.delta || {}) as Record<string, unknown>;
@@ -514,6 +523,7 @@ class AsyncStreamCollector {
     if (Array.isArray(chunkChoices) && chunkChoices.length > 0) {
       for (const choice of chunkChoices) {
         const index = Number(choice.index || 0);
+        if (!isValidChoiceIndex(index)) continue;
         this.ensureChoice(index);
 
         const delta = (choice.delta || {}) as Record<string, unknown>;
@@ -541,7 +551,11 @@ class AsyncStreamCollector {
       this.completeResponse.usage = chunkDict.usage;
     }
 
-    this.span.addEvent("llm.content.completion.chunk");
+    // Per-chunk events only in debug mode, as for Anthropic and google-genai:
+    // past the event limit each one still allocates and shifts (JS-PERF-014).
+    if (NetraLogger.isDebugMode()) {
+      this.span.addEvent("llm.content.completion.chunk");
+    }
   }
 
   finish(status: "ok" | "error"): void {

@@ -1,3 +1,4 @@
+import { NetraLogger } from "../../netraLogger";
 /**
  * MistralAI-specific utility functions for instrumentation.
  *
@@ -21,6 +22,19 @@ export { modelAsDict, shouldSuppressInstrumentation };
  * Includes MistralAI-specific attributes.
  */
 export function setRequestAttributes(
+  span: Span,
+  kwargs: Record<string, unknown>,
+  requestType: string
+): void {
+  // Never throws: this runs before the request is sent (JS-PERF-005).
+  try {
+    writeMistralRequestAttributes(span, kwargs, requestType);
+  } catch (e) {
+    NetraLogger.debug("netra.instrumentation.mistralai: could not record request attributes", e);
+  }
+}
+
+function writeMistralRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
   requestType: string

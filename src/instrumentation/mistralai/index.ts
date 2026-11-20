@@ -251,9 +251,10 @@ export class NetraMistralAIInstrumentor {
       return;
     }
 
-    // Some SDK versions require an apiKey at construction time.
-    // Use a dummy if none is provided; this is only for discovering constructors.
-    const apiKey = process.env.MISTRAL_API_KEY ?? "netra_dummy_api_key";
+    // Some SDK versions require an apiKey at construction time. This client is
+    // only used to discover constructors, so it never gets the app's real key
+    // (JS-SEC-025).
+    const apiKey = "netra_dummy_api_key";
 
     let client: any;
     try {

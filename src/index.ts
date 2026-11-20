@@ -8,7 +8,7 @@ import { context, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
 import { Config, NetraConfig } from "./config";
-import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
+import { abortPendingExports, initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { NetraLogger } from "./netraLogger";
 import {
   clearSessionValues,
@@ -368,14 +368,19 @@ export class Netra {
         }
       })();
 
-      await Promise.race([
-        flushPromise,
-        new Promise((resolve) => {
-          flushTimer = setTimeout(resolve, FLUSH_TIMEOUT_MS);
+      const flushed = await Promise.race([
+        flushPromise.then(() => true),
+        new Promise<boolean>((resolve) => {
+          flushTimer = setTimeout(() => resolve(false), FLUSH_TIMEOUT_MS);
           // Don't let the budget itself hold the process open after the flush.
           flushTimer.unref?.();
         }),
       ]);
+      if (!flushed) {
+        // The endpoint did not answer within the budget. An open upload would
+        // keep the event loop, and so the process, alive (JS-PERF-003).
+        abortPendingExports();
+      }
     } catch (e) {
       NetraLogger.error("Error during Netra trace shutdown:", e);
     } finally {

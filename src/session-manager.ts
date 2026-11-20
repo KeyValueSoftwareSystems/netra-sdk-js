@@ -22,14 +22,29 @@ const MODULE_NAME = "netra.session-manager";
 /**
  * Per-async-scope state: entity name stacks and a name→span registry.
  * Deliberately minimal — live span references belong to OTel's context, not here.
+ *
+ * A scope is never mutated by a nested call: entering an entity copies the
+ * scope (`runWithEntity`), and the registry is copy-on-write. Each decorated
+ * call therefore sees only its own ancestors, concurrent requests cannot
+ * interleave their stacks (JS-SEC-018), and a scope's state is released with
+ * the scope instead of living in a module global (JS-MEM-005).
  */
 interface EntityContext {
-  workflowStack: string[];
-  taskStack: string[];
-  agentStack: string[];
-  spanStack: string[];
-  spansByName: Map<string, Span[]>;
+  readonly workflowStack: readonly string[];
+  readonly taskStack: readonly string[];
+  readonly agentStack: readonly string[];
+  readonly spanStack: readonly string[];
+  readonly spansByName: Map<string, readonly Span[]>;
 }
+
+type EntityStackKey = "workflowStack" | "taskStack" | "agentStack" | "spanStack";
+
+const STACK_FOR_ENTITY: Record<string, EntityStackKey> = {
+  workflow: "workflowStack",
+  task: "taskStack",
+  agent: "agentStack",
+  span: "spanStack",
+};
 
 type ConversationEntry = {
   type: string;
@@ -40,17 +55,27 @@ type ConversationEntry = {
 
 const entityStorage = new AsyncLocalStorage<EntityContext>();
 
-// Global fallback for single-threaded / non-async entry points
-const globalFallbackContext: EntityContext = {
-  workflowStack: [],
-  taskStack: [],
-  agentStack: [],
-  spanStack: [],
-  spansByName: new Map(),
-};
+// Read-only state for code running outside any entity scope. Never mutated.
+const EMPTY_ENTITY_CONTEXT: EntityContext = Object.freeze({
+  workflowStack: Object.freeze([]),
+  taskStack: Object.freeze([]),
+  agentStack: Object.freeze([]),
+  spanStack: Object.freeze([]),
+  spansByName: new Map<string, readonly Span[]>(),
+});
 
 function getEntityContext(): EntityContext {
-  return entityStorage.getStore() ?? globalFallbackContext;
+  return entityStorage.getStore() ?? EMPTY_ENTITY_CONTEXT;
+}
+
+function copyEntityContext(ctx: EntityContext): EntityContext {
+  return {
+    workflowStack: ctx.workflowStack,
+    taskStack: ctx.taskStack,
+    agentStack: ctx.agentStack,
+    spanStack: ctx.spanStack,
+    spansByName: new Map(ctx.spansByName),
+  };
 }
 
 /**
@@ -59,28 +84,37 @@ function getEntityContext(): EntityContext {
  * independent entity stacks.
  */
 export function runWithEntityContext<T>(fn: () => T): T {
-  const ctx: EntityContext = {
-    workflowStack: [],
-    taskStack: [],
-    agentStack: [],
-    spanStack: [],
-    spansByName: new Map(),
+  return entityStorage.run(copyEntityContext(EMPTY_ENTITY_CONTEXT), fn);
+}
+
+/**
+ * Run `fn` in a new entity scope: a copy of the caller's scope with
+ * `entityName` pushed onto the `entityType` stack. Spans started inside `fn`
+ * (synchronously or in its async continuations) see it; the caller's scope
+ * and concurrent calls never do. Unknown entity types get a plain copy.
+ */
+export function runWithEntity<T>(entityType: string, entityName: string, fn: () => T): T {
+  const next = copyEntityContext(getEntityContext()) as {
+    -readonly [K in keyof EntityContext]: EntityContext[K];
   };
-  return entityStorage.run(ctx, fn);
+  const key = STACK_FOR_ENTITY[entityType];
+  if (key) next[key] = [...next[key], entityName];
+  return entityStorage.run(next, fn);
 }
 
 // SessionManager
 
 export class SessionManager {
 
-  // Span registry (name → stack)
+  // Span registry (name → stack), scoped to the current entity scope
 
   static registerSpan(name: string, span: Span): void {
     try {
-      const ctx = getEntityContext();
-      const stack = ctx.spansByName.get(name) ?? [];
-      stack.push(span);
-      ctx.spansByName.set(name, stack);
+      // Outside any entity scope there is nowhere request-local to keep it;
+      // a module-level registry would retain spans that never end (JS-MEM-005).
+      const ctx = entityStorage.getStore();
+      if (!ctx) return;
+      ctx.spansByName.set(name, [...(ctx.spansByName.get(name) ?? []), span]);
     } catch (e) {
       NetraLogger.error(`Failed to register span '${name}':`, e);
     }
@@ -88,16 +122,14 @@ export class SessionManager {
 
   static unregisterSpan(name: string, span: Span): void {
     try {
-      const ctx = getEntityContext();
-      const stack = ctx.spansByName.get(name);
-      if (!stack) return;
-      for (let i = stack.length - 1; i >= 0; i--) {
-        if (stack[i] === span) {
-          stack.splice(i, 1);
-          break;
-        }
-      }
-      if (stack.length === 0) ctx.spansByName.delete(name);
+      const ctx = entityStorage.getStore();
+      const stack = ctx?.spansByName.get(name);
+      if (!ctx || !stack) return;
+      const idx = stack.lastIndexOf(span);
+      if (idx === -1) return;
+      const next = [...stack.slice(0, idx), ...stack.slice(idx + 1)];
+      if (next.length === 0) ctx.spansByName.delete(name);
+      else ctx.spansByName.set(name, next);
     } catch (e) {
       NetraLogger.error(`Failed to unregister span '${name}':`, e);
     }
@@ -111,31 +143,10 @@ export class SessionManager {
 
   // Entity stacks (workflow / task / agent / span)
 
-  static pushEntity(entityType: string, entityName: string): void {
-    const ctx = getEntityContext();
-    switch (entityType) {
-      case "workflow": ctx.workflowStack.push(entityName); break;
-      case "task":     ctx.taskStack.push(entityName);     break;
-      case "agent":    ctx.agentStack.push(entityName);    break;
-      case "span":     ctx.spanStack.push(entityName);     break;
-    }
-  }
-
-  static popEntity(entityType: string): string | undefined {
-    const ctx = getEntityContext();
-    switch (entityType) {
-      case "workflow": return ctx.workflowStack.pop();
-      case "task":     return ctx.taskStack.pop();
-      case "agent":    return ctx.agentStack.pop();
-      case "span":     return ctx.spanStack.pop();
-      default:         return undefined;
-    }
-  }
-
   static getCurrentEntityAttributes(): Record<string, string> {
     const ctx = getEntityContext();
     const attrs: Record<string, string> = {};
-    const last = <T>(arr: T[]) => arr[arr.length - 1];
+    const last = <T>(arr: readonly T[]) => arr[arr.length - 1];
     if (ctx.workflowStack.length) attrs[`${Config.LIBRARY_NAME}.workflow.name`] = last(ctx.workflowStack)!;
     if (ctx.taskStack.length)     attrs[`${Config.LIBRARY_NAME}.task.name`]     = last(ctx.taskStack)!;
     if (ctx.agentStack.length)    attrs[`${Config.LIBRARY_NAME}.agent.name`]    = last(ctx.agentStack)!;
@@ -143,12 +154,14 @@ export class SessionManager {
     return attrs;
   }
 
+  /**
+   * Clear the entity stacks for the rest of the current async flow. The
+   * caller's enclosing scope is not modified.
+   */
   static clearEntityStacks(): void {
-    const ctx = getEntityContext();
-    ctx.workflowStack = [];
-    ctx.taskStack     = [];
-    ctx.agentStack    = [];
-    ctx.spanStack     = [];
+    const ctx = entityStorage.getStore();
+    if (!ctx) return;
+    entityStorage.enterWith({ ...copyEntityContext(ctx), workflowStack: [], taskStack: [], agentStack: [], spanStack: [] });
   }
 
   // OTel context helpers

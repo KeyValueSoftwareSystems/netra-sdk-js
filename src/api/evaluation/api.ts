@@ -6,6 +6,7 @@
 import { Config } from "../../config";
 import { NetraLogger } from "../../netraLogger";
 import { SpanWrapper } from "../../span-wrapper";
+import { createLimit, LimitFunction } from "../../utils/concurrency-limit";
 import { EvaluationHttpClient } from "./client";
 import {
   AddDatasetItemResponse,
@@ -288,6 +289,9 @@ export class Evaluation {
     NetraLogger.info("netra.evaluation: Initiated test run");
 
     const semaphore = new Semaphore(Math.max(1, maxConcurrency));
+    // Evaluator runs (each polls for span ingestion for up to 60 s) share the
+    // run's concurrency limit instead of all starting at once (JS-PERF-010).
+    const evalLimit = createLimit(Math.max(1, maxConcurrency));
     const results: Array<Record<string, any>> = [];
     const bgEvalTasks: Promise<void>[] = [];
     let completedItems = 0;
@@ -304,6 +308,7 @@ export class Evaluation {
           evaluators,
           results,
           bgEvalTasks,
+          evalLimit,
         );
 
         completedItems += 1;
@@ -380,6 +385,7 @@ export class Evaluation {
     evaluators: any[] | undefined,
     results: Array<Record<string, any>>,
     bgEvalTasks: Promise<void>[],
+    evalLimit: LimitFunction,
   ): Promise<{ status: string }> {
     const spanName = `TestRun.${runName}`;
 
@@ -410,7 +416,7 @@ export class Evaluation {
       );
 
       if (evaluators && ctx.status === "completed") {
-        const evalTask = this.runEvaluatorsForItem(runId, ctx, evaluators);
+        const evalTask = evalLimit(() => this.runEvaluatorsForItem(runId, ctx, evaluators));
         bgEvalTasks.push(evalTask);
       }
 

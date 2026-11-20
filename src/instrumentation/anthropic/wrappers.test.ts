@@ -165,6 +165,34 @@ describe("Anthropic instrumentation", () => {
       expect(await collect(data)).toHaveLength(EVENTS.length);
     });
 
+    // JS-MEM-003: the stream from .withResponse() is the SDK's own object, so
+    // Netra's span was never ended (or exported) however it was read.
+    it("create({ stream: true }).withResponse() ends the span when the stream is read", async () => {
+      const { data } = await client.messages.create({ ...PARAMS, stream: true }).withResponse();
+      expect((data as any).controller).toBeInstanceOf(AbortController);
+      await collect(data);
+
+      const [span] = tracing.spans("anthropic.chat");
+      expect(span).toBeDefined();
+      expect(span.status.code).toBe(SpanStatusCode.OK);
+      expect(span.attributes["gen_ai.usage.completion_tokens"]).toBe(2);
+    });
+
+    it("create({ stream: true }).withResponse() ends the span when the app breaks out early", async () => {
+      const { data } = await client.messages.create({ ...PARAMS, stream: true }).withResponse();
+      for await (const _ of data) break;
+
+      expect(tracing.spans("anthropic.chat")).toHaveLength(1);
+    });
+
+    it("create({ stream: true }).asResponse() ends the span", async () => {
+      const response = await client.messages.create({ ...PARAMS, stream: true }).asResponse();
+      await response.text();
+      await settle();
+
+      expect(tracing.spans("anthropic.chat")).toHaveLength(1);
+    });
+
     it("toReadableStream() works and still ends the span", async () => {
       const stream = await client.messages.create({ ...PARAMS, stream: true });
       const reader = stream.toReadableStream().getReader();
