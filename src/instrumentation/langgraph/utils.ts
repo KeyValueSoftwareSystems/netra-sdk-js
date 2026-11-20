@@ -1,6 +1,7 @@
 import { Span } from "@opentelemetry/api";
 import type { ChainValues } from "@langchain/core/utils/types";
 import { SpanAttributes } from "../span-attributes";
+import { isTraceContentEnabled } from "../utils";
 
 export const NetraLanggraphAttributes = {
   spanType: "netra.span.type",
@@ -21,6 +22,7 @@ export function setGraphInputAttributes(
   span: Span,
   inputs: Record<string, any>,
 ): void {
+  if (!isTraceContentEnabled()) return;
   span.setAttribute(
     NetraLanggraphAttributes.entityInput,
     JSON.stringify({ inputs }),
@@ -31,6 +33,7 @@ export function setGraphOutputAttributes(
   span: Span,
   outputs: Record<string, any>,
 ): void {
+  if (!isTraceContentEnabled()) return;
   span.setAttribute(
     NetraLanggraphAttributes.entityOutput,
     JSON.stringify({ outputs }),
@@ -58,6 +61,7 @@ export function setChainInputAttributes(
   tags?: string[],
   metadata?: Record<string, unknown>,
 ): void {
+  if (!isTraceContentEnabled()) return;
   const entityInputs: Record<string, any> = { inputs };
 
   if (tags) {
@@ -92,6 +96,7 @@ export function setChainOutputAttributes(
   outputs: ChainValues,
   tags?: string[],
 ): void {
+  if (!isTraceContentEnabled()) return;
   const entityOutputs: Record<string, any> = { outputs };
   if (tags) {
     const filteredTags = tags.filter(tagFilter);
@@ -114,6 +119,7 @@ export function setToolAttributes(
   tags?: string[],
 ): void {
   span.setAttribute(NetraLanggraphAttributes.spanType, "TOOL");
+  if (!isTraceContentEnabled()) return;
   const filteredTags = tags?.filter(tagFilter) ?? [];
   const filteredMetadata: Record<string, any> = {};
 
@@ -164,6 +170,7 @@ function mapLlmAttributes(
 }
 
 function setLlmPrompts(span: Span, prompts: string[]): void {
+  if (!isTraceContentEnabled()) return;
   const seperator = ":";
   const roleMap: Record<string, string> = { human: "user" };
 

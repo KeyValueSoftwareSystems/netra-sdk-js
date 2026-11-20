@@ -21,7 +21,7 @@ import {
 } from "./constants";
 import { NetraLogger } from "../../netraLogger";
 import { safeStringify } from "../../utils/serialization";
-import { setCacheWriteTtlAttributes } from "../utils";
+import { isTraceContentEnabled, setCacheWriteTtlAttributes } from "../utils";
 import { AgentSpan, SpanData } from "./types";
 import { extractContentString, extractInstructions } from "./utils";
 
@@ -147,6 +147,7 @@ function setGenerationAttributes(span: OTelSpan, data: SpanData, systemName: str
     }
   }
 
+  if (!isTraceContentEnabled()) return;
   if (data.input !== undefined) {
     setIndexedPromptAttributes(span, data.input);
   }
@@ -171,22 +172,23 @@ function setResponseAttributes(span: OTelSpan, agentSpan: AgentSpan, systemName:
     );
   }
 
+  const traceContent = isTraceContentEnabled();
   let promptStartIndex = 0;
 
-  const instructions = extractInstructions(data._response);
+  const instructions = traceContent ? extractInstructions(data._response) : undefined;
   if (instructions) {
     span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.role`, "system");
     span.setAttribute(`${SpanAttributes.LLM_PROMPTS}.0.content`, instructions);
     promptStartIndex = 1;
   }
 
-  if (data._input !== undefined) {
+  if (traceContent && data._input !== undefined) {
     setIndexedPromptAttributes(span, data._input, promptStartIndex);
   }
 
   if (data._response) {
     setResponseObjectAttributes(span, data._response);
-    setIndexedCompletionAttributes(span, data._response);
+    if (traceContent) setIndexedCompletionAttributes(span, data._response);
   }
 
   const resp = data._response as Record<string, unknown> | undefined;
@@ -199,6 +201,7 @@ function setFunctionAttributes(span: OTelSpan, data: SpanData): void {
   if (data.name) {
     span.setAttribute(GEN_AI_TOOL_NAME, data.name);
   }
+  if (!isTraceContentEnabled()) return;
   if (data.mcp_data) {
     span.setAttribute(NETRA_MCP_DATA, data.mcp_data);
   }
@@ -241,7 +244,7 @@ function setCustomAttributes(span: OTelSpan, data: SpanData): void {
   if (data.name) {
     span.setAttribute(NETRA_SPAN_NAME, data.name);
   }
-  if (data.data !== undefined) {
+  if (data.data !== undefined && isTraceContentEnabled()) {
     span.setAttribute(NETRA_CUSTOM_DATA, safeStringify(data.data));
   }
 }
