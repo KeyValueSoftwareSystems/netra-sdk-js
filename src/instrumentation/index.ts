@@ -41,9 +41,9 @@ import { LocalFilteringSpanProcessor } from "../processors/localfiltering-span-p
 import { propagation } from "@opentelemetry/api";
 import {
   CompositePropagator,
-  W3CBaggagePropagator as BaggagePropagator,
   W3CTraceContextPropagator,
 } from "@opentelemetry/core";
+import { NetraBaggagePropagator } from "../utils/netra-baggage-propagator";
 
 // Interface for TracerProvider with addSpanProcessor method
 interface TracerProviderWithProcessors {
@@ -85,7 +85,7 @@ export let instrumentationsReady: Promise<void> = Promise.resolve();
 
 propagation.setGlobalPropagator(
   new CompositePropagator({
-    propagators: [new W3CTraceContextPropagator(), new BaggagePropagator()],
+    propagators: [new W3CTraceContextPropagator(), new NetraBaggagePropagator()],
   }),
 );
 
@@ -413,6 +413,11 @@ export function initInstrumentations(
     headers: config.headers,
     instrumentModules,
     silenceInitializationMessage: !config.debugMode,
+    // Netra has its own prompts API and never uses Traceloop's prompt registry.
+    // Left on, Traceloop fetches prompts from api.traceloop.com whenever no
+    // endpoint is set, sending the Netra API key there and crashing the app
+    // with an unhandled rejection if the host is unreachable (JS-PERF-001).
+    traceloopSyncEnabled: false,
   };
   // ---- updated exporter setup (Python-equivalent) ----
 
@@ -860,7 +865,7 @@ function addCustomSpanProcessors(
     // 3. Span I/O Processor (wraps setAttribute — outermost layer)
     //    Routes IO-related attributes, assembles input/output from gen_ai.*
     //    and traceloop.* keys. Assembled values flow through serialize → scrub.
-    const spanIOProcessor = new SpanIOProcessor();
+    const spanIOProcessor = new SpanIOProcessor(config.traceContent);
     provider.addSpanProcessor(spanIOProcessor);
 
     // 4. Instrumentation Span Processor - tags instrumentation name.

@@ -2,13 +2,14 @@
  * Session Span Processor
  *
  * OpenTelemetry span processor that automatically adds session attributes to spans.
- * This includes session_id, user_id, tenant_id from OpenTelemetry baggage, and entity context
- * (workflow, task, agent names) from SessionManager.
+ * This includes session_id, user_id and tenant_id set by the application, and entity
+ * context (workflow, task, agent names) from SessionManager.
  *
- * Uses OpenTelemetry's baggage API for automatic context propagation across async boundaries.
+ * Session values are kept under a private OTel context key, never in W3C baggage, so
+ * they follow the app's async context but are neither read from nor sent to the wire.
  */
 
-import { context, Context, propagation, Span } from "@opentelemetry/api";
+import { context, Context, createContextKey, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
 import { NetraLogger } from "../netraLogger";
@@ -51,80 +52,93 @@ function getContextManager(): any {
  * Binds newContext as the active context for the current async resource,
  * equivalent to Python's otel_context.attach(ctx).
  */
-function safeEnterWith(newContext: Context): void {
+function safeEnterWith(newContext: Context): boolean {
   const contextManager = getContextManager();
 
   if (!contextManager) {
-    return;
+    return false;
   }
 
   // AsyncLocalStorageContextManager v2.x has no direct enterWith — go through _asyncLocalStorage
   if (typeof contextManager._asyncLocalStorage?.enterWith === 'function') {
     contextManager._asyncLocalStorage.enterWith(newContext);
-    return;
+    return true;
   }
 
   // Future-proof: some managers may expose enterWith directly
   if (typeof contextManager.enterWith === 'function') {
     contextManager.enterWith(newContext);
-    return;
+    return true;
   }
 
-  NetraLogger.warn("SessionSpanProcessor: enterWith not available on context manager; baggage will not propagate.");
+  NetraLogger.warn("SessionSpanProcessor: enterWith not available on context manager; session values will not be applied.");
+  return false;
 }
 
+export type SessionKey = "session_id" | "user_id" | "tenant_id";
+export type SessionValues = Readonly<Partial<Record<SessionKey, string>>>;
+
 /**
- * Persistent store for session values (session_id, user_id, tenant_id, etc.).
+ * Private OTel context key holding the session, user and tenant set by the
+ * application (JS-SEC-001/002/003).
  *
- * OTel's context.with() / asyncLocalStorage.run() creates isolated scopes — enterWith()
- * inside a span's callback does not propagate to sibling spans started after it. This map
- * lives outside any async scope so values set anywhere (pre-init, inside a span, etc.)
- * are visible to all subsequent spans. OTel baggage from parentContext still takes
- * precedence in onStart to honour cross-process propagated values.
+ * These values used to live in W3C baggage plus a process-wide Map. Baggage is
+ * extracted from every inbound request and injected into every outbound one, so
+ * callers could forge the identity a request was recorded under and the real
+ * identifiers were sent to every third-party host. The Map made one request's
+ * identity apply to every later request that set none.
+ *
+ * A private context key is scoped to the current async context, cannot be set
+ * by a remote caller, and is never serialized onto the wire.
  */
-const sessionValues = new Map<string, string>();
+const NETRA_SESSION_CONTEXT_KEY = createContextKey("netra.session");
+
+export function getSessionValues(ctx: Context = context.active()): SessionValues {
+  return (ctx.getValue(NETRA_SESSION_CONTEXT_KEY) as SessionValues | undefined) ?? {};
+}
 
 /**
- * Set a session baggage value using OpenTelemetry's baggage API
- * This automatically propagates across async boundaries via AsyncLocalStorage
+ * Returns a copy of `ctx` with `values` merged into its session values.
+ * Empty or undefined values are ignored.
  */
-export function setSessionBaggage(key: string, value: string): void {
-  // Always persist in the module-level store — survives run() scope boundaries
-  sessionValues.set(key, value);
+export function contextWithSessionValues(ctx: Context, values: SessionValues): Context {
+  const merged: Partial<Record<SessionKey, string>> = { ...getSessionValues(ctx) };
+  for (const [key, value] of Object.entries(values) as [SessionKey, string | undefined][]) {
+    if (value) merged[key] = value;
+  }
+  return ctx.setValue(NETRA_SESSION_CONTEXT_KEY, Object.freeze(merged));
+}
 
-  // Best-effort: also push into OTel baggage for cross-process propagation
+/**
+ * Set a session value for the current async context and everything it starts
+ * afterwards. Returns false when no context manager is registered yet (for
+ * example before `Netra.init()`), in which case nothing is stored.
+ */
+export function setSessionValue(key: SessionKey, value: string): boolean {
   try {
-    const currentBaggage = propagation.getBaggage(context.active()) || propagation.createBaggage();
-    const newBaggage = currentBaggage.setEntry(key, { value });
-    const newContext = propagation.setBaggage(context.active(), newBaggage);
-    safeEnterWith(newContext);
+    return safeEnterWith(contextWithSessionValues(context.active(), { [key]: value }));
   } catch (e) {
-    // non-fatal — sessionValues is the primary in-process store
+    NetraLogger.debug("SessionSpanProcessor: failed to set session value:", e);
+    return false;
+  }
+}
+
+export function getSessionValue(key: SessionKey): string | undefined {
+  try {
+    return getSessionValues()[key];
+  } catch {
+    return undefined;
   }
 }
 
 /**
- * Get a session baggage value — checks OTel baggage first, then the persistent store.
+ * Clear the session values of the current async context.
  */
-export function getSessionBaggage(key: string): string | undefined {
+export function clearSessionValues(): void {
   try {
-    return propagation.getBaggage(context.active())?.getEntry(key)?.value ?? sessionValues.get(key);
+    safeEnterWith(context.active().deleteValue(NETRA_SESSION_CONTEXT_KEY));
   } catch (e) {
-    return sessionValues.get(key);
-  }
-}
-
-/**
- * Clear all session baggage from the current context
- */
-export function clearSessionBaggage(): void {
-  sessionValues.clear();
-  try {
-    const emptyBaggage = propagation.createBaggage();
-    const newContext = propagation.setBaggage(context.active(), emptyBaggage);
-    safeEnterWith(newContext);
-  } catch (e) {
-    NetraLogger.warn("SessionSpanProcessor: Failed to clear baggage:", e);
+    NetraLogger.warn("SessionSpanProcessor: Failed to clear session values:", e);
   }
 }
 
@@ -145,34 +159,19 @@ export class SessionSpanProcessor implements SpanProcessor {
       span.setAttribute("library.version", Config.LIBRARY_VERSION);
       span.setAttribute("sdk.name", Config.SDK_NAME);
 
-      // Get baggage from the parent context (or current if not provided)
-      const ctxToUse = parentContext || context.active();
-      const baggage = propagation.getBaggage(ctxToUse);
+      // Session values come only from the private context key the app set
+      // through Netra.setSessionId/setUserId/setTenantId or Netra.withSession.
+      // Inbound W3C baggage is deliberately ignored (JS-SEC-001).
+      const session = getSessionValues(parentContext || context.active());
 
-      // Add session context — OTel baggage (cross-process) takes precedence, then persistent store
-      const sessionId = baggage?.getEntry("session_id")?.value ?? sessionValues.get("session_id");
-      const userId = baggage?.getEntry("user_id")?.value ?? sessionValues.get("user_id");
-      const tenantId = baggage?.getEntry("tenant_id")?.value ?? sessionValues.get("tenant_id");
-
-      if (sessionId) {
-        span.setAttribute(`${Config.LIBRARY_NAME}.session_id`, sessionId);
+      if (session.session_id) {
+        span.setAttribute(`${Config.LIBRARY_NAME}.session_id`, session.session_id);
       }
-      if (userId) {
-        span.setAttribute(`${Config.LIBRARY_NAME}.user_id`, userId);
+      if (session.user_id) {
+        span.setAttribute(`${Config.LIBRARY_NAME}.user_id`, session.user_id);
       }
-      if (tenantId) {
-        span.setAttribute(`${Config.LIBRARY_NAME}.tenant_id`, tenantId);
-      }
-
-      // Add custom attributes from baggage
-      const customKeys = baggage?.getEntry("custom_keys")?.value;
-      if (customKeys) {
-        for (const key of customKeys.split(",")) {
-          const value = baggage?.getEntry(`custom.${key}`)?.value;
-          if (value) {
-            span.setAttribute(`${Config.LIBRARY_NAME}.custom.${key}`, value);
-          }
-        }
+      if (session.tenant_id) {
+        span.setAttribute(`${Config.LIBRARY_NAME}.tenant_id`, session.tenant_id);
       }
 
       // Add entity attributes from SessionManager (workflow, task, agent context)

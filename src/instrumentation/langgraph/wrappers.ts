@@ -21,6 +21,7 @@ import { NetraLogger } from "../../netraLogger";
 import { wrapAsyncIterable } from "../../utils/response-handler";
 import {
   setResponseAttributes as setBaseResponseAttributes,
+  isTraceContentEnabled,
   shouldSuppressInstrumentation,
 } from "../utils";
 
@@ -520,16 +521,17 @@ export class LanggraphWrapper {
 
     // Return LangGraph's own stream so chunks, getReader(), cancel() and
     // pipeTo() are untouched; only iteration is observed.
+    const traceContent = isTraceContentEnabled();
     let output: Record<string, any> = {};
     return wrapAsyncIterable(stream, {
       withContext: (fn) => context.with(ctxWithFlag, fn),
       onChunk: (chunk) => {
-        output = { ...output, ...(chunk ?? {}) };
+        if (traceContent) output = { ...output, ...(chunk ?? {}) };
       },
       onError: (error) => span.recordException(error as Error),
       finalize: (status) => {
         try {
-          if (status === "ok") {
+          if (status === "ok" && traceContent) {
             span.setAttribute(
               NetraLanggraphAttributes.entityOutput,
               JSON.stringify({ outputs: output }),

@@ -94,6 +94,8 @@ export class RootSpanProcessor implements SpanProcessor {
     const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
     if (!parentSpan) return true;
     const parentCtx = parentSpan.spanContext();
-    return !parentCtx || !trace.isSpanContextValid(parentCtx);
+    // A remote parent (inbound traceparent from a gateway, mesh or upstream
+    // service) means this span is the local root of the trace in this process.
+    return !parentCtx || !trace.isSpanContextValid(parentCtx) || parentCtx.isRemote === true;
   }
 }

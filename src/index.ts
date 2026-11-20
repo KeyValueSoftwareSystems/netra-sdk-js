@@ -4,13 +4,18 @@
  * Built on top of OpenTelemetry and Traceloop
  */
 
-import { trace } from "@opentelemetry/api";
+import { context, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
 import { Config, NetraConfig } from "./config";
 import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
 import { NetraLogger } from "./netraLogger";
-import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
+import {
+  clearSessionValues,
+  contextWithSessionValues,
+  setSessionValue,
+  withBlockedSpansLocal,
+} from "./processors";
 import {
   FLUSH_TIMEOUT_MS,
   registerExitTask,
@@ -150,6 +155,10 @@ export {
   netraExpressMiddleware,
   runWithExtractedContext,
 } from "./utils/context-propagation";
+
+// The setter warning below fires on every call in an unsupported setup (one per
+// request on a server), so it is printed only once per process.
+let warnedNoContextManager = false;
 
 export class Netra {
   private static _SDK_NAME = "netra_sdk";
@@ -414,13 +423,52 @@ export class Netra {
     SessionManager.setRootOutput(value);
   }
 
+  /**
+   * Run `fn` with the given session, user and tenant applied to every span
+   * started inside it. Prefer this over the setters when the values must reach
+   * spans outside the callback that sets them, or when work fans out across
+   * callbacks. Values are scoped to `fn` and are never sent to other services.
+   */
+  static withSession<T>(
+    values: { sessionId?: string; userId?: string; tenantId?: string },
+    fn: () => T,
+  ): T {
+    const ctx = contextWithSessionValues(context.active(), {
+      session_id: typeof values?.sessionId === "string" ? values.sessionId : undefined,
+      user_id: typeof values?.userId === "string" ? values.userId : undefined,
+      tenant_id: typeof values?.tenantId === "string" ? values.tenantId : undefined,
+    });
+    return context.with(ctx, fn);
+  }
+
+  /**
+   * Clear the session, user and tenant set for the current async context.
+   */
+  static clearSession(): void {
+    clearSessionValues();
+  }
+
+  private static _applySessionValue(
+    method: string,
+    key: "session_id" | "user_id" | "tenant_id",
+    value: string,
+  ): void {
+    if (!setSessionValue(key, value) && !warnedNoContextManager) {
+      warnedNoContextManager = true;
+      NetraLogger.notice(
+        "warn",
+        `${method}: no AsyncLocalStorage-based OpenTelemetry context manager is registered, so identity values only apply to the active span. Call the setters after Netra.init(), and do not register a different context manager before it. This warning is shown once.`,
+      );
+    }
+  }
+
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
       NetraLogger.notice("error", `setSessionId: sessionId must be a string, got ${typeof sessionId}`);
       return;
     }
     if (sessionId) {
-      setSessionBaggage("session_id", sessionId);
+      Netra._applySessionValue("setSessionId", "session_id", sessionId);
       SessionManager.setAttributeOnActiveSpan(
         `${Config.LIBRARY_NAME}.session_id`,
         sessionId,
@@ -431,8 +479,9 @@ export class Netra {
   }
 
   /**
-   * Set user_id context attributes for all spans.
-   * Uses OpenTelemetry baggage API for automatic context propagation.
+   * Set user_id on spans started from the current async context onward
+   * (for example, the rest of the current request). It is not sent to other
+   * services and does not carry over to unrelated requests.
    */
   static setUserId(userId: string): void {
     if (typeof userId !== "string") {
@@ -440,7 +489,7 @@ export class Netra {
       return;
     }
     if (userId) {
-      setSessionBaggage("user_id", userId);
+      Netra._applySessionValue("setUserId", "user_id", userId);
       SessionManager.setAttributeOnActiveSpan(
         `${Config.LIBRARY_NAME}.user_id`,
         userId,
@@ -451,8 +500,9 @@ export class Netra {
   }
 
   /**
-   * Set tenant_id context attributes for all spans.
-   * Uses OpenTelemetry baggage API for automatic context propagation.
+   * Set tenant_id on spans started from the current async context onward
+   * (for example, the rest of the current request). It is not sent to other
+   * services and does not carry over to unrelated requests.
    */
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
@@ -460,7 +510,7 @@ export class Netra {
       return;
     }
     if (tenantId) {
-      setSessionBaggage("tenant_id", tenantId);
+      Netra._applySessionValue("setTenantId", "tenant_id", tenantId);
       SessionManager.setAttributeOnActiveSpan(
         `${Config.LIBRARY_NAME}.tenant_id`,
         tenantId,

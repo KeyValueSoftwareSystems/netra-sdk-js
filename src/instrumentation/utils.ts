@@ -433,7 +433,68 @@ export function writeCompletionAttributes(
   span.setAttribute("output", JSON.stringify(messages));
 }
 
+// Tool definition sanitizing (JS-SEC-005)
+
+/**
+ * Keys whose values are credentials in provider tool definitions, e.g. the
+ * OpenAI Responses API remote-MCP `headers` / connector `authorization`, or
+ * Anthropic `mcp_servers[].authorization_token`. Matched case-insensitively
+ * with `-`/`_` ignored.
+ */
+const SECRET_TOOL_KEYS = new Set([
+  "headers",
+  "authorization",
+  "authorizationtoken",
+  "apikey",
+  "accesstoken",
+  "token",
+  "secret",
+  "clientsecret",
+  "password",
+  "bearer",
+  "cookie",
+]);
+export const REDACTED = "[REDACTED]";
+
+function isSecretToolKey(key: string): boolean {
+  return SECRET_TOOL_KEYS.has(key.toLowerCase().replace(/[-_]/g, ""));
+}
+
+function redactSecrets(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (depth > 20 || seen.has(value as object)) return REDACTED;
+  seen.add(value as object);
+  if (Array.isArray(value)) return value.map((v) => redactSecrets(v, depth + 1, seen));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = isSecretToolKey(k) && v !== undefined && v !== null ? REDACTED : redactSecrets(v, depth + 1, seen);
+  }
+  return out;
+}
+
+function toolSummary(tool: unknown): Record<string, unknown> {
+  if (!tool || typeof tool !== "object") return {};
+  const t = tool as Record<string, any>;
+  const name =
+    t.name ?? t.function?.name ?? t.server_label ?? t.connector_id ?? undefined;
+  const summary: Record<string, unknown> = {};
+  if (t.type !== undefined) summary.type = t.type;
+  if (name !== undefined) summary.name = name;
+  return summary;
+}
+
+/**
+ * Returns a copy of a tool list that is safe to record: credentials are always
+ * replaced with "[REDACTED]", and with traceContent disabled only each tool's
+ * type and name are kept.
+ */
+export function sanitizeToolsForTrace(tools: unknown[]): unknown[] {
+  if (!isTraceContentEnabled()) return tools.map(toolSummary);
+  return tools.map((t) => redactSecrets(t));
+}
+
 // Request Attributes
+
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
@@ -453,9 +514,9 @@ export function setRequestAttributes(
   // Standard model parameters
   setModelParams(span, kwargs);
 
-  // Tool definitions
+  // Tool definitions — credentials always redacted; names only without content (JS-SEC-005)
   if (Array.isArray(kwargs.tools)) {
-    span.setAttribute("tools", safeStringify(kwargs.tools));
+    span.setAttribute("tools", safeStringify(sanitizeToolsForTrace(kwargs.tools)));
   }
 
   // Reasoning config

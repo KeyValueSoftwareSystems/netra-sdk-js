@@ -2,7 +2,7 @@
  * Public API for running multi-turn conversation simulations.
  */
 
-import pLimit from "p-limit";
+import { createLimit } from "../utils/concurrency-limit";
 import { Config } from "../config";
 import { NetraLogger } from "../netraLogger";
 import { registerExitTask } from "../shutdown-registry";
@@ -156,7 +156,7 @@ export class Simulation {
             const simulationItems: SimulationItem[] = [];
             const failedItems: ConversationResult[] = [];
 
-            const limit = pLimit(Math.min(5, maxConcurrency));
+            const limit = createLimit(Math.min(5, maxConcurrency));
             const setupPromises = items.map((item) =>
                 limit(async () => {
                     const { runItemId, datasetItemId } = item;
@@ -281,7 +281,7 @@ export class Simulation {
         };
 
         let processedCount = 0;
-        const limit = pLimit(Math.min(5, maxConcurrency));
+        const limit = createLimit(Math.min(5, maxConcurrency));
 
         const promises = runItems.map((runItem) =>
             limit(async () => {
@@ -361,7 +361,7 @@ export class Simulation {
         if (runItemIds.length === 0) {
             return;
         }
-        const limit = pLimit(Math.min(5, maxConcurrency));
+        const limit = createLimit(Math.min(5, maxConcurrency));
         await Promise.all(
             runItemIds.map((runItemId) =>
                 limit(() => this._client.reportFailure(runId, runItemId, error, status)),

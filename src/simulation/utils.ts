@@ -1,10 +1,9 @@
 import axios from "axios";
-import pLimit from "p-limit";
+import { createLimit, LimitFunction } from "../utils/concurrency-limit";
 import { NetraLogger } from "../netraLogger";
 import { FileData, ProcessedFile } from "./models";
 import { BaseTask } from "./task";
 
-type LimitFunction = ReturnType<typeof pLimit>;
 
 const LOG_PREFIX = "netra.simulation";
 const DEFAULT_FILE_DOWNLOAD_TIMEOUT_S = 30;
@@ -183,7 +182,7 @@ export async function processFiles(
     }
 
     const timeoutMs = _getFileDownloadTimeout();
-    const limit: LimitFunction = pLimit(MAX_FILE_DOWNLOAD_WORKERS);
+    const limit: LimitFunction = createLimit(MAX_FILE_DOWNLOAD_WORKERS);
     const controller = new AbortController();
 
     const downloadPromises = files.map((file) =>

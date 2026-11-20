@@ -167,10 +167,15 @@ Track user sessions and add custom context to your traces.
 ```typescript
 import { Netra } from "netra-sdk";
 
-// Set Identity Context
+// Set Identity Context (applies to the rest of the current request or async flow)
 Netra.setUserId("user-123");
 Netra.setSessionId("session-abc");
 Netra.setTenantId("tenant-xyz");
+
+// Or scope identity to a callback
+await Netra.withSession({ userId: "user-123", sessionId: "session-abc" }, async () => {
+    // every span started in here carries user-123 / session-abc
+});
 
 // Add Custom Attributes
 Netra.setCustomAttributes("customer_tier", "premium");
@@ -183,6 +188,10 @@ Netra.setCustomEvent("user_feedback", {
     category: "positive"
 });
 ```
+
+Identity values stay inside your process: they are recorded on your spans but never sent to other services in request headers, and they are not read from incoming request headers. Values set while handling one request do not carry over to other requests. Call the setters after `Netra.init()`.
+
+The setters need an `AsyncLocalStorage`-based OpenTelemetry context manager, which `Netra.init()` registers. If you call them before `Netra.init()`, or your app registers a different context manager first (for example `AsyncHooksContextManager`), each value applies only to the span that is active at the time, and Netra prints a one-time warning. If you keep your own context manager, use `Netra.withSession()` to scope identity to a callback instead.
 
 ## 🔄 Custom Span Tracking
 

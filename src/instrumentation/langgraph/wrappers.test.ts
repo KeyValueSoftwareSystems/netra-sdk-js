@@ -6,7 +6,7 @@
  */
 import { context, trace } from "@opentelemetry/api";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setupTracing } from "../../__fixtures__/llm-test-utils";
 import { NetraLanggraphInstrumentor } from "./index";
@@ -52,6 +52,11 @@ describe("LangGraph instrumentation", () => {
   beforeEach(() => {
     tracing.exporter.reset();
     nodeSpanIds = [];
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("stream() yields LangGraph's own chunks", async () => {
@@ -100,6 +105,19 @@ describe("LangGraph instrumentation", () => {
     const requestId = tracing.spans("request")[0].spanContext().spanId;
     for (const span of tracing.spans(WORKFLOW)) {
       expect(span.parentSpanContext?.spanId).toBe(requestId);
+    }
+  });
+
+  // JS-SEC-004: traceContent: false must keep graph state out of the trace.
+  it("records no graph input or output when content tracing is off", async () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "false");
+    await graph.invoke({ question: "SECRET-INVOKE" });
+    await collect(await graph.stream({ question: "SECRET-STREAM" }));
+
+    const spans = tracing.exporter.getFinishedSpans();
+    expect(tracing.spans(WORKFLOW)).toHaveLength(2);
+    for (const span of spans) {
+      expect(JSON.stringify(span.attributes)).not.toContain("SECRET");
     }
   });
 });
