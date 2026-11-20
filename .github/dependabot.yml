@@ -1,0 +1,17 @@
+# Weekly dependency and GitHub Actions updates (JS-SEC-026).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      opentelemetry:
+        patterns: ["@opentelemetry/*"]
+      traceloop:
+        patterns: ["@traceloop/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

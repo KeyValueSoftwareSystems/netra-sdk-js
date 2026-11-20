@@ -1,0 +1,81 @@
+name: CI
+
+# Type-checks, tests and builds every change, and checks that the CommonJS
+# build loads with require() on the oldest Node versions `engines` allows
+# (JS-SEC-020, JS-SEC-026, JS-PERF-004).
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit -p .
+      - run: npx vitest run
+      - run: npm run build
+      - name: Upload build
+        if: matrix.node == 22
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 1
+
+  require-cjs:
+    name: require() on Node ${{ matrix.node }}
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Versions without require(esm): an ESM-only runtime dependency makes
+        # require("netra-sdk") throw ERR_REQUIRE_ESM here.
+        node: ["18", "20.18.0", "22.11.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      - run: node -e "const { Netra } = require('./dist/index.cjs'); if (typeof Netra?.init !== 'function') process.exit(1); console.log('require() ok')"
+
+  audit:
+    name: npm audit (production dependencies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Reported, not blocking: some advisories come in through
+    # @traceloop/node-server-sdk with no fix available yet (JS-SEC-019).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit --omit=dev --audit-level=high

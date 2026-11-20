@@ -84,6 +84,17 @@ const abandonedStreams: FinalizationRegistryLike<() => void> | undefined =
       })
     : undefined;
 
+const NETRA_STREAM_OWNER = Symbol("netra.streamOwner");
+
+/** Make `holder` keep `target` reachable (a hidden, non-enumerable reference). */
+function keepAlive(holder: object, target: object): void {
+  try {
+    Object.defineProperty(holder, NETRA_STREAM_OWNER, { value: target });
+  } catch {
+    // A frozen or non-extensible holder: nothing more can be done.
+  }
+}
+
 /**
  * Wrap an async iterable with lifecycle callbacks.
  * Returns a Proxy that preserves the original object's full interface
@@ -126,7 +137,13 @@ export function wrapAsyncIterable<T>(
     }
   };
 
-  function createWrappedIterator(): AsyncIterator<T> {
+  /**
+   * `owner` is the wrapped stream the iterator came from. The iterator keeps
+   * a strong reference to it: `for await (const c of await create(...))`
+   * holds only the iterator, and without this reference the stream could be
+   * garbage-collected mid-loop, ending its span after the first chunk.
+   */
+  function createWrappedIterator(owner?: object): AsyncIterator<T> {
     const iterator = source[Symbol.asyncIterator]();
     let done = false;
 
@@ -136,7 +153,7 @@ export function wrapAsyncIterable<T>(
       finalizeOnce(status);
     };
 
-    return {
+    const wrapped: AsyncIterator<T> = {
       async next(value?: any) {
         try {
           const result = await callbacks.withContext(() => iterator.next(value));
@@ -196,6 +213,8 @@ export function wrapAsyncIterable<T>(
         }
       },
     };
+    if (owner) keepAlive(wrapped, owner);
+    return wrapped;
   }
 
   let directIterator: AsyncIterator<T> | null = null;
@@ -205,9 +224,12 @@ export function wrapAsyncIterable<T>(
    * read with getReader() or cancelled without ever iterating; observe those
    * paths too so the span still ends (JS-MEM-003).
    */
-  const wrapReader = (reader: any): any => {
+  const wrapReader = (reader: any, owner: object): any => {
     if (!reader || typeof reader.read !== "function") return reader;
+    // The handler holds the stream it came from, so an app that keeps only
+    // the reader does not let the stream (and its span) be finalized early.
     return new Proxy(reader, {
+      owner,
       get(r, prop) {
         const value = r[prop];
         if (prop === "read" && typeof value === "function") {
@@ -235,16 +257,20 @@ export function wrapAsyncIterable<T>(
         }
         return typeof value === "function" ? value.bind(r) : value;
       },
-    });
+    } as ProxyHandler<any> & { owner: object });
   };
 
+  // `proxy` must stay out of every closure created in this function: the
+  // registry's held callback closes over this scope, and a reference to the
+  // proxy from there would keep it alive forever. The handler reaches it as
+  // `receiver` instead.
   const proxy = new Proxy(source, {
     get(target, prop, receiver) {
       if (prop === Symbol.asyncIterator) {
-        return () => createWrappedIterator();
+        return () => createWrappedIterator(receiver);
       }
       if (prop === "getReader" && typeof (target as any).getReader === "function") {
-        return (...args: any[]) => wrapReader((target as any).getReader(...args));
+        return (...args: any[]) => wrapReader((target as any).getReader(...args), receiver);
       }
       if (prop === "cancel" && typeof (target as any).cancel === "function") {
         return async (...args: any[]) => {
@@ -370,11 +396,16 @@ export function wrapPromise<T>(
     }
   }
 
+  // The stream the promise resolved to, and its wrapper, for `.withResponse()`.
+  let rawStream: unknown;
+  let wrappedStream: unknown;
   const instrumentedPromise = (async () => {
     try {
       const value = await promise;
       if (isAsyncIterable(value)) {
-        return wrapAsyncIterable(value as any, { ...callbacks, finalize: safeFinalize });
+        rawStream = value;
+        wrappedStream = wrapAsyncIterable(value as any, { ...callbacks, finalize: safeFinalize });
+        return wrappedStream;
       }
       safeOnSuccess(value);
       safeFinalize("ok");
@@ -410,7 +441,19 @@ export function wrapPromise<T>(
         return async (...args: any[]) => {
           const result = await original.withResponse(...args);
           if (result && isAsyncIterable(result.data)) {
-            return { ...result, data: wrapAsyncIterable(result.data, { ...callbacks, finalize: safeFinalize }) };
+            // The SDK caches its parsed result, so `data` is the stream this
+            // promise already wrapped. Hand back that one wrapper: a second
+            // wrapper would leave the first unreferenced, and its
+            // garbage-collection finalizer would end the span mid-read.
+            await instrumentedPromise.catch(() => {});
+            if (result.data === rawStream && wrappedStream) {
+              return { ...result, data: wrappedStream };
+            }
+            const data = wrapAsyncIterable(result.data, { ...callbacks, finalize: safeFinalize });
+            // A different stream object: keep the unused first wrapper alive as
+            // long as this one, so its finalizer cannot end the span early.
+            if (wrappedStream && typeof wrappedStream === "object") keepAlive(data, wrappedStream);
+            return { ...result, data };
           }
           return result;
         };

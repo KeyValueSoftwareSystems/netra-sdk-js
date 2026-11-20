@@ -4,6 +4,7 @@ import { NetraLogger } from "../netraLogger";
 import {
     assertSafeDownloadUrl,
     checkDownloadUrlSync,
+    DownloadAgents,
     MAX_DOWNLOAD_REDIRECTS,
     maxDownloadBytes,
 } from "./download-guard";
@@ -95,21 +96,35 @@ async function _downloadSingleFile(
     signal?: AbortSignal,
 ): Promise<ProcessedFile> {
     try {
-        // Scheme, host and resolved addresses are checked first, and again
-        // for every redirect; size and redirect count are bounded (JS-SEC-017).
-        await assertSafeDownloadUrl(fileData.downloadUrl);
+        // Scheme, host and resolved addresses are checked first. The agents
+        // check the addresses actually connected to, for the first request
+        // and every redirect, so a redirect to a hostname with a private
+        // address, or a DNS answer that changes after this check (rebinding),
+        // is refused too. Size and redirect count are bounded (JS-SEC-017).
+        // The pre-check still matters behind an HTTP proxy, where axios
+        // tunnels through its own agent and the proxy resolves the host.
+        const url = await assertSafeDownloadUrl(fileData.downloadUrl);
         const maxBytes = maxDownloadBytes();
-        const response = await axios.get(fileData.downloadUrl, {
-            responseType: "arraybuffer",
-            timeout: timeoutMs,
-            signal,
-            maxRedirects: MAX_DOWNLOAD_REDIRECTS,
-            maxContentLength: maxBytes,
-            maxBodyLength: maxBytes,
-            beforeRedirect: (options: Record<string, any>) => {
-                checkDownloadUrlSync(String(options.href ?? `${options.protocol}//${options.hostname}${options.path ?? ""}`));
-            },
-        });
+        const agents = new DownloadAgents(url);
+        let response;
+        try {
+            response = await axios.get(fileData.downloadUrl, {
+                responseType: "arraybuffer",
+                timeout: timeoutMs,
+                signal,
+                maxRedirects: MAX_DOWNLOAD_REDIRECTS,
+                maxContentLength: maxBytes,
+                maxBodyLength: maxBytes,
+                httpAgent: agents.httpAgent,
+                httpsAgent: agents.httpsAgent,
+                beforeRedirect: (options: Record<string, any>) => {
+                    const next = checkDownloadUrlSync(String(options.href ?? `${options.protocol}//${options.hostname}${options.path ?? ""}`));
+                    agents.addTarget(next);
+                },
+            });
+        } finally {
+            agents.destroy();
+        }
 
         const encoded = Buffer.from(response.data).toString("base64");
         return {
