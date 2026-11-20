@@ -18,8 +18,8 @@ const CUSTOM_USAGE_ATTRIBUTE = `${Config.LIBRARY_NAME}.usage`;
 const DECISION_REQUEST_TYPE = "decision";
 // Structured conversation attributes: one JSON array of `{"role", "content"}` entries
 // each, replacing the per-message indexed `gen_ai.prompt.N.*` / `gen_ai.completion.N.*` keys.
-const INPUT_ATTRIBUTE = "input";
-const OUTPUT_ATTRIBUTE = "output";
+export const INPUT_ATTRIBUTE = "input";
+export const OUTPUT_ATTRIBUTE = "output";
 // Decision input item types that carry a tool invocation, mapped to the key holding its arguments.
 const DECISION_TOOL_CALL_ARGUMENT_KEYS: Record<string, string> = {
   function_call: "arguments",
@@ -38,10 +38,10 @@ const DECISION_QUESTIONS_MAX_SHARE = 2;
 // Used when NETRA_SPAN_ATTRIBUTE_MAX_SIZE is not a positive number; matches Config's default.
 const DEFAULT_ATTRIBUTE_MAX_SIZE = 30000;
 // Separator `JSON.stringify` puts between array items; used when arrays are assembled from pre-encoded items.
-const JSON_ITEM_SEPARATOR = ",";
+export const JSON_ITEM_SEPARATOR = ",";
 
 /** A decision input entry: tool calls and their outputs also carry the call id. */
-type DecisionInputMessage = TracedMessage & { tool_call_id?: string };
+export type DecisionInputMessage = TracedMessage & { tool_call_id?: string };
 
 /**
  * OpenAI-specific request attributes.
@@ -124,7 +124,7 @@ function setDecisionRequestAttributes(
 }
 
 /** The attribute length limit decision capture budgets against. */
-function attributeMaxSize(): number {
+export function attributeMaxSize(): number {
   const size = Config.SPAN_ATTRIBUTE_MAX_SIZE;
   return Number.isFinite(size) && size > 0 ? size : DEFAULT_ATTRIBUTE_MAX_SIZE;
 }
@@ -218,7 +218,7 @@ function decisionInputEntry(
  * and at most `maxLen` characters of text across all parts kept before
  * anything is encoded.
  */
-function asPromptContent(content: unknown, maxLen: number): string {
+export function asPromptContent(content: unknown, maxLen: number): string {
   const elided = withoutInlineData(content, new CharBudget(maxLen));
   const rendered = typeof elided === "string" ? elided : toJson(elided);
   return sliceText(rendered, maxLen);
@@ -233,7 +233,7 @@ function asPromptContent(content: unknown, maxLen: number): string {
  *
  * @returns The encoded entry, or undefined when not even an empty `content` fits.
  */
-function encodeEntryWithin(entry: DecisionInputMessage, maxLen: number): string | undefined {
+export function encodeEntryWithin(entry: DecisionInputMessage, maxLen: number): string | undefined {
   let content = entry.content;
   const overhead = JSON.stringify({ ...entry, content: "" }).length;
   if (overhead > maxLen) return undefined;
@@ -248,7 +248,7 @@ function encodeEntryWithin(entry: DecisionInputMessage, maxLen: number): string 
 }
 
 /** Join already-encoded JSON values into a JSON array, formatted as `JSON.stringify` would. */
-function joinJsonArray(encodedItems: string[]): string {
+export function joinJsonArray(encodedItems: string[]): string {
   return "[" + encodedItems.join(JSON_ITEM_SEPARATOR) + "]";
 }
 
@@ -300,7 +300,7 @@ function encodeItemsWithin(items: unknown[], maxLen: number): string[] {
  * @returns The encoded entry, or undefined when `items` is non-empty and not
  *          even the first item fits.
  */
-function itemsEntry(items: unknown[], role: string, maxLen: number): string | undefined {
+export function itemsEntry(items: unknown[], role: string, maxLen: number): string | undefined {
   const encoded = encodeItemsWithin(items, maxLen);
   const envelopeLen = JSON.stringify({ role, content: "" }).length;
   const escapedLengths = encoded.map((value) => JSON.stringify(value).length - '""'.length);
@@ -348,7 +348,7 @@ function toJson(value: unknown): string {
 }
 
 /** Cut `text` to at most `maxLen` UTF-16 units without splitting a surrogate pair. */
-function sliceText(text: string, maxLen: number): string {
+export function sliceText(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   let end = Math.max(maxLen, 0);
   const lastCode = text.charCodeAt(end - 1);
