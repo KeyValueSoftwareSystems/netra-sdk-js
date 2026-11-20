@@ -34,6 +34,10 @@ import {
   setResponseAttributes,
 } from "./utils";
 import { SpanAttributes } from "../span-attributes";
+import {
+  setDecisionRequestAttributes,
+  setDecisionResponseAttributes,
+} from "./decision-utils";
 
 const LOG_PREFIX = "netra.instrumentation.google_genai";
 
@@ -263,3 +267,75 @@ export const chatStreamWrapper = (tracer: Tracer) =>
 
 export const embeddingsWrapper = (tracer: Tracer) =>
   genericWrapperFactory(tracer, SPAN_NAMES.EMBEDDING, "embedding");
+
+/**
+ * Wrapper for the Gemini Decisions API (`client.decisions.create(params, options)`).
+ *
+ * The API has no streaming mode, so each call is one CLIENT span. The params
+ * object is read as given (`model`, `input`, `questions`); request and
+ * response capture never fail the call, and API errors are recorded on the
+ * span and re-thrown.
+ */
+export const decisionsWrapper = (tracer: Tracer) =>
+  function wrapper<F extends (...args: any[]) => any>(original: F): F {
+    return function (this: unknown, ...args: any[]) {
+      if (shouldSuppressInstrumentation()) {
+        return original.apply(this, args);
+      }
+
+      const params = (typeof args[0] === "object" && args[0] !== null ? args[0] : {}) as Record<string, unknown>;
+      const currentContext = context.active();
+
+      return tracer.startActiveSpan(
+        SPAN_NAMES.DECISION,
+        { kind: SpanKind.CLIENT },
+        (span: Span) => {
+          try {
+            try {
+              setDecisionRequestAttributes(span, params);
+            } catch (error) {
+              NetraLogger.warn(`${LOG_PREFIX}: failed to record decision request:`, error);
+            }
+
+            const startTime = Date.now();
+            const spanContext = trace.setSpan(currentContext, span);
+            const suppressedCtx = createSuppressedContext(spanContext);
+            const response = context.with(suppressedCtx, () => original.apply(this, args));
+
+            return wrapResponse(
+              response,
+              {
+                withContext: (fn) => context.with(spanContext, fn),
+                onSuccess: (value) => {
+                  setDecisionResponseAttributes(span, value);
+                  span.setAttribute(SpanAttributes.LLM_RESPONSE_DURATION, (Date.now() - startTime) / 1000);
+                },
+                onError: (error) => {
+                  span.setStatus({
+                    code: SpanStatusCode.ERROR,
+                    message: error instanceof Error ? error.message : String(error),
+                  });
+                  span.recordException(error as Error);
+                },
+                finalize: (status) => {
+                  if (status === "ok") {
+                    span.setStatus({ code: SpanStatusCode.OK });
+                  }
+                  span.end();
+                },
+              },
+              { preserveOriginal: response },
+            );
+          } catch (error) {
+            span.setStatus({
+              code: SpanStatusCode.ERROR,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            span.recordException(error as Error);
+            span.end();
+            throw error;
+          }
+        },
+      );
+    } as unknown as F;
+  };
