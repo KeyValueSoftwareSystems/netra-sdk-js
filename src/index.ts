@@ -156,6 +156,10 @@ export {
   runWithExtractedContext,
 } from "./utils/context-propagation";
 
+// The setter warning below fires on every call in an unsupported setup (one per
+// request on a server), so it is printed only once per process.
+let warnedNoContextManager = false;
+
 export class Netra {
   private static _SDK_NAME = "netra_sdk";
 
@@ -449,10 +453,11 @@ export class Netra {
     key: "session_id" | "user_id" | "tenant_id",
     value: string,
   ): void {
-    if (!setSessionValue(key, value)) {
+    if (!setSessionValue(key, value) && !warnedNoContextManager) {
+      warnedNoContextManager = true;
       NetraLogger.notice(
         "warn",
-        `${method}: no OpenTelemetry context manager is registered, so the value only applies to the active span. Call it after Netra.init().`,
+        `${method}: no AsyncLocalStorage-based OpenTelemetry context manager is registered, so identity values only apply to the active span. Call the setters after Netra.init(), and do not register a different context manager before it. This warning is shown once.`,
       );
     }
   }

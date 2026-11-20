@@ -20,8 +20,11 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
   private readonly _responseModelKey: string;
   private readonly _rootMarkerKey: string;
 
-  // Tracks which traces have already been marked to avoid redundant writes
-  private readonly _markedTraces = new Set<string>();
+  // Root spans already marked, to avoid redundant writes. A WeakSet keyed on
+  // the span object needs no cleanup: an entry goes away with its span, so
+  // traces whose root never ends here (remote parent, late LLM spans) cannot
+  // accumulate (JS-MEM-001).
+  private _markedRoots = new WeakSet<Span>();
 
   constructor(
     requestModelAttributeKey = LlmTraceIdentifierSpanProcessor.DEFAULT_REQUEST_MODEL_KEY,
@@ -47,13 +50,8 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
 
       const { traceId, spanId } = spanCtx;
 
-      // When the root span ends, clean up local state and stop processing
-      if (RootSpanProcessor.isRootSpanForTrace(traceId, spanId)) {
-        this._markedTraces.delete(traceId);
-        return;
-      }
-
-      if (this._markedTraces.has(traceId)) return;
+      // The root span itself is not annotated through this path
+      if (RootSpanProcessor.isRootSpanForTrace(traceId, spanId)) return;
       if (!this._isLlmSpan(span)) return;
 
       this._markRootSpan(traceId);
@@ -63,7 +61,7 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
   }
 
   shutdown(): Promise<void> {
-    this._markedTraces.clear();
+    this._markedRoots = new WeakSet<Span>();
     return Promise.resolve();
   }
 
@@ -82,8 +80,8 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
 
   private _markRootSpan(traceId: string): void {
     const root = RootSpanProcessor.getRootSpanByTraceId(traceId);
-    this._markedTraces.add(traceId);
-    if (!root) return;
+    if (!root || this._markedRoots.has(root)) return;
+    this._markedRoots.add(root);
     if (!root.isRecording()) {
       NetraLogger.warn(`LlmTraceIdentifierSpanProcessor: root span for trace ${traceId} is not recording`);
       return;

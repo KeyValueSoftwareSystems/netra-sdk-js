@@ -1,5 +1,5 @@
 /**
- * JS-SEC-001 / JS-SEC-002 / JS-SEC-003 regression tests.
+ * JS-SEC-001 / JS-SEC-002 / JS-SEC-003 / JS-MEM-001 regression tests.
  *
  * - SEC-001: inbound W3C baggage must not set the user, session or tenant a
  *   span is recorded under, nor block spans via `netra.local_blocked_spans`.
@@ -7,6 +7,8 @@
  *   request headers.
  * - SEC-003: identifiers set in one request must not apply to a later,
  *   unrelated request that sets none.
+ * - MEM-001: traces whose local root has a remote parent must be marked and
+ *   must not leave per-trace state behind.
  */
 import {
   context,
@@ -14,6 +16,7 @@ import {
   defaultTextMapSetter,
   propagation,
   ROOT_CONTEXT,
+  trace,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { CompositePropagator, W3CTraceContextPropagator } from "@opentelemetry/core";
@@ -25,10 +28,12 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { NetraBaggagePropagator } from "../utils/netra-baggage-propagator";
+import { LlmTraceIdentifierSpanProcessor } from "./llm-trace-identifier-span-processor";
 import {
   LocalFilteringSpanProcessor,
   withBlockedSpansLocal,
 } from "./localfiltering-span-processor";
+import { RootSpanProcessor } from "./root-span-processor";
 import {
   clearSessionValues,
   contextWithSessionValues,
@@ -41,12 +46,20 @@ const FORGED_BAGGAGE =
   "user_id=ceo%40victim.com,tenant_id=victim-corp,session_id=forged," +
   `netra.local_blocked_spans=${encodeURIComponent('["*"]')},app.flag=keep`;
 
+function randomTraceparent(): string {
+  const hex = (n: number) =>
+    Array.from({ length: n }, () => "0123456789abcdef"[(Math.random() * 16) | 0]).join("");
+  return `00-${hex(32)}-${hex(16)}-01`;
+}
+
 describe("session identity and baggage", () => {
   const exporter = new InMemorySpanExporter();
   const provider = new BasicTracerProvider({
     spanProcessors: [
       new LocalFilteringSpanProcessor(),
       new SessionSpanProcessor(),
+      new LlmTraceIdentifierSpanProcessor(),
+      new RootSpanProcessor(),
       new SimpleSpanProcessor(exporter),
     ],
   });
@@ -178,5 +191,39 @@ describe("session identity and baggage", () => {
       tracer.startSpan("cleared").end();
     });
     expect(spans("cleared")[0].attributes["netra.user_id"]).toBeUndefined();
+  });
+
+  it("MEM-001: marks the local root of a remote-parented trace and leaves no state", () => {
+    const rootSpans = (RootSpanProcessor as any)._rootSpans as Map<string, unknown>;
+    const before = rootSpans.size;
+
+    for (let i = 0; i < 200; i++) {
+      const inbound = extractInbound({ traceparent: randomTraceparent() });
+      const server = tracer.startSpan("server", {}, inbound);
+      context.with(trace.setSpan(inbound, server), () => {
+        const llm = tracer.startSpan("llm");
+        llm.setAttribute("gen_ai.request.model", "gpt-x");
+        llm.end();
+      });
+      server.end();
+    }
+
+    expect(rootSpans.size).toBe(before);
+    const servers = spans("server");
+    expect(servers).toHaveLength(200);
+    expect(servers.every((s) => s.attributes["netra.trace.llm.call"] === true)).toBe(true);
+  });
+
+  it("MEM-001: an LLM span ending after its root does not leave state behind", () => {
+    const rootSpans = (RootSpanProcessor as any)._rootSpans as Map<string, unknown>;
+    const before = rootSpans.size;
+
+    const root = tracer.startSpan("root");
+    const llm = tracer.startSpan("late-llm", {}, trace.setSpan(ROOT_CONTEXT, root));
+    root.end();
+    llm.setAttribute("gen_ai.request.model", "gpt-x");
+    llm.end();
+
+    expect(rootSpans.size).toBe(before);
   });
 });

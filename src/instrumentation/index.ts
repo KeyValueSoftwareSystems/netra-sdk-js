@@ -413,6 +413,11 @@ export function initInstrumentations(
     headers: config.headers,
     instrumentModules,
     silenceInitializationMessage: !config.debugMode,
+    // Netra has its own prompts API and never uses Traceloop's prompt registry.
+    // Left on, Traceloop fetches prompts from api.traceloop.com whenever no
+    // endpoint is set, sending the Netra API key there and crashing the app
+    // with an unhandled rejection if the host is unreachable (JS-PERF-001).
+    traceloopSyncEnabled: false,
   };
   // ---- updated exporter setup (Python-equivalent) ----
 
