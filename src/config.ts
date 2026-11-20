@@ -71,6 +71,7 @@ export enum NetraInstruments {
   VERTEX_AI = "vertexai",
   TOGETHER = "together",
   ANTHROPIC = "anthropic",
+  TYPESAFE = "typesafe",
 
   // AI Frameworks
   LANGCHAIN = "langchain",
@@ -108,6 +109,7 @@ export const DEFAULT_INSTRUMENTS_FOR_ROOT: Set<NetraInstruments> = new Set([
   NetraInstruments.GOOGLE_GENERATIVE_AI,
   NetraInstruments.VERTEX_AI,
   NetraInstruments.TOGETHER,
+  NetraInstruments.TYPESAFE,
   // AI frameworks
   NetraInstruments.LANGCHAIN,
   NetraInstruments.LANGGRAPH,

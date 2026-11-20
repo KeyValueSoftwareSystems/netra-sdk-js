@@ -121,6 +121,7 @@ The SDK supports automatic instrumentation for various providers and frameworks:
 - Mistral AI
 - Groq
 - Together AI
+- TypeSafe (Jev) - `systemOne` calls via the `@typesafe-ai/sdk` client
 - Ollama
 - Bedrock (AWS)
 
