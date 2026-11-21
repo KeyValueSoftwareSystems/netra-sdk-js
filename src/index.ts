@@ -206,6 +206,7 @@ export class Netra {
       config.instruments,
       config.blockInstruments,
       config.rootInstruments,
+      config.costExcludedInstruments,
     );
 
     // Create the tracer

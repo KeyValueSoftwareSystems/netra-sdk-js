@@ -284,6 +284,7 @@ export function initInstrumentations(
   instruments?: Set<NetraInstruments>,
   blockInstruments?: Set<NetraInstruments>,
   rootInstruments?: Set<NetraInstruments>,
+  costExcludedInstruments?: Set<NetraInstruments>,
 ): TracerProviderWithProcessors | null {
   // Resolve effective instruments: use DEFAULT_INSTRUMENTS when not provided
   const enableAll = instruments != null && instruments.has(NetraInstruments.ALL);
@@ -470,6 +471,7 @@ export function initInstrumentations(
     tracerProvider,
     config,
     resolvedRootNames,
+    costExcludedInstruments,
   );
 
   // Initialize custom instrumentations asynchronously
@@ -745,6 +747,7 @@ function addCustomSpanProcessors(
   tracerProvider: ReturnType<typeof trace.getTracerProvider>,
   config: Config,
   rootInstrumentNames: Set<string> | null,
+  costExcludedInstruments?: Set<NetraInstruments>,
 ): TracerProviderWithProcessors | null {
   try {
     // The TracerProvider from Traceloop is a ProxyTracerProvider
@@ -865,8 +868,13 @@ function addCustomSpanProcessors(
 
     // 4. Instrumentation Span Processor - tags instrumentation name.
     //    Runs AFTER wrappers are in place so its setAttribute calls flow
-    //    through the full chain.
-    const instrumentationProcessor = new InstrumentationSpanProcessor();
+    //    through the full chain. For cost-excluded instrumentations it also
+    //    wraps setAttribute to drop usage keys; registered last among the
+    //    wrappers, that wrapper is the outermost, so the keys never reach
+    //    SpanIOProcessor's token aliasing.
+    const instrumentationProcessor = new InstrumentationSpanProcessor(
+      costExcludedInstruments,
+    );
     provider.addSpanProcessor(instrumentationProcessor);
 
     // 5. Session Span Processor - adds session context (session_id, user_id, etc.)

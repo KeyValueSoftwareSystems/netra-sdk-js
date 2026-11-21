@@ -40,6 +40,18 @@ export interface NetraConfig {
    */
   rootInstruments?: Set<NetraInstruments>;
   /**
+   * Set of instruments whose LLM cost is reported somewhere else, such as a
+   * custom span in a proxy or gateway layer. Spans from these instrumentations
+   * are exported without their usage attributes (`netra.usage`, every
+   * `gen_ai.usage.*` and `llm.usage.*` key, and `gen_ai.audio.duration`), so
+   * Netra records no cost or token counts for them. Model, prompts and
+   * completions are kept. Defaults to nothing excluded. A set containing
+   * `NetraInstruments.ALL` excludes every instrumentation. Spans created with
+   * `Netra.startSpan` or the decorators are never affected, so usage set on
+   * them is still priced.
+   */
+  costExcludedInstruments?: Set<NetraInstruments>;
+  /**
    * Register process hooks (`SIGINT`, `SIGTERM`, `uncaughtException`,
    * `beforeExit`) that flush pending spans when the process is going away.
    * The hooks never exit the process themselves while the application has
