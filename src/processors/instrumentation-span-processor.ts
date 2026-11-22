@@ -14,7 +14,7 @@ import { AttributeValue, Attributes, Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config, NetraInstruments } from "../config";
 import { NetraLogger } from "../netraLogger";
-import { canonicalInstrumentName } from "./root-instrument-filter-processor";
+import { INSTRUMENTATION_PREFIXES, canonicalInstrumentName } from "./root-instrument-filter-processor";
 
 type SetAttributeFn = (key: string, value: AttributeValue) => Span;
 
@@ -48,6 +48,42 @@ function resolveCostExcludedNames(
     ? Object.values(NetraInstruments).filter((member) => member !== NetraInstruments.ALL)
     : [...costExcludedInstruments];
   return new Set(instruments.map((member) => canonicalInstrumentName(member)));
+}
+
+// Scope packages whose canonical name differs from their instrument's.
+// Traceloop's Together instrumentation registers as `@traceloop/instrumentation-together-ai`.
+const INSTRUMENT_BY_SCOPE_PACKAGE: Readonly<Record<string, NetraInstruments>> = {
+  "together-ai": NetraInstruments.TOGETHER,
+};
+
+/**
+ * Canonical name of the instrumentation that emitted a span with this scope,
+ * or `null` when the scope is not an instrumentation library's. Decorators
+ * name their tracer after the function and `Netra.startSpan` after the
+ * caller's `moduleName`, so an unprefixed scope such as `"openai"` is a user
+ * span, never the OpenAI instrumentation.
+ */
+function costInstrumentNameForScope(scopeName: string): string | null {
+  const prefix = INSTRUMENTATION_PREFIXES.find((candidate) => scopeName.startsWith(candidate));
+  if (prefix === undefined) {
+    return null;
+  }
+  const scopePackage = scopeName.slice(prefix.length).split(".", 1)[0]?.trim();
+  if (!scopePackage) {
+    return null;
+  }
+  return canonicalInstrumentName(INSTRUMENT_BY_SCOPE_PACKAGE[scopePackage] ?? scopePackage);
+}
+
+function scopeNameOf(span: Span): string | null {
+  // The SDK span exposes `instrumentationScope` (`instrumentationLibrary` on older SDKs);
+  // neither is on the API `Span` type.
+  const { instrumentationScope, instrumentationLibrary } = span as {
+    instrumentationScope?: { name?: unknown };
+    instrumentationLibrary?: { name?: unknown };
+  };
+  const name = (instrumentationLibrary ?? instrumentationScope)?.name;
+  return typeof name === "string" && name ? name : null;
 }
 
 // Allowed instrumentation names that we recognize and tag
@@ -132,10 +168,14 @@ export class InstrumentationSpanProcessor implements SpanProcessor {
 
   onStart(span: Span, _parentContext: Context): void {
     try {
-      const name = this.detectRawInstrumentationName(span);
-      if (name && this.costExcludedNames.has(canonicalInstrumentName(name))) {
-        this.dropUsageAttributes(span);
+      if (this.costExcludedNames.size > 0) {
+        const scopeName = scopeNameOf(span);
+        const costName = scopeName === null ? null : costInstrumentNameForScope(scopeName);
+        if (costName !== null && this.costExcludedNames.has(costName)) {
+          this.dropUsageAttributes(span);
+        }
       }
+      const name = this.detectRawInstrumentationName(span);
       if (name && ALLOWED_INSTRUMENTATION_NAMES.has(name.toLowerCase())) {
         span.setAttribute(`${Config.LIBRARY_NAME}.instrumentation.name`, name);
       }

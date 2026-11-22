@@ -204,4 +204,49 @@ describe("InstrumentationSpanProcessor cost exclusion", () => {
 
     expect(onlyExported(exporter)["netra.usage"]).toBe(CUSTOM_USAGE);
   });
+
+  // The scope each NetraInstruments member's instrumentation emits spans under,
+  // read from the Netra instrumentors and the installed Traceloop/OTel packages.
+  // Prisma is left out: its tracer name carries no instrumentation prefix.
+  it.each([
+    ["netra.instrumentation.openai", NetraInstruments.OPENAI],
+    ["netra.instrumentation.google_genai", NetraInstruments.GOOGLE_GENAI],
+    ["netra.instrumentation.google_generative_ai", NetraInstruments.GOOGLE_GENERATIVE_AI],
+    ["netra.instrumentation.mistral_ai", NetraInstruments.MISTRAL],
+    ["netra.instrumentation.groq", NetraInstruments.GROQ],
+    ["@traceloop/instrumentation-vertexai", NetraInstruments.VERTEX_AI],
+    ["@traceloop/instrumentation-together-ai", NetraInstruments.TOGETHER],
+    ["netra.instrumentation.anthropic", NetraInstruments.ANTHROPIC],
+    ["@traceloop/instrumentation-langchain", NetraInstruments.LANGCHAIN],
+    ["netra.instrumentation.langgraph", NetraInstruments.LANGGRAPH],
+    ["@traceloop/instrumentation-llamaindex", NetraInstruments.LLAMA_INDEX],
+    ["netra.instrumentation.openai_agents", NetraInstruments.OPENAI_AGENTS],
+    ["@traceloop/instrumentation-pinecone", NetraInstruments.PINECONE],
+    ["@traceloop/instrumentation-qdrant", NetraInstruments.QDRANT],
+    ["@traceloop/instrumentation-chromadb", NetraInstruments.CHROMADB],
+    ["@opentelemetry/instrumentation-http", NetraInstruments.HTTP],
+    ["netra.instrumentation.typeorm", NetraInstruments.TYPEORM],
+    ["@opentelemetry/instrumentation-express", NetraInstruments.EXPRESS],
+  ])("strips usage from a %s span when %s is excluded by name or via ALL", (scope, instrument) => {
+    const exporter = new SnapshotExporter();
+    emitSpan(buildProvider(exporter, new Set([instrument])), scope, { setLater: USAGE_ATTRIBUTES });
+    emitSpan(buildProvider(exporter, new Set([NetraInstruments.ALL])), scope, { setLater: USAGE_ATTRIBUTES });
+
+    expect(exporter.exported.map(usageKeysPresent)).toEqual([[], []]);
+  });
+
+  // Decorators name their tracer after the function (`@task async openai()` has
+  // scope "openai") and Netra.startSpan uses the caller's `moduleName`, so a
+  // user-chosen name that equals an instrument must not be read as that instrumentation.
+  it.each([
+    ["openai", new Set([NetraInstruments.OPENAI])],
+    ["openai", new Set([NetraInstruments.ALL])],
+    ["llamaIndex", new Set([NetraInstruments.LLAMA_INDEX])],
+    ["express", new Set([NetraInstruments.ALL])],
+  ])("keeps usage on a manual span whose tracer is named %s", (scope, excluded) => {
+    const exporter = new SnapshotExporter();
+    emitSpan(buildProvider(exporter, excluded), scope, { setLater: { "netra.usage": CUSTOM_USAGE } });
+
+    expect(onlyExported(exporter)["netra.usage"]).toBe(CUSTOM_USAGE);
+  });
 });
