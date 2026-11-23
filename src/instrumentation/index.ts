@@ -36,6 +36,7 @@ import { mistralAIInstrumentor } from "./mistralai";
 import { openAIInstrumentor } from "./openai";
 import { openaiAgentsInstrumentor } from "./openai-agents";
 import { typeORMInstrumentor } from "./typeorm";
+import { typeSafeInstrumentor } from "./typesafe";
 import { FilteringSpanExporter, TrialAwareOTLPExporter } from "../exporters";
 import { LocalFilteringSpanProcessor } from "../processors/localfiltering-span-processor";
 import { propagation } from "@opentelemetry/api";
@@ -308,6 +309,7 @@ export function initInstrumentations(
     googleGenerativeAI: false,
     anthropic: false,
     openAiAgents: false,
+    typesafe: false,
   };
 
   // Resolve effective instrument set (Python parity):
@@ -370,6 +372,9 @@ export function initInstrumentations(
   if (resolved.has(NetraInstruments.OPENAI_AGENTS)) {
     customInstrumentModules.openAiAgents = true;
   }
+  if (resolved.has(NetraInstruments.TYPESAFE)) {
+    customInstrumentModules.typesafe = true;
+  }
 
   // Apply blockInstruments to Traceloop and Netra custom modules
   if (blockInstruments && blockInstruments.size > 0) {
@@ -382,6 +387,7 @@ export function initInstrumentations(
     if (blockAll || blockInstruments.has(NetraInstruments.GOOGLE_GENERATIVE_AI)) customInstrumentModules.googleGenerativeAI = false;
     if (blockAll || blockInstruments.has(NetraInstruments.ANTHROPIC)) customInstrumentModules.anthropic = false;
     if (blockAll || blockInstruments.has(NetraInstruments.OPENAI_AGENTS)) customInstrumentModules.openAiAgents = false;
+    if (blockAll || blockInstruments.has(NetraInstruments.TYPESAFE)) customInstrumentModules.typesafe = false;
     if (blockAll || blockInstruments.has(NetraInstruments.VERTEX_AI)) instrumentModules.google_vertexai = false;
     if (blockAll || blockInstruments.has(NetraInstruments.LANGCHAIN)) instrumentModules.langchain = false;
     if (blockAll || blockInstruments.has(NetraInstruments.LLAMA_INDEX)) instrumentModules.llamaIndex = false;
@@ -577,6 +583,15 @@ async function initCustomInstrumentationsAsync(
       NetraLogger.debug("Custom Anthropic instrumentation enabled");
     } catch (e) {
       NetraLogger.debug("Failed to initialize custom Anthropic instrumentation:", e);
+    }
+  }
+
+  if (customInstrumentModules.typesafe) {
+    try {
+      await typeSafeInstrumentor.instrument({ tracerProvider });
+      NetraLogger.debug("Custom TypeSafe instrumentation enabled");
+    } catch (e) {
+      NetraLogger.debug("Failed to initialize custom TypeSafe instrumentation:", e);
     }
   }
 
@@ -927,6 +942,16 @@ export async function uninstrumentAll(): Promise<void> {
     }
   } catch (e) {
     NetraLogger.debug("Failed to uninstrument Groq:", e);
+  }
+
+  // Uninstrument custom TypeSafe instrumentation
+  try {
+    if (typeSafeInstrumentor.isInstrumented()) {
+      await typeSafeInstrumentor.uninstrument();
+      NetraLogger.debug("Custom TypeSafe instrumentation disabled");
+    }
+  } catch (e) {
+    NetraLogger.debug("Failed to uninstrument TypeSafe:", e);
   }
 
   // Uninstrument custom Anthropic instrumentation

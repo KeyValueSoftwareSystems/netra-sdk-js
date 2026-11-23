@@ -78,6 +78,7 @@
     "@openai/agents": ">=0.10.0 <1.0.0",
     "@opentelemetry/instrumentation": ">=0.53.0",
     "@prisma/instrumentation": "^5.0.0",
+    "@typesafe-ai/sdk": ">=0.7.0",
     "groq-sdk": ">=0.3.0",
     "openai": "^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0"
   },
@@ -114,6 +115,9 @@
     },
     "@langchain/langgraph": {
       "optional": true
+    },
+    "@typesafe-ai/sdk": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -123,6 +127,7 @@
     "@opentelemetry/context-async-hooks": "^2.11.0",
     "@types/node": "^25.0.0",
     "@types/shimmer": "^1.2.0",
+    "@typesafe-ai/sdk": "^0.7.0",
     "esbuild": "^0.27.2",
     "groq-sdk": "^1.6.0",
     "openai": "^6.49.0",
