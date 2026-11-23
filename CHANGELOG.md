@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-11-23
+
+### Upgrading
+
+- **Sharing a session across your services is now opt-in.** The user, session and tenant are no longer sent to other services, and values sent by a calling service are no longer used. If one request passes through several of your services and you want them all recorded under the same session, set `NETRA_PROPAGATE_BAGGAGE_HOSTS` on the calling service and `NETRA_TRUST_INBOUND_BAGGAGE=true` on the receiving service. See "Sharing sessions across your services" in the README.
+- **Call the identity setters after `Netra.init()`.** `setSessionId`, `setUserId` and `setTenantId` called before `Netra.init()` now apply only to the current span, and Netra prints a one-time warning.
+- **Use `Netra.withSession()` in background jobs.** In queue workers, cron jobs and scripts, wrap each job in `Netra.withSession()` so each job is recorded under its own user and session.
+- **`traceContent: false` now hides all content.** This includes values passed to `setInput`, `setOutput`, `setRootInput` and `setRootOutput`, and the arguments and return values of decorated functions. If you rely on those with content tracing off, turn content tracing on.
+- **Baggage named `session_id`, `user_id` or `tenant_id`** is now treated as Netra identity: it is sent only to hosts in `NETRA_PROPAGATE_BAGGAGE_HOSTS`. Other baggage is passed on unchanged.
+
+### Added
+
+- **`Netra.withSession()`**: Runs a callback with the given user, session and tenant. Everything traced inside it is recorded under those values.
+- **`Netra.clearSession()`**: Clears the user, session and tenant for the current request.
+- **`NETRA_PROPAGATE_BAGGAGE_HOSTS`**: Comma-separated hosts, and their subdomains, that receive the user, session and tenant on calls made with `http`, `https` and `fetch`. Requires the HTTP instrument; Netra warns at startup if it is set while HTTP tracing is off.
+- **`NETRA_TRUST_INBOUND_BAGGAGE`**: Records requests under the user, session and tenant sent by the calling service. Only turn this on for internal services that the public can't call directly.
+
+### Changed
+
+- **Requests From Other Services Are Their Own Root**: When a request arrives from another traced service, its first span here is now the root of that request. `setRootInput`, `setRootOutput` and the LLM-call marker now work for these requests, and two requests arriving on the same trace each keep their own root.
+- **Content Tracing Off Covers Every Integration**: With `traceContent: false`, prompts, completions, tool arguments and results, and function inputs and outputs are kept out of traces for every integration, including LangGraph and OpenAI Agents. Tool definitions are reduced to each tool's type and name.
+- **No Prompt Requests to Traceloop**: The SDK no longer fetches prompts from Traceloop's prompt registry. Use `Netra.prompts.getPrompt()` for prompts.
+- **Dependencies**: `p-limit` is no longer a dependency.
+
+### Fixed
+
+- **Identity Stays With Its Request**: A user, session or tenant set while handling one request no longer applies to later requests that set none.
+- **Credentials Hidden in Tool Definitions**: Recorded tool definitions hide credentials under keys such as `headers`, `authorization`, `*_token`, `*_secret`, `*_key` and `password`. URLs keep only their scheme and host, so tokens in a URL's path or query are not recorded.
+- **Test Runs Link to Their Session**: Test-run items are linked to the session set with `Netra.setSessionId()` or `Netra.withSession()`.
+- **Span Blocking Stays Local**: `withBlockedSpansLocal` blocks spans only in the service that calls it.
+- **CommonJS on Older Node Versions**: Loading the SDK with `require()` no longer fails on Node 18, Node 20 before 20.19 and Node 22 before 22.12.
+
 ## [1.12.2] - 2026-11-04
 
 ### Changed
@@ -93,7 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **`enableRootSpan` Configuration** (**breaking**): Removed the `enableRootSpan` init option, the `NETRA_ENABLE_ROOT_SPAN` environment variable, and the `Netra.runWithRootSpan()` helper. OpenTelemetry for JavaScript has no equivalent of Python's persistent `context.attach()` — `context.with()` is callback-scoped — so the Netra root span could never parent the inbound HTTP span, which is created before any handler callback runs. With Express instrumentation this produced split traces (the handler subtree and the Express span exported as separate traces). Use `rootInstruments` to control which instrumentations are allowed to produce root spans.
+- **`enableRootSpan` Configuration** (**breaking**): Removed the `enableRootSpan` init option, the `NETRA_ENABLE_ROOT_SPAN` environment variable, and the `Netra.runWithRootSpan()` helper. OpenTelemetry for JavaScript has no persistent `context.attach()` (`context.with()` is callback-scoped), so the Netra root span could never parent the inbound HTTP span, which is created before any handler callback runs. With Express instrumentation this produced split traces (the handler subtree and the Express span exported as separate traces). Use `rootInstruments` to control which instrumentations are allowed to produce root spans.
 
 ## [1.8.0] - 2026-08-03
 
@@ -239,8 +271,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Label Made Optional**: The `label` parameter is now optional when fetching prompts, aligning with Python SDK behavior.
-- **SDK Parity with Python SDK**: Refactored core modules (decorators, session manager, instrumentation utilities) to reduce disparity with the Python SDK implementation.
+- **Label Made Optional**: The `label` parameter is now optional when fetching prompts.
+- **Core Module Refactor**: Refactored the decorators, session manager and instrumentation utilities.
 
 ### Fixed
 

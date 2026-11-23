@@ -2,35 +2,19 @@ import { Context, Span, trace } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NetraLogger } from "../netraLogger";
 
-/**
- * Tracks the root span for each trace keyed by traceId.
- * Exposes static helpers so other processors and session utilities
- * Register this processor AFTER LlmTraceIdentifierSpanProcessor so that
- * on_end cleanup happens after the LLM processor has finished marking the
- * root span.
- */
 export class RootSpanProcessor implements SpanProcessor {
-  private static readonly _rootSpans = new Map<string, Span>();
+  private static _rootOf = new WeakMap<object, Span>();
 
-  static getRootSpanByTraceId(traceId: string): Span | undefined {
-    return RootSpanProcessor._rootSpans.get(traceId);
-  }
+  private static readonly _rootSpans = new Map<string, Set<Span>>();
 
-  static getRootSpan(span: Span): Span | undefined {
+  static getRootSpan(span: Span | ReadableSpan): Span | undefined {
+    const root = RootSpanProcessor._rootOf.get(span);
+    if (root) return root;
     const ctx = span.spanContext();
     if (!ctx || !trace.isSpanContextValid(ctx)) return undefined;
-    return RootSpanProcessor._rootSpans.get(ctx.traceId);
+    return RootSpanProcessor._onlyOpenRoot(ctx.traceId);
   }
 
-  static isRootSpanForTrace(traceId: string, spanId: string): boolean {
-    const root = RootSpanProcessor._rootSpans.get(traceId);
-    return root?.spanContext().spanId === spanId;
-  }
-
-  /**
-   * Set an attribute on the root span of the currently active trace.
-   * Resolves the root span via the active OTel context
-   */
   static setAttributeOnRootSpan(key: string, value: string): void {
     try {
       const active = trace.getActiveSpan();
@@ -38,12 +22,11 @@ export class RootSpanProcessor implements SpanProcessor {
         NetraLogger.warn(`setAttributeOnRootSpan: no active span`);
         return;
       }
-      const spanCtx = active.spanContext();
-      if (!trace.isSpanContextValid(spanCtx)) {
+      if (!trace.isSpanContextValid(active.spanContext())) {
         NetraLogger.warn(`setAttributeOnRootSpan: active span context is invalid`);
         return;
       }
-      const root = RootSpanProcessor._rootSpans.get(spanCtx.traceId);
+      const root = RootSpanProcessor.getRootSpan(active);
       if (!root) {
         NetraLogger.warn(`setAttributeOnRootSpan: no root span found for current trace`);
         return;
@@ -58,11 +41,24 @@ export class RootSpanProcessor implements SpanProcessor {
     try {
       const ctx = span.spanContext();
       if (!ctx || !trace.isSpanContextValid(ctx)) return;
-      if (!this._isRootSpan(parentContext)) return;
-      // setdefault: first span with no valid parent wins
-      if (!RootSpanProcessor._rootSpans.has(ctx.traceId)) {
-        RootSpanProcessor._rootSpans.set(ctx.traceId, span);
+
+      if (this._isRootSpan(parentContext)) {
+        RootSpanProcessor._rootOf.set(span, span);
+        let roots = RootSpanProcessor._rootSpans.get(ctx.traceId);
+        if (!roots) {
+          roots = new Set();
+          RootSpanProcessor._rootSpans.set(ctx.traceId, roots);
+        }
+        roots.add(span);
+        return;
       }
+
+      const parent = trace.getSpan(parentContext);
+      const root =
+        (parent && RootSpanProcessor._rootOf.get(parent)) ??
+        // Unknown parent (e.g. trace.setSpanContext): use the trace's root only if it is unambiguous.
+        RootSpanProcessor._onlyOpenRoot(ctx.traceId);
+      if (root) RootSpanProcessor._rootOf.set(span, root);
     } catch (e) {
       NetraLogger.warn("RootSpanProcessor.onStart: unexpected error:", e);
     }
@@ -72,10 +68,15 @@ export class RootSpanProcessor implements SpanProcessor {
     try {
       const ctx = span.spanContext();
       if (!ctx || !trace.isSpanContextValid(ctx)) return;
-      const root = RootSpanProcessor._rootSpans.get(ctx.traceId);
-      if (root?.spanContext().spanId === ctx.spanId) {
-        RootSpanProcessor._rootSpans.delete(ctx.traceId);
+      const roots = RootSpanProcessor._rootSpans.get(ctx.traceId);
+      if (!roots) return;
+      for (const root of roots) {
+        if (root === (span as unknown) || root.spanContext().spanId === ctx.spanId) {
+          roots.delete(root);
+          break;
+        }
       }
+      if (roots.size === 0) RootSpanProcessor._rootSpans.delete(ctx.traceId);
     } catch (e) {
       NetraLogger.warn("RootSpanProcessor.onEnd: unexpected error:", e);
     }
@@ -83,6 +84,7 @@ export class RootSpanProcessor implements SpanProcessor {
 
   shutdown(): Promise<void> {
     RootSpanProcessor._rootSpans.clear();
+    RootSpanProcessor._rootOf = new WeakMap();
     return Promise.resolve();
   }
 
@@ -90,12 +92,16 @@ export class RootSpanProcessor implements SpanProcessor {
     return Promise.resolve();
   }
 
+  private static _onlyOpenRoot(traceId: string): Span | undefined {
+    const roots = RootSpanProcessor._rootSpans.get(traceId);
+    return roots?.size === 1 ? roots.values().next().value : undefined;
+  }
+
   private _isRootSpan(parentContext: Context | undefined): boolean {
     const parentSpan = parentContext ? trace.getSpan(parentContext) : undefined;
     if (!parentSpan) return true;
     const parentCtx = parentSpan.spanContext();
-    // A remote parent (inbound traceparent from a gateway, mesh or upstream
-    // service) means this span is the local root of the trace in this process.
+    // A remote parent means this span is the local root in this process.
     return !parentCtx || !trace.isSpanContextValid(parentCtx) || parentCtx.isRemote === true;
   }
 }

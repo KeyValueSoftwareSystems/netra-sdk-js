@@ -8,7 +8,12 @@ import { context, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
 import { Config, NetraConfig } from "./config";
-import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
+import {
+  initInstrumentations,
+  instrumentationsReady,
+  isOutboundHttpInstrumented,
+  uninstrumentAll,
+} from "./instrumentation";
 import { NetraLogger } from "./netraLogger";
 import {
   clearSessionValues,
@@ -28,6 +33,7 @@ import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
 import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
 import { wrapResponse } from "./utils/response-handler";
+import { configureBaggagePolicy } from "./utils/netra-baggage-propagator";
 
 export {
   Config,
@@ -209,6 +215,11 @@ export class Netra {
     // Wire the logger before anything else so all modules respect debugMode.
     NetraLogger.setDebugMode(cfg.debugMode);
 
+    configureBaggagePolicy({
+      propagateHosts: cfg.propagateBaggageHosts,
+      trustInbound: cfg.trustInboundBaggage,
+    });
+
     // Initialize instrumentations and get effective provider
     const effectiveProvider = initInstrumentations(
       cfg,
@@ -216,6 +227,13 @@ export class Netra {
       config.blockInstruments,
       config.rootInstruments,
     );
+
+    if (cfg.propagateBaggageHosts.length > 0 && !isOutboundHttpInstrumented()) {
+      NetraLogger.notice(
+        "warn",
+        "NETRA_PROPAGATE_BAGGAGE_HOSTS is set, but the user, session and tenant can't be shared with other services because HTTP tracing is off. Enable the HTTP instrument and install @opentelemetry/instrumentation-http (and @opentelemetry/instrumentation-undici for fetch).",
+      );
+    }
 
     // Create the tracer
     const tracer = new Tracer(cfg, effectiveProvider);
@@ -423,12 +441,7 @@ export class Netra {
     SessionManager.setRootOutput(value);
   }
 
-  /**
-   * Run `fn` with the given session, user and tenant applied to every span
-   * started inside it. Prefer this over the setters when the values must reach
-   * spans outside the callback that sets them, or when work fans out across
-   * callbacks. Values are scoped to `fn` and are never sent to other services.
-   */
+  /** Run `fn` with the given session, user and tenant; use this for background jobs and workers. */
   static withSession<T>(
     values: { sessionId?: string; userId?: string; tenantId?: string },
     fn: () => T,
@@ -457,11 +470,12 @@ export class Netra {
       warnedNoContextManager = true;
       NetraLogger.notice(
         "warn",
-        `${method}: no AsyncLocalStorage-based OpenTelemetry context manager is registered, so identity values only apply to the active span. Call the setters after Netra.init(), and do not register a different context manager before it. This warning is shown once.`,
+        `${method}: the value was applied only to the current span. Call ${method}() after Netra.init(), or use Netra.withSession() if your app sets up its own OpenTelemetry context manager. This warning is shown once.`,
       );
     }
   }
 
+  /** Set the session for the rest of the current request; in background jobs use `Netra.withSession()`. */
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
       NetraLogger.notice("error", `setSessionId: sessionId must be a string, got ${typeof sessionId}`);
@@ -478,11 +492,7 @@ export class Netra {
     }
   }
 
-  /**
-   * Set user_id on spans started from the current async context onward
-   * (for example, the rest of the current request). It is not sent to other
-   * services and does not carry over to unrelated requests.
-   */
+  /** Set the user for the rest of the current request; in background jobs use `Netra.withSession()`. */
   static setUserId(userId: string): void {
     if (typeof userId !== "string") {
       NetraLogger.notice("error", `setUserId: userId must be a string, got ${typeof userId}`);
@@ -499,11 +509,7 @@ export class Netra {
     }
   }
 
-  /**
-   * Set tenant_id on spans started from the current async context onward
-   * (for example, the rest of the current request). It is not sent to other
-   * services and does not carry over to unrelated requests.
-   */
+  /** Set the tenant for the rest of the current request; in background jobs use `Netra.withSession()`. */
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
       NetraLogger.notice("error", `setTenantId: tenantId must be a string, got ${typeof tenantId}`);

@@ -65,7 +65,6 @@ let _undiciInstrumentation: any = null;
 
 /**
  * Check if a package is installed and resolvable.
- * Equivalent to Python SDK's `is_package_installed()`.
  */
 function isPackageInstalled(packageName: string): boolean {
   try {
@@ -310,7 +309,7 @@ export function initInstrumentations(
     openAiAgents: false,
   };
 
-  // Resolve effective instrument set (Python parity):
+  // Resolve effective instrument set:
   // ALL → enable everything; otherwise fall back to DEFAULT_INSTRUMENTS
   const resolved: Set<NetraInstruments> = enableAll
     ? new Set(Object.values(NetraInstruments).filter((v) => v !== NetraInstruments.ALL) as NetraInstruments[])
@@ -419,7 +418,6 @@ export function initInstrumentations(
     // with an unhandled rejection if the host is unreachable (JS-PERF-001).
     traceloopSyncEnabled: false,
   };
-  // ---- updated exporter setup (Python-equivalent) ----
 
   // 1) Pick base exporter (Console fallback OR TrialAware(OTLP))
   let exporter: SpanExporter;
@@ -599,6 +597,10 @@ async function initCustomInstrumentationsAsync(
   }
 }
 
+export function isOutboundHttpInstrumented(): boolean {
+  return _httpInstrumentation !== null || _undiciInstrumentation !== null;
+}
+
 function initOpenTelemetryInstrumentations(
   config: Config,
   resolved: Set<NetraInstruments>,
@@ -606,7 +608,6 @@ function initOpenTelemetryInstrumentations(
 ): void {
   // HTTP/HTTPS instrumentation
   // Also auto-enabled when Express is requested (Express needs HTTP for traceparent propagation)
-  // Shared URL exclusion — mirrors Python's OTEL_PYTHON_EXCLUDED_URLS global.
   // Always skips internal Netra egress; OTEL_NODE_EXCLUDED_URLS adds user patterns.
   let netraHost = "";
   try {

@@ -112,7 +112,6 @@ export function describeHooks(hooks: SimulationHooks): Record<string, any> {
     ): Record<string, any> | null => {
         if (!fn) return null;
         // Prefer an explicit `.description` property (JS has no runtime docstrings).
-        // Falls back to null — same shape as the Python SDK's inspect.getdoc().
         const description =
             typeof (fn as any).description === "string"
                 ? String((fn as any).description).slice(0, 200)

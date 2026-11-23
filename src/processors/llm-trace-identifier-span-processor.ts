@@ -48,13 +48,11 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
       const spanCtx = span.spanContext();
       if (!spanCtx || !trace.isSpanContextValid(spanCtx)) return;
 
-      const { traceId, spanId } = spanCtx;
-
-      // The root span itself is not annotated through this path
-      if (RootSpanProcessor.isRootSpanForTrace(traceId, spanId)) return;
+      const root = RootSpanProcessor.getRootSpan(span);
+      if (!root || root === (span as unknown)) return;
       if (!this._isLlmSpan(span)) return;
 
-      this._markRootSpan(traceId);
+      this._markRootSpan(root, spanCtx.traceId);
     } catch (e) {
       NetraLogger.warn("LlmTraceIdentifierSpanProcessor: error in onEnd:", e);
     }
@@ -78,12 +76,11 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
     );
   }
 
-  private _markRootSpan(traceId: string): void {
-    const root = RootSpanProcessor.getRootSpanByTraceId(traceId);
-    if (!root || this._markedRoots.has(root)) return;
+  private _markRootSpan(root: Span, traceId: string): void {
+    if (this._markedRoots.has(root)) return;
     this._markedRoots.add(root);
     if (!root.isRecording()) {
-      NetraLogger.warn(`LlmTraceIdentifierSpanProcessor: root span for trace ${traceId} is not recording`);
+      NetraLogger.debug(`LlmTraceIdentifierSpanProcessor: root span for trace ${traceId} is not recording`);
       return;
     }
     try {

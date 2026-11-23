@@ -272,7 +272,7 @@ export class SessionManager {
    * Append a conversation entry to the active span's `conversation` attribute.
    *
    * Reads and re-serialises the existing JSON array so entries accumulate
-   * rather than overwrite — matching the Python SDK's behaviour.
+   * rather than overwrite.
    * Uses span.setAttribute so the value flows through the processor pipeline
    * including the SerializationSpanProcessor for proper truncation.
    */

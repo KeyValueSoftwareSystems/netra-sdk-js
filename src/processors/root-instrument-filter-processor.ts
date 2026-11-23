@@ -92,7 +92,7 @@ interface CandidateEntry {
  * the span via `ROOT_BLOCK_CANDIDATE_FIELD`.
  *
  * JS is single-threaded — `onStart` and `export()` never run concurrently — so
- * no locking is required (unlike the Python equivalent).
+ * no locking is required.
  */
 const ROOT_BLOCK_CANDIDATES = new Map<string, CandidateEntry>();
 

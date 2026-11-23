@@ -435,39 +435,72 @@ export function writeCompletionAttributes(
 
 // Tool definition sanitizing (JS-SEC-005)
 
-/**
- * Keys whose values are credentials in provider tool definitions, e.g. the
- * OpenAI Responses API remote-MCP `headers` / connector `authorization`, or
- * Anthropic `mcp_servers[].authorization_token`. Matched case-insensitively
- * with `-`/`_` ignored.
- */
-const SECRET_TOOL_KEYS = new Set([
+// Matched as suffixes of the key, lowercased with - and _ removed.
+const SECRET_KEY_SUFFIXES = [
   "headers",
   "authorization",
-  "authorizationtoken",
-  "apikey",
-  "accesstoken",
+  "cookie",
+  "bearer",
   "token",
   "secret",
-  "clientsecret",
   "password",
-  "bearer",
-  "cookie",
-]);
+  "passwd",
+  "apikey",
+  "accesskey",
+  "secretkey",
+  "privatekey",
+  "credential",
+  "credentials",
+];
+// Only the origin of these is kept: path and query often carry secrets.
+const URL_KEY_SUFFIXES = ["url", "uri", "endpoint"];
 export const REDACTED = "[REDACTED]";
 
-function isSecretToolKey(key: string): boolean {
-  return SECRET_TOOL_KEYS.has(key.toLowerCase().replace(/[-_]/g, ""));
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[-_]/g, "");
 }
 
-function redactSecrets(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+function isSecretToolKey(key: string): boolean {
+  const k = normalizeKey(key);
+  return SECRET_KEY_SUFFIXES.some((suffix) => k.endsWith(suffix));
+}
+
+function isUrlToolKey(key: string): boolean {
+  const k = normalizeKey(key);
+  return URL_KEY_SUFFIXES.some((suffix) => k.endsWith(suffix));
+}
+
+function urlOrigin(value: string): string {
+  try {
+    const origin = new URL(value).origin;
+    return origin && origin !== "null" ? origin : REDACTED;
+  } catch {
+    return REDACTED;
+  }
+}
+
+function redactSecrets(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+  inSchemaProperties = false,
+): unknown {
   if (value === null || typeof value !== "object") return value;
   if (depth > 20 || seen.has(value as object)) return REDACTED;
   seen.add(value as object);
   if (Array.isArray(value)) return value.map((v) => redactSecrets(v, depth + 1, seen));
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = isSecretToolKey(k) && v !== undefined && v !== null ? REDACTED : redactSecrets(v, depth + 1, seen);
+    if (inSchemaProperties && v !== null && typeof v === "object") {
+      // Schema `properties` keys are argument names, not secrets.
+      out[k] = redactSecrets(v, depth + 1, seen);
+    } else if (isSecretToolKey(k) && v !== undefined && v !== null) {
+      out[k] = REDACTED;
+    } else if (isUrlToolKey(k) && typeof v === "string") {
+      out[k] = urlOrigin(v);
+    } else {
+      out[k] = redactSecrets(v, depth + 1, seen, k === "properties");
+    }
   }
   return out;
 }

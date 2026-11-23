@@ -25,7 +25,7 @@ import {
   extractDatasetId,
   formatSpanId,
   formatTraceId,
-  getSessionIdFromBaggage,
+  getCurrentSessionId,
   runSingleEvaluator,
   validateRunInputs,
 } from "./utils";
@@ -397,7 +397,7 @@ export class Evaluation {
         ctx.traceId = formatTraceId(spanContext.traceId);
         ctx.spanId = formatSpanId(spanContext.spanId);
       }
-      ctx.sessionId = getSessionIdFromBaggage();
+      ctx.sessionId = getCurrentSessionId();
 
       const { output, status } = await span.withActive(() =>
         executeTask(task, ctx.itemInput),

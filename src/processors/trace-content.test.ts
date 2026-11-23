@@ -174,4 +174,75 @@ describe("tool definitions (JS-SEC-005)", () => {
     const out = JSON.stringify(sanitizeToolsForTrace([tool]));
     expect(out).not.toMatch(/k1|k2|k3/);
   });
+
+  it("redacts keys that end in a secret name, not only exact matches", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const out = JSON.stringify(
+      sanitizeToolsForTrace([
+        {
+          type: "mcp",
+          refresh_token: "s1",
+          secret_key: "s2",
+          client_secret: "s3",
+          "x-api-key": "s4",
+          extra_headers: { "X-Custom": "s5" },
+          db_password: "s6",
+          max_tokens: 100,
+        },
+      ]),
+    );
+    expect(out).not.toMatch(/s[1-6]"/);
+    expect(out).toContain('"max_tokens":100');
+  });
+
+  it("keeps only the origin of URL values, dropping secrets in path, query and userinfo", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const [tool] = sanitizeToolsForTrace([
+      {
+        type: "mcp",
+        server_url: "https://mcp.zapier.com/api/mcp/s/SECRETPATH/mcp",
+        endpoint: "https://api.example.com/v1?api_key=SECRETQUERY",
+        callback_uri: "https://user:SECRETPASS@hooks.example.com/cb",
+        bad_url: "not a url SECRETRAW",
+      },
+    ]) as Record<string, unknown>[];
+    expect(tool.server_url).toBe("https://mcp.zapier.com");
+    expect(tool.endpoint).toBe("https://api.example.com");
+    expect(tool.callback_uri).toBe("https://hooks.example.com");
+    expect(tool.bad_url).toBe(REDACTED);
+    expect(JSON.stringify(tool)).not.toContain("SECRET");
+  });
+
+  it("keeps JSON-schema argument definitions whose names look like secrets", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const [tool] = sanitizeToolsForTrace([
+      {
+        type: "function",
+        function: {
+          name: "login",
+          parameters: {
+            type: "object",
+            properties: {
+              api_key: { type: "string", description: "The user's key" },
+              token: { type: "string" },
+            },
+          },
+        },
+      },
+    ]) as any[];
+    expect(tool.function.parameters.properties.api_key).toEqual({
+      type: "string",
+      description: "The user's key",
+    });
+    expect(tool.function.parameters.properties.token).toEqual({ type: "string" });
+  });
+
+  it("still redacts a credential value stored under a properties object", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const out = JSON.stringify(
+      sanitizeToolsForTrace([{ type: "mcp", properties: { api_key: "sk-live-SECRET", region: "eu" } }]),
+    );
+    expect(out).not.toContain("SECRET");
+    expect(out).toContain('"region":"eu"');
+  });
 });

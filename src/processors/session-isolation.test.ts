@@ -25,9 +25,15 @@ import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NetraBaggagePropagator } from "../utils/netra-baggage-propagator";
+import { NetraLogger } from "../netraLogger";
+
+import { getCurrentSessionId } from "../api/evaluation/utils";
+import {
+  configureBaggagePolicy,
+  NetraBaggagePropagator,
+} from "../utils/netra-baggage-propagator";
 import { LlmTraceIdentifierSpanProcessor } from "./llm-trace-identifier-span-processor";
 import {
   LocalFilteringSpanProcessor,
@@ -45,6 +51,10 @@ const TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const FORGED_BAGGAGE =
   "user_id=ceo%40victim.com,tenant_id=victim-corp,session_id=forged," +
   `netra.local_blocked_spans=${encodeURIComponent('["*"]')},app.flag=keep`;
+
+function Netra_withUser<T>(userId: string, fn: () => T): T {
+  return context.with(contextWithSessionValues(context.active(), { user_id: userId }), fn);
+}
 
 function randomTraceparent(): string {
   const hex = (n: number) =>
@@ -94,6 +104,10 @@ describe("session identity and baggage", () => {
 
   beforeEach(() => {
     exporter.reset();
+  });
+
+  afterEach(() => {
+    configureBaggagePolicy({});
   });
 
   it("SEC-001: ignores user, session and tenant sent in inbound baggage", () => {
@@ -225,5 +239,193 @@ describe("session identity and baggage", () => {
     llm.end();
 
     expect(rootSpans.size).toBe(before);
+  });
+
+  it("evaluation test runs link the session the app set, not one a caller sent", async () => {
+    await context.with(ROOT_CONTEXT, async () => {
+      setSessionValue("session_id", "s-1");
+      await Promise.resolve();
+      expect(getCurrentSessionId()).toBe("s-1");
+    });
+    const inbound = extractInbound({ baggage: "session_id=forged" });
+    context.with(inbound, () => expect(getCurrentSessionId()).toBeUndefined());
+  });
+
+  it("two requests on the same upstream trace keep their own root span", async () => {
+    const request = (name: string) => {
+      const inbound = extractInbound({ traceparent: TRACEPARENT });
+      const server = tracer.startSpan(`server-${name}`, {}, inbound);
+      return context.with(trace.setSpan(inbound, server), async () => {
+        await new Promise((r) => setTimeout(r, name === "a" ? 10 : 1));
+        const child = tracer.startSpan(`child-${name}`);
+        context.with(trace.setSpan(context.active(), child), () => {
+          RootSpanProcessor.setAttributeOnRootSpan("netra.root.input", `input-${name}`);
+          if (name === "b") {
+            const llm = tracer.startSpan("llm-b");
+            llm.setAttribute("gen_ai.request.model", "gpt-x");
+            llm.end();
+          }
+        });
+        child.end();
+        server.end();
+      });
+    };
+    await Promise.all([request("a"), request("b")]);
+
+    const a = spans("server-a")[0];
+    const b = spans("server-b")[0];
+    expect(a.spanContext().traceId).toBe(b.spanContext().traceId);
+    expect(a.attributes["netra.root.input"]).toBe("input-a");
+    expect(b.attributes["netra.root.input"]).toBe("input-b");
+    expect(b.attributes["netra.trace.llm.call"]).toBe(true);
+    expect(a.attributes["netra.trace.llm.call"]).toBeUndefined();
+    expect((RootSpanProcessor as any)._rootSpans.has(a.spanContext().traceId)).toBe(false);
+  });
+
+  it("setters outside a request scope reach the next job; withSession keeps jobs apart", async () => {
+    const handle = async (job: { id: string; user?: string }) => {
+      if (job.user) setSessionValue("user_id", job.user);
+      await new Promise((r) => setTimeout(r, 1));
+      tracer.startSpan(`job-${job.id}`).end();
+    };
+    const jobs = [{ id: "1", user: "alice" }, { id: "2" }];
+
+    await context.with(ROOT_CONTEXT, () => Promise.all(jobs.map(handle)));
+    expect(spans("job-1")[0].attributes["netra.user_id"]).toBe("alice");
+    expect(spans("job-2")[0].attributes["netra.user_id"]).toBe("alice");
+
+    exporter.reset();
+    await context.with(ROOT_CONTEXT, () =>
+      Promise.all(jobs.map((job) => context.with(contextWithSessionValues(context.active(), {}), () => handle(job)))),
+    );
+    expect(spans("job-1")[0].attributes["netra.user_id"]).toBe("alice");
+    expect(spans("job-2")[0].attributes["netra.user_id"]).toBeUndefined();
+  });
+
+  describe("cross-service baggage policy", () => {
+    const UPSTREAM_BAGGAGE =
+      "session_id=s-up,user_id=u-up,tenant_id=t-up," +
+      `netra.local_blocked_spans=${encodeURIComponent('["*"]')}`;
+
+    function injectTo(url: string): Record<string, string> {
+      const client = tracer.startSpan("GET", { attributes: { "url.full": url } });
+      const carrier: Record<string, string> = {};
+      propagation.inject(trace.setSpan(context.active(), client), carrier, defaultTextMapSetter);
+      client.end();
+      return carrier;
+    }
+
+    it("accepts a caller's session only with NETRA_TRUST_INBOUND_BAGGAGE", () => {
+      context.with(extractInbound({ traceparent: TRACEPARENT, baggage: UPSTREAM_BAGGAGE }), () =>
+        tracer.startSpan("untrusted").end(),
+      );
+      const untrusted = spans("untrusted")[0];
+      expect(untrusted.attributes["netra.session_id"]).toBeUndefined();
+
+      configureBaggagePolicy({ trustInbound: true });
+      const inbound = extractInbound({ traceparent: TRACEPARENT, baggage: UPSTREAM_BAGGAGE });
+      context.with(inbound, () => tracer.startSpan("trusted").end());
+      const trusted = spans("trusted")[0];
+      expect(trusted.attributes["netra.session_id"]).toBe("s-up");
+      expect(trusted.attributes["netra.user_id"]).toBe("u-up");
+      expect(trusted.attributes["netra.tenant_id"]).toBe("t-up");
+      expect(trusted.attributes["netra.local_blocked"]).toBeUndefined();
+      expect(propagation.getBaggage(inbound)?.getEntry("netra.local_blocked_spans")).toBeUndefined();
+      context.with(inbound, () => {
+        Netra_withUser("override", () => tracer.startSpan("override").end());
+      });
+      expect(spans("override")[0].attributes["netra.user_id"]).toBe("override");
+    });
+
+    it("does not forward a caller's session to other hosts", () => {
+      const inbound = extractInbound({ baggage: `${UPSTREAM_BAGGAGE},app.flag=keep` });
+      context.with(inbound, () => {
+        expect(injectTo("https://api.openai.com/v1/chat").baggage).toBe("app.flag=keep");
+      });
+    });
+
+    it("leaves the app's own baggage, including custom.* keys, untouched", () => {
+      const inbound = extractInbound({ baggage: "custom_keys=plan,custom.plan=pro,app.flag=keep" });
+      expect(propagation.getBaggage(inbound)?.getEntry("custom.plan")?.value).toBe("pro");
+      context.with(inbound, () => {
+        const headers = injectTo("https://api.openai.com/v1/chat");
+        expect(headers.baggage).toContain("custom_keys=plan");
+        expect(headers.baggage).toContain("custom.plan=pro");
+        expect(headers.baggage).toContain("app.flag=keep");
+      });
+    });
+
+    it("explains once why a caller's session was not used", () => {
+      configureBaggagePolicy({});
+      const notice = vi.spyOn(NetraLogger, "notice").mockImplementation(() => {});
+      try {
+        for (let i = 0; i < 5; i++) extractInbound({ baggage: UPSTREAM_BAGGAGE });
+        extractInbound({ baggage: "app.flag=keep" });
+        expect(notice).toHaveBeenCalledTimes(1);
+        expect(String(notice.mock.calls[0][1])).toContain("NETRA_TRUST_INBOUND_BAGGAGE=true");
+      } finally {
+        notice.mockRestore();
+      }
+    });
+
+    it("sends the session only to hosts in NETRA_PROPAGATE_BAGGAGE_HOSTS", async () => {
+      configureBaggagePolicy({ propagateHosts: ["corp.net"] });
+      await context.with(ROOT_CONTEXT, async () => {
+        setSessionValue("session_id", "s-1");
+        setSessionValue("user_id", "alice");
+        await Promise.resolve();
+        withBlockedSpansLocal(["x.*"], () => {
+          const internal = injectTo("https://orders.corp.net/api");
+          expect(internal.baggage).toContain("session_id=s-1");
+          expect(internal.baggage).toContain("user_id=alice");
+          expect(internal.baggage).not.toContain("netra.");
+          expect(injectTo("https://corp.net./x").baggage).toContain("session_id=s-1");
+          expect(injectTo("https://notcorp.net/x").baggage).toBeUndefined();
+          expect(injectTo("https://api.openai.com/v1").baggage).toBeUndefined();
+          expect(injectOutbound().baggage).toBeUndefined();
+        });
+      });
+    });
+
+    it("passes a trusted caller's session on to the next allowlisted service", () => {
+      configureBaggagePolicy({ trustInbound: true, propagateHosts: ["corp.net"] });
+      const inbound = extractInbound({ baggage: UPSTREAM_BAGGAGE });
+      context.with(inbound, () => {
+        const next = injectTo("https://billing.corp.net/");
+        expect(next.baggage).toContain("session_id=s-up");
+        expect(next.baggage).not.toContain("netra.");
+        expect(injectTo("https://api.openai.com/").baggage).toBeUndefined();
+      });
+    });
+  });
+
+  describe("root span lookup when the parent is rebuilt from its IDs", () => {
+    function childOfRebuiltParent(server: ReturnType<typeof tracer.startSpan>, name: string) {
+      const rebuilt = trace.setSpanContext(ROOT_CONTEXT, server.spanContext());
+      const child = tracer.startSpan(name, {}, rebuilt);
+      context.with(trace.setSpan(rebuilt, child), () =>
+        RootSpanProcessor.setAttributeOnRootSpan("netra.root.input", name),
+      );
+      child.end();
+    }
+
+    it("uses the trace's root when only one request is open on it", () => {
+      const inbound = extractInbound({ traceparent: randomTraceparent() });
+      const server = tracer.startSpan("solo-server", {}, inbound);
+      childOfRebuiltParent(server, "solo-child");
+      server.end();
+      expect(spans("solo-server")[0].attributes["netra.root.input"]).toBe("solo-child");
+    });
+
+    it("finds no root when two requests are open on the same trace", () => {
+      const traceparent = randomTraceparent();
+      const a = tracer.startSpan("pair-a", {}, extractInbound({ traceparent }));
+      const b = tracer.startSpan("pair-b", {}, extractInbound({ traceparent }));
+      childOfRebuiltParent(a, "pair-child");
+      a.end();
+      b.end();
+      expect(spans("pair-a")[0].attributes["netra.root.input"]).toBeUndefined();
+      expect(spans("pair-b")[0].attributes["netra.root.input"]).toBeUndefined();
+    });
   });
 });
