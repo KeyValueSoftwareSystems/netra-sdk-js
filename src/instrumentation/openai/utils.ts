@@ -25,8 +25,8 @@ const CUSTOM_USAGE_ATTRIBUTE = `${Config.LIBRARY_NAME}.usage`;
 const DECISION_REQUEST_TYPE = "decision";
 // Structured conversation attributes: one JSON array of `{"role", "content"}` entries
 // each, replacing the per-message indexed `gen_ai.prompt.N.*` / `gen_ai.completion.N.*` keys.
-const INPUT_ATTRIBUTE = "input";
-const OUTPUT_ATTRIBUTE = "output";
+export const INPUT_ATTRIBUTE = "input";
+export const OUTPUT_ATTRIBUTE = "output";
 // Decision input item types that carry a tool invocation, mapped to the key holding its arguments.
 const DECISION_TOOL_CALL_ARGUMENT_KEYS: Record<string, string> = {
   function_call: "arguments",
@@ -44,7 +44,7 @@ const DECISION_ANSWERS_ROLE = "assistant";
 const DECISION_QUESTIONS_MAX_SHARE = 2;
 
 /** A decision input entry: tool calls and their outputs also carry the call id. */
-type DecisionInputMessage = TracedMessage & { tool_call_id?: string };
+export type DecisionInputMessage = TracedMessage & { tool_call_id?: string };
 
 /**
  * OpenAI-specific request attributes.
@@ -215,7 +215,7 @@ function decisionInputEntry(
  * and at most `maxLen` characters of text across all parts kept before
  * anything is encoded.
  */
-function asPromptContent(content: unknown, maxLen: number): string {
+export function asPromptContent(content: unknown, maxLen: number): string {
   const elided = withoutInlineData(content, new CharBudget(maxLen));
   const rendered = typeof elided === "string" ? elided : toJson(elided);
   return sliceText(rendered, maxLen);
@@ -269,7 +269,7 @@ function encodeItemsWithin(items: unknown[], maxLen: number): string[] {
  * @returns The encoded entry, or undefined when `items` is non-empty and not
  *          even the first item fits.
  */
-function itemsEntry(items: unknown[], role: string, maxLen: number): string | undefined {
+export function itemsEntry(items: unknown[], role: string, maxLen: number): string | undefined {
   const encoded = encodeItemsWithin(items, maxLen);
   const envelopeLen = JSON.stringify({ role, content: "" }).length;
   const escapedLengths = encoded.map((value) => JSON.stringify(value).length - '""'.length);
