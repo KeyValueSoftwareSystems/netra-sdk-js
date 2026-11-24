@@ -1,11 +1,10 @@
 import {
   context as otelContext,
-  propagation,
-  ROOT_CONTEXT,
+  createContextKey,
   SpanContext,
   trace,
 } from "@opentelemetry/api";
-import type { Baggage, Context, Span } from "@opentelemetry/api";
+import type { Context, Span } from "@opentelemetry/api";
 import type {
   ReadableSpan,
   SpanProcessor,
@@ -13,19 +12,35 @@ import type {
 import { NetraLogger } from "../netraLogger";
 import { compilePatterns, matchesAnyPattern, CompiledPatterns } from "../utils/pattern-matching";
 
-export const LOCAL_BLOCKED_SPANS_BAGGAGE_KEY = "netra.local_blocked_spans";
 export const LOCAL_BLOCKED_SPANS_ATTR_KEY = "netra.local_blocked_spans";
 
-function decodePatterns(raw: string): string[] | null {
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.every((p) => typeof p === "string")) {
-      return parsed.filter(Boolean);
-    }
-  } catch {
-    // ignore
-  }
-  return null;
+/**
+ * Private OTel context key for span-name patterns blocked in the current scope.
+ *
+ * This used to be a W3C baggage entry, which meant any caller could send
+ * `baggage: netra.local_blocked_spans=["*"]` and have its request dropped from
+ * Netra, and the patterns were forwarded to every downstream host (JS-SEC-001).
+ * Blocking is local by design, so it now lives only in the in-process context.
+ */
+const LOCAL_BLOCKED_SPANS_CONTEXT_KEY = createContextKey("netra.local_blocked_spans");
+
+export function getLocalBlockedPatterns(ctx: Context): readonly string[] {
+  const value = ctx.getValue(LOCAL_BLOCKED_SPANS_CONTEXT_KEY);
+  return Array.isArray(value) ? (value as readonly string[]) : [];
+}
+
+/**
+ * Returns a copy of `ctx` whose blocked patterns are the existing ones plus
+ * `patterns` (deduplicated, empty strings dropped).
+ */
+export function contextWithLocalBlockedPatterns(
+  ctx: Context,
+  patterns: readonly string[],
+): Context {
+  const incoming = patterns.filter((p) => typeof p === "string" && p.length > 0);
+  if (incoming.length === 0) return ctx;
+  const merged = Object.freeze([...new Set([...getLocalBlockedPatterns(ctx), ...incoming])]);
+  return ctx.setValue(LOCAL_BLOCKED_SPANS_CONTEXT_KEY, merged);
 }
 
 export function withBlockedSpansLocal<T>(
@@ -40,24 +55,7 @@ export function withBlockedSpansLocal<T>(
   patterns: readonly string[],
   fn: () => Promise<T> | T,
 ): Promise<T> | T {
-  const incoming = patterns.filter(Boolean);
-  const activeCtx = otelContext.active();
-
-  const baggage: Baggage =
-    propagation.getBaggage(activeCtx) ??
-    propagation.getBaggage(ROOT_CONTEXT) ??
-    propagation.createBaggage();
-
-  const existingRaw = baggage.getEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY)?.value;
-  const existingPatterns = existingRaw ? (decodePatterns(existingRaw) ?? []) : [];
-  const merged = [...new Set([...existingPatterns, ...incoming])];
-  const payload = JSON.stringify(merged);
-
-  const nextBaggage = baggage.setEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY, {
-    value: payload,
-  });
-
-  const nextCtx = propagation.setBaggage(activeCtx, nextBaggage);
+  const nextCtx = contextWithLocalBlockedPatterns(otelContext.active(), patterns);
   return otelContext.with(nextCtx, fn);
 }
 
@@ -109,19 +107,14 @@ export class LocalFilteringSpanProcessor implements SpanProcessor {
         blocked = true;
       }
 
-      const bag = propagation.getBaggage(parentContext);
-      const raw = bag?.getEntry(LOCAL_BLOCKED_SPANS_BAGGAGE_KEY)?.value;
+      const patterns = getLocalBlockedPatterns(parentContext);
+      if (patterns.length > 0) {
+        span.setAttribute(LOCAL_BLOCKED_SPANS_ATTR_KEY, [...patterns]);
 
-      if (raw) {
-        const patterns = decodePatterns(raw);
-        if (patterns && patterns.length > 0) {
-          span.setAttribute(LOCAL_BLOCKED_SPANS_ATTR_KEY, patterns);
-
-          const compiled = this.getCompiledLocalPatterns(raw, patterns);
-          if (matchesAnyPattern(name, compiled)) {
-            span.setAttribute("netra.local_blocked", true);
-            blocked = true;
-          }
+        const compiled = this.getCompiledLocalPatterns(JSON.stringify(patterns), [...patterns]);
+        if (matchesAnyPattern(name, compiled)) {
+          span.setAttribute("netra.local_blocked", true);
+          blocked = true;
         }
       }
 

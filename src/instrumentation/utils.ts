@@ -433,7 +433,101 @@ export function writeCompletionAttributes(
   span.setAttribute("output", JSON.stringify(messages));
 }
 
+// Tool definition sanitizing (JS-SEC-005)
+
+// Matched as suffixes of the key, lowercased with - and _ removed.
+const SECRET_KEY_SUFFIXES = [
+  "headers",
+  "authorization",
+  "cookie",
+  "bearer",
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "apikey",
+  "accesskey",
+  "secretkey",
+  "privatekey",
+  "credential",
+  "credentials",
+];
+// Only the origin of these is kept: path and query often carry secrets.
+const URL_KEY_SUFFIXES = ["url", "uri", "endpoint"];
+export const REDACTED = "[REDACTED]";
+
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[-_]/g, "");
+}
+
+function isSecretToolKey(key: string): boolean {
+  const k = normalizeKey(key);
+  return SECRET_KEY_SUFFIXES.some((suffix) => k.endsWith(suffix));
+}
+
+function isUrlToolKey(key: string): boolean {
+  const k = normalizeKey(key);
+  return URL_KEY_SUFFIXES.some((suffix) => k.endsWith(suffix));
+}
+
+function urlOrigin(value: string): string {
+  try {
+    const origin = new URL(value).origin;
+    return origin && origin !== "null" ? origin : REDACTED;
+  } catch {
+    return REDACTED;
+  }
+}
+
+function redactSecrets(
+  value: unknown,
+  depth = 0,
+  seen = new WeakSet<object>(),
+  inSchemaProperties = false,
+): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (depth > 20 || seen.has(value as object)) return REDACTED;
+  seen.add(value as object);
+  if (Array.isArray(value)) return value.map((v) => redactSecrets(v, depth + 1, seen));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (inSchemaProperties && v !== null && typeof v === "object") {
+      // Schema `properties` keys are argument names, not secrets.
+      out[k] = redactSecrets(v, depth + 1, seen);
+    } else if (isSecretToolKey(k) && v !== undefined && v !== null) {
+      out[k] = REDACTED;
+    } else if (isUrlToolKey(k) && typeof v === "string") {
+      out[k] = urlOrigin(v);
+    } else {
+      out[k] = redactSecrets(v, depth + 1, seen, k === "properties");
+    }
+  }
+  return out;
+}
+
+function toolSummary(tool: unknown): Record<string, unknown> {
+  if (!tool || typeof tool !== "object") return {};
+  const t = tool as Record<string, any>;
+  const name =
+    t.name ?? t.function?.name ?? t.server_label ?? t.connector_id ?? undefined;
+  const summary: Record<string, unknown> = {};
+  if (t.type !== undefined) summary.type = t.type;
+  if (name !== undefined) summary.name = name;
+  return summary;
+}
+
+/**
+ * Returns a copy of a tool list that is safe to record: credentials are always
+ * replaced with "[REDACTED]", and with traceContent disabled only each tool's
+ * type and name are kept.
+ */
+export function sanitizeToolsForTrace(tools: unknown[]): unknown[] {
+  if (!isTraceContentEnabled()) return tools.map(toolSummary);
+  return tools.map((t) => redactSecrets(t));
+}
+
 // Request Attributes
+
 export function setRequestAttributes(
   span: Span,
   kwargs: Record<string, unknown>,
@@ -453,9 +547,9 @@ export function setRequestAttributes(
   // Standard model parameters
   setModelParams(span, kwargs);
 
-  // Tool definitions
+  // Tool definitions — credentials always redacted; names only without content (JS-SEC-005)
   if (Array.isArray(kwargs.tools)) {
-    span.setAttribute("tools", safeStringify(kwargs.tools));
+    span.setAttribute("tools", safeStringify(sanitizeToolsForTrace(kwargs.tools)));
   }
 
   // Reasoning config

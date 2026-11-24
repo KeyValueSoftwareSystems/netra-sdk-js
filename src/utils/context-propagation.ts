@@ -103,8 +103,7 @@ export function runWithExtractedContext<T>(
  *
  * This is the recommended way to enable distributed tracing for Express
  * servers when `@opentelemetry/instrumentation-http` is not available or not
- * working (e.g. due to ESM module loading order with `tsx`). It is the
- * TypeScript equivalent of the Python SDK's `NetraFastAPIMiddleware`.
+ * working (e.g. due to ESM module loading order with `tsx`).
  *
  * **Note:** In Express 4.x, async errors thrown inside downstream handlers are
  * not automatically caught by the Express error handler. Wrap async route

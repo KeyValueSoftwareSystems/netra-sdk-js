@@ -4,14 +4,13 @@
 
 import {
   context,
-  propagation,
   Span,
   SpanKind,
   SpanStatusCode,
   trace,
 } from "@opentelemetry/api";
 import { Config } from "./config";
-import { LOCAL_BLOCKED_SPANS_BAGGAGE_KEY } from "./processors/localfiltering-span-processor";
+import { contextWithLocalBlockedPatterns } from "./processors/localfiltering-span-processor";
 import { SessionManager } from "./session-manager";
 import { ActionModel, SpanAttributes, SpanType, UsageModel } from "./types";
 
@@ -52,22 +51,7 @@ export class SpanWrapper {
     let ctx = context.active();
 
     if (this.blockedSpanPatterns && this.blockedSpanPatterns.length > 0) {
-      const patterns = this.blockedSpanPatterns.filter(Boolean);
-      if (patterns.length > 0) {
-        const existingBaggage =
-          propagation.getBaggage(ctx) ?? propagation.createBaggage();
-        const existingRaw = existingBaggage.getEntry(
-          LOCAL_BLOCKED_SPANS_BAGGAGE_KEY,
-        )?.value;
-        const existingPatterns = this.decodeBaggagePatterns(existingRaw);
-        const merged = [...new Set([...existingPatterns, ...patterns])];
-        const payload = JSON.stringify(merged);
-        const updatedBaggage = existingBaggage.setEntry(
-          LOCAL_BLOCKED_SPANS_BAGGAGE_KEY,
-          { value: payload },
-        );
-        ctx = propagation.setBaggage(ctx, updatedBaggage);
-      }
+      ctx = contextWithLocalBlockedPatterns(ctx, this.blockedSpanPatterns);
     }
 
     this.span = tracer.startSpan(
@@ -215,18 +199,5 @@ export class SpanWrapper {
 
   getCurrentSpan(): Span | undefined {
     return this.span;
-  }
-
-  private decodeBaggagePatterns(raw: string | undefined): string[] {
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((v: unknown) => typeof v === "string" && v);
-      }
-    } catch {
-      // ignore malformed baggage
-    }
-    return [];
   }
 }

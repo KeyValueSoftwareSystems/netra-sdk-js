@@ -174,6 +174,8 @@ export class Config {
   environment: string;
   resourceAttributes: Record<string, any>;
   blockedSpans?: string[];
+  propagateBaggageHosts: string[];
+  trustInboundBaggage: boolean;
 
   constructor(config: NetraConfig = {}) {
     this.appName = this._getAppName(config.appName);
@@ -205,6 +207,12 @@ export class Config {
       config.resourceAttributes,
     );
     this.blockedSpans = config.blockedSpans;
+    this.propagateBaggageHosts = this._getPropagateBaggageHosts();
+    this.trustInboundBaggage = this._getBoolConfig(
+      undefined,
+      "NETRA_TRUST_INBOUND_BAGGAGE",
+      false,
+    );
 
     this._validateApiKey();
     this._setupAuthentication();
@@ -294,6 +302,13 @@ export class Config {
     if (!this.headers[authKey]) {
       this.headers[authKey] = authValue;
     }
+  }
+
+  private _getPropagateBaggageHosts(): string[] {
+    return (process.env.NETRA_PROPAGATE_BAGGAGE_HOSTS ?? "")
+      .split(",")
+      .map((host) => host.trim().toLowerCase().replace(/^\.+|\.+$/g, ""))
+      .filter(Boolean);
   }
 
   private _getBoolConfig(

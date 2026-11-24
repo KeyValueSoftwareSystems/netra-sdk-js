@@ -20,8 +20,11 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
   private readonly _responseModelKey: string;
   private readonly _rootMarkerKey: string;
 
-  // Tracks which traces have already been marked to avoid redundant writes
-  private readonly _markedTraces = new Set<string>();
+  // Root spans already marked, to avoid redundant writes. A WeakSet keyed on
+  // the span object needs no cleanup: an entry goes away with its span, so
+  // traces whose root never ends here (remote parent, late LLM spans) cannot
+  // accumulate (JS-MEM-001).
+  private _markedRoots = new WeakSet<Span>();
 
   constructor(
     requestModelAttributeKey = LlmTraceIdentifierSpanProcessor.DEFAULT_REQUEST_MODEL_KEY,
@@ -45,25 +48,18 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
       const spanCtx = span.spanContext();
       if (!spanCtx || !trace.isSpanContextValid(spanCtx)) return;
 
-      const { traceId, spanId } = spanCtx;
-
-      // When the root span ends, clean up local state and stop processing
-      if (RootSpanProcessor.isRootSpanForTrace(traceId, spanId)) {
-        this._markedTraces.delete(traceId);
-        return;
-      }
-
-      if (this._markedTraces.has(traceId)) return;
+      const root = RootSpanProcessor.getRootSpan(span);
+      if (!root || root === (span as unknown)) return;
       if (!this._isLlmSpan(span)) return;
 
-      this._markRootSpan(traceId);
+      this._markRootSpan(root, spanCtx.traceId);
     } catch (e) {
       NetraLogger.warn("LlmTraceIdentifierSpanProcessor: error in onEnd:", e);
     }
   }
 
   shutdown(): Promise<void> {
-    this._markedTraces.clear();
+    this._markedRoots = new WeakSet<Span>();
     return Promise.resolve();
   }
 
@@ -80,12 +76,11 @@ export class LlmTraceIdentifierSpanProcessor implements SpanProcessor {
     );
   }
 
-  private _markRootSpan(traceId: string): void {
-    const root = RootSpanProcessor.getRootSpanByTraceId(traceId);
-    this._markedTraces.add(traceId);
-    if (!root) return;
+  private _markRootSpan(root: Span, traceId: string): void {
+    if (this._markedRoots.has(root)) return;
+    this._markedRoots.add(root);
     if (!root.isRecording()) {
-      NetraLogger.warn(`LlmTraceIdentifierSpanProcessor: root span for trace ${traceId} is not recording`);
+      NetraLogger.debug(`LlmTraceIdentifierSpanProcessor: root span for trace ${traceId} is not recording`);
       return;
     }
     try {

@@ -2,21 +2,12 @@
  * Evaluation Utility Functions
  */
 
-import { propagation, context as otelContext } from "@opentelemetry/api";
 import { NetraLogger } from "../../netraLogger";
+import { getSessionValue } from "../../processors/session-span-processor";
 import { DatasetRecord, EvaluatorConfig, ItemContext } from "./models";
 
-/**
- * Get the session ID from the OpenTelemetry baggage
- */
-export function getSessionIdFromBaggage(): string | undefined {
-    const ctx = otelContext.active();
-    const baggageObj = propagation.getBaggage(ctx);
-    const sessionId = baggageObj?.getEntry("session_id")?.value;
-    if (typeof sessionId === "string" && sessionId) {
-        return sessionId;
-    }
-    return undefined;
+export function getCurrentSessionId(): string | undefined {
+    return getSessionValue("session_id") || undefined;
 }
 
 /**

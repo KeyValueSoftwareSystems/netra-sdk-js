@@ -32,10 +32,7 @@ function describeServerMessage(responseBody: string): string {
   return excerpt ? `"${excerpt}"` : "(empty response body)";
 }
 
-/**
- * Debug message for a batch the backend rejected. The same format is used by netra-sdk-py's
- * TrialAwareOTLPExporter, so both SDKs report export failures identically.
- */
+/** Debug message for a batch the backend rejected. */
 function formatExportFailure(
   statusCode: number | undefined,
   statusMessage: string | undefined,

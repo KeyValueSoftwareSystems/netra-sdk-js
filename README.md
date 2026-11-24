@@ -168,10 +168,15 @@ Track user sessions and add custom context to your traces.
 ```typescript
 import { Netra } from "netra-sdk";
 
-// Set Identity Context
+// Set identity for the rest of the current request
 Netra.setUserId("user-123");
 Netra.setSessionId("session-abc");
 Netra.setTenantId("tenant-xyz");
+
+// Or set identity for one block of work
+await Netra.withSession({ userId: "user-123", sessionId: "session-abc" }, async () => {
+    // everything traced in here is recorded for user-123 / session-abc
+});
 
 // Add Custom Attributes
 Netra.setCustomAttributes("customer_tier", "premium");
@@ -184,6 +189,32 @@ Netra.setCustomEvent("user_feedback", {
     category: "positive"
 });
 ```
+
+Call these after `Netra.init()`.
+
+**In a web server**, call the setters while handling a request. The values apply to the rest of that request only.
+
+**In background jobs, queue workers or scripts**, use `Netra.withSession()` for each job, so every job is recorded under its own user and session:
+
+```typescript
+for (const job of jobs) {
+    await Netra.withSession({ userId: job.userId, sessionId: job.sessionId }, () => handle(job));
+}
+
+// Jobs running at the same time
+await Promise.all(jobs.map((job) => Netra.withSession({ userId: job.userId }, () => handle(job))));
+```
+
+If your app sets up its own OpenTelemetry context manager, use `Netra.withSession()` everywhere.
+
+### Sharing sessions across your services
+
+By default, the user, session and tenant are recorded only in the service that sets them. If one request passes through several of your services and you want them all recorded under the same session, turn on sharing with two environment variables.
+
+| Variable | Set it on | What it does |
+|---|---|---|
+| `NETRA_PROPAGATE_BAGGAGE_HOSTS` | the service making the call | Comma-separated hosts that should receive the user, session and tenant, for example `orders.internal,corp.net`. Subdomains are included. Covers calls made with `http`, `https` and `fetch`, and needs the HTTP instrument enabled with `@opentelemetry/instrumentation-http` installed (plus `@opentelemetry/instrumentation-undici` for `fetch`). |
+| `NETRA_TRUST_INBOUND_BAGGAGE=true` | the service receiving the call | Records requests under the user, session and tenant sent by the calling service. Only turn this on for internal services that the public can't call directly. |
 
 ## 🔄 Custom Span Tracking
 
@@ -296,6 +327,8 @@ You can configure the SDK using environment variables:
 | `NETRA_APP_NAME` | Name of your application |
 | `NETRA_ENV` | Environment (e.g., prod, dev) |
 | `NETRA_TRACE_CONTENT` | Capture prompt/completion content (default: true) |
+| `NETRA_PROPAGATE_BAGGAGE_HOSTS` | Your internal hosts that should receive the user, session and tenant (default: none) |
+| `NETRA_TRUST_INBOUND_BAGGAGE` | Use the user, session and tenant sent by your other services (default: false) |
 
 ## 🤝 License
 

@@ -4,13 +4,23 @@
  * Built on top of OpenTelemetry and Traceloop
  */
 
-import { trace } from "@opentelemetry/api";
+import { context, trace } from "@opentelemetry/api";
 import { createRequire } from "module";
 import { Prompts, Dashboard, Evaluation, Usage, Models } from "./api";
 import { Config, NetraConfig } from "./config";
-import { initInstrumentations, instrumentationsReady, uninstrumentAll } from "./instrumentation";
+import {
+  initInstrumentations,
+  instrumentationsReady,
+  isOutboundHttpInstrumented,
+  uninstrumentAll,
+} from "./instrumentation";
 import { NetraLogger } from "./netraLogger";
-import { setSessionBaggage, withBlockedSpansLocal } from "./processors";
+import {
+  clearSessionValues,
+  contextWithSessionValues,
+  setSessionValue,
+  withBlockedSpansLocal,
+} from "./processors";
 import {
   FLUSH_TIMEOUT_MS,
   registerExitTask,
@@ -23,6 +33,7 @@ import { SpanWrapper } from "./span-wrapper";
 import { Tracer } from "./tracer";
 import { SpanType, SpanCallback, SpanOptions, SpanAttributes } from "./types";
 import { wrapResponse } from "./utils/response-handler";
+import { configureBaggagePolicy } from "./utils/netra-baggage-propagator";
 
 export {
   Config,
@@ -151,6 +162,10 @@ export {
   runWithExtractedContext,
 } from "./utils/context-propagation";
 
+// The setter warning below fires on every call in an unsupported setup (one per
+// request on a server), so it is printed only once per process.
+let warnedNoContextManager = false;
+
 export class Netra {
   private static _SDK_NAME = "netra_sdk";
 
@@ -200,6 +215,11 @@ export class Netra {
     // Wire the logger before anything else so all modules respect debugMode.
     NetraLogger.setDebugMode(cfg.debugMode);
 
+    configureBaggagePolicy({
+      propagateHosts: cfg.propagateBaggageHosts,
+      trustInbound: cfg.trustInboundBaggage,
+    });
+
     // Initialize instrumentations and get effective provider
     const effectiveProvider = initInstrumentations(
       cfg,
@@ -207,6 +227,13 @@ export class Netra {
       config.blockInstruments,
       config.rootInstruments,
     );
+
+    if (cfg.propagateBaggageHosts.length > 0 && !isOutboundHttpInstrumented()) {
+      NetraLogger.notice(
+        "warn",
+        "NETRA_PROPAGATE_BAGGAGE_HOSTS is set, but the user, session and tenant can't be shared with other services because HTTP tracing is off. Enable the HTTP instrument and install @opentelemetry/instrumentation-http (and @opentelemetry/instrumentation-undici for fetch).",
+      );
+    }
 
     // Create the tracer
     const tracer = new Tracer(cfg, effectiveProvider);
@@ -414,13 +441,48 @@ export class Netra {
     SessionManager.setRootOutput(value);
   }
 
+  /** Run `fn` with the given session, user and tenant; use this for background jobs and workers. */
+  static withSession<T>(
+    values: { sessionId?: string; userId?: string; tenantId?: string },
+    fn: () => T,
+  ): T {
+    const ctx = contextWithSessionValues(context.active(), {
+      session_id: typeof values?.sessionId === "string" ? values.sessionId : undefined,
+      user_id: typeof values?.userId === "string" ? values.userId : undefined,
+      tenant_id: typeof values?.tenantId === "string" ? values.tenantId : undefined,
+    });
+    return context.with(ctx, fn);
+  }
+
+  /**
+   * Clear the session, user and tenant set for the current async context.
+   */
+  static clearSession(): void {
+    clearSessionValues();
+  }
+
+  private static _applySessionValue(
+    method: string,
+    key: "session_id" | "user_id" | "tenant_id",
+    value: string,
+  ): void {
+    if (!setSessionValue(key, value) && !warnedNoContextManager) {
+      warnedNoContextManager = true;
+      NetraLogger.notice(
+        "warn",
+        `${method}: the value was applied only to the current span. Call ${method}() after Netra.init(), or use Netra.withSession() if your app sets up its own OpenTelemetry context manager. This warning is shown once.`,
+      );
+    }
+  }
+
+  /** Set the session for the rest of the current request; in background jobs use `Netra.withSession()`. */
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
       NetraLogger.notice("error", `setSessionId: sessionId must be a string, got ${typeof sessionId}`);
       return;
     }
     if (sessionId) {
-      setSessionBaggage("session_id", sessionId);
+      Netra._applySessionValue("setSessionId", "session_id", sessionId);
       SessionManager.setAttributeOnActiveSpan(
         `${Config.LIBRARY_NAME}.session_id`,
         sessionId,
@@ -430,17 +492,14 @@ export class Netra {
     }
   }
 
-  /**
-   * Set user_id context attributes for all spans.
-   * Uses OpenTelemetry baggage API for automatic context propagation.
-   */
+  /** Set the user for the rest of the current request; in background jobs use `Netra.withSession()`. */
   static setUserId(userId: string): void {
     if (typeof userId !== "string") {
       NetraLogger.notice("error", `setUserId: userId must be a string, got ${typeof userId}`);
       return;
     }
     if (userId) {
-      setSessionBaggage("user_id", userId);
+      Netra._applySessionValue("setUserId", "user_id", userId);
       SessionManager.setAttributeOnActiveSpan(
         `${Config.LIBRARY_NAME}.user_id`,
         userId,
@@ -450,17 +509,14 @@ export class Netra {
     }
   }
 
-  /**
-   * Set tenant_id context attributes for all spans.
-   * Uses OpenTelemetry baggage API for automatic context propagation.
-   */
+  /** Set the tenant for the rest of the current request; in background jobs use `Netra.withSession()`. */
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
       NetraLogger.notice("error", `setTenantId: tenantId must be a string, got ${typeof tenantId}`);
       return;
     }
     if (tenantId) {
-      setSessionBaggage("tenant_id", tenantId);
+      Netra._applySessionValue("setTenantId", "tenant_id", tenantId);
       SessionManager.setAttributeOnActiveSpan(
         `${Config.LIBRARY_NAME}.tenant_id`,
         tenantId,

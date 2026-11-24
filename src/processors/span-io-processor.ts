@@ -1,5 +1,6 @@
 import { AttributeValue, Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { isTraceContentEnabled } from "../instrumentation/utils";
 import { NetraLogger } from "../netraLogger";
 
 const _PROMPT_RE = /^gen_ai\.prompts?\.(\d+)\.(role|content)$/;
@@ -23,6 +24,50 @@ const NETRA_ENTITY_INPUT = "netra.entity.input";
 const NETRA_ENTITY_OUTPUT = "netra.entity.output";
 
 const MAX_PARSE_LEN = 1_000_000;
+
+/**
+ * Keys that carry prompts, completions, function I/O or other user content.
+ * With traceContent disabled they are dropped here, at the outermost
+ * setAttribute wrapper, so no instrumentation (including future ones) can
+ * write them (JS-SEC-004).
+ */
+const CONTENT_KEYS = new Set<string>([
+  "input",
+  "output",
+  "conversation",
+  NETRA_USER_INPUT,
+  NETRA_USER_OUTPUT,
+  NETRA_ROOT_INPUT,
+  NETRA_ROOT_OUTPUT,
+  NETRA_ENTITY_INPUT,
+  NETRA_ENTITY_OUTPUT,
+  "traceloop.entity.input",
+  "traceloop.entity.output",
+  "llm.request.suffix",
+  "netra.mcp.data",
+  "netra.custom.data",
+  // OpenTelemetry GenAI semantic-convention content keys. Traceloop's LangChain
+  // callback handler writes these, and Traceloop 0.27 does not turn content off
+  // for its LangChain instrumentation when traceContent is false.
+  "gen_ai.prompt",
+  "gen_ai.completion",
+  "gen_ai.input.messages",
+  "gen_ai.output.messages",
+  "gen_ai.system_instructions",
+  "gen_ai.tool.definitions",
+  "gen_ai.tool.call.arguments",
+  "gen_ai.tool.call.result",
+]);
+const _CONTENT_ARGUMENTS_RE = /^gen_ai\.(prompts?|completions?)\.\d+\..*arguments$/;
+
+export function isContentAttributeKey(key: string): boolean {
+  return (
+    CONTENT_KEYS.has(key) ||
+    _PROMPT_RE.test(key) ||
+    _COMPLETION_RE.test(key) ||
+    _CONTENT_ARGUMENTS_RE.test(key)
+  );
+}
 
 type SetAttributeFn = (key: string, value: AttributeValue) => Span;
 
@@ -66,6 +111,16 @@ function isEmpty(v: unknown): boolean {
 }
 
 export class SpanIOProcessor implements SpanProcessor {
+  /**
+   * @param traceContent Whether content may be recorded. When omitted, the
+   *   current `traceContent` setting is read on every write.
+   */
+  constructor(private readonly traceContent?: boolean) {}
+
+  private _contentEnabled(): boolean {
+    return this.traceContent ?? isTraceContentEnabled();
+  }
+
   onStart(span: Span, _parentContext: Context): void {
     try {
       const attrs = (span as any).attributes ?? {};
@@ -120,6 +175,11 @@ export class SpanIOProcessor implements SpanProcessor {
 
     const patched = (key: string, value: AttributeValue): Span => {
       try {
+        // Priority 0: traceContent disabled → content never reaches the span.
+        if (!this._contentEnabled() && isContentAttributeKey(key)) {
+          return span;
+        }
+
         // Priority 1: netra.root.input/output (setRootInput/setRootOutput)
         if (key === NETRA_ROOT_INPUT) {
           rootOwnsInput = true;

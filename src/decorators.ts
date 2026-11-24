@@ -4,6 +4,7 @@
 
 import { context, trace, Span, SpanStatusCode } from "@opentelemetry/api";
 import { Config } from "./config";
+import { isTraceContentEnabled } from "./instrumentation/utils";
 import { NetraLogger } from "./netraLogger";
 import { SessionManager } from "./session-manager";
 import { SpanType, DecoratorOptions } from "./types";
@@ -40,14 +41,15 @@ function spanHasOutput(span: Span): boolean {
 
 function addInputAttributes(span: Span, args: any[], entityType: string): void {
   span.setAttribute(`${Config.LIBRARY_NAME}.entity.type`, entityType);
-  if (args.length > 0) {
+  // traceContent: false must keep function arguments out of the trace (JS-SEC-004).
+  if (args.length > 0 && isTraceContentEnabled()) {
     span.setAttribute("input", safeStringify(args));
   }
 }
 
 function addOutputAttributes(span: Span, result: any): void {
   // Skip if the user already set output explicitly inside the decorated function
-  if (result === undefined || spanHasOutput(span)) return;
+  if (result === undefined || !isTraceContentEnabled() || spanHasOutput(span)) return;
   try {
     span.setAttribute("output", safeStringify(result));
   } catch (e) {

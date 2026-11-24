@@ -13,7 +13,9 @@ export { ScrubbingSpanProcessor } from "./scrubbing-span-processor";
 export { SerializationSpanProcessor } from "./serialization-span-processor";
 export {
   SessionSpanProcessor,
-  setSessionBaggage,
+  clearSessionValues,
+  contextWithSessionValues,
+  setSessionValue,
 } from "./session-span-processor";
 export { RootInstrumentFilterProcessor } from "./root-instrument-filter-processor";
 export { SpanIOProcessor } from "./span-io-processor";
