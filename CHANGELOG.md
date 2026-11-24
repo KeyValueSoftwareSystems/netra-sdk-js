@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-11-24
+
+### Added
+
+- **OpenAI Decisions API**: Calls to `client.decisions.create` (openai `>=7.30.0`) are traced as one `openai.decision` span with `llm.request.type` set to `decision`. The `input` attribute is a JSON array of the input items followed by the questions as the last entry. A string input becomes one user message, function and custom tool calls become `assistant` entries holding `{name, arguments}`, and their outputs become `tool` entries; both carry the call's `tool_call_id`. The answers are recorded as the `output` attribute. Model, token usage and duration are recorded as on other OpenAI spans. On older openai versions the patch is skipped without a warning.
+- **Gemini Decisions API**: Calls to `client.decisions.create` in `@google/genai` (`>=3.6`) are traced as one `google_genai.decision` span, with the same `input` / `output` shape as OpenAI decision spans. The `models/` prefix is removed from the model name, which is recorded as both the request and response model. Token usage is recorded from the `total_input_tokens`, `total_output_tokens` (plus `total_thought_tokens`), `total_tokens` and `total_cached_tokens` fields. When Gemini blocks the input, `prompt_feedback.block_reason` is recorded as `llm.response.finish_reason`. Older `@google/genai` versions without the Decisions API keep working and are not patched.
+- **TypeSafe (Jev) Instrumentation**: `TypeSafeClient.systemOne` calls from `@typesafe-ai/sdk` (`>=0.7.0`, an optional peer dependency) are traced as one `typesafe.system_one` span with `gen_ai.system` set to `TypeSafe` and `llm.request.type` set to `decision`. The span records the request and response model, token usage, duration, the state and questions as `input`, and the answers as `output`. On failure it records `error.type`, the exception and an `ERROR` status. It is enabled by default as `NetraInstruments.TYPESAFE` and can be turned off with `blockInstruments`. The SDK's own `APIPromise` is returned unchanged, so `.withResponse()`, `.asResponse()` and `.map()` keep working.
+- **Decision Content Limits**: For all three decision spans, content attributes are recorded only when content tracing is on. They stay within `NETRA_SPAN_ATTRIBUTE_MAX_SIZE` and are always valid JSON: the questions take at most half of `input`, the rest of the input is cut to the room left, and answers that do not fit are dropped whole. Inline base64 images and files are replaced with placeholders such as `[image]` and `[file]`. A failure while recording an attribute is logged and never fails the call.
+
+### Changed
+
+- **openai 7 Supported**: The `openai` peer dependency range now includes `^7.0.0`.
+- **Un-Awaited Failing Calls**: An OpenAI, Groq or Anthropic call that is never awaited and fails no longer raises `unhandledRejection` while Netra is installed; the error is recorded on the span instead. Do not rely on `unhandledRejection` alerts for these calls.
+
+### Fixed
+
+- **SDK Return Objects Kept Intact**: The OpenAI and Groq instrumentations now return the SDK's own `APIPromise`, so `.withResponse()`, `.asResponse()`, `.parse()` and the stream helpers no longer throw. OpenAI, Groq and Mistral streams are the SDK's own stream objects again, keeping `controller`, `tee()` and `toReadableStream()`. Breaking out of a stream now closes the connection and exports the span. A stream read only through `tee()`, `toReadableStream()` or `getReader()` works, but its span is not ended.
+- **LangGraph Streams**: `graph.stream()` yields the graph's chunks again instead of `{done, value}` objects. The workflow context no longer leaks into the caller, so later graph calls in the same request are traced.
+- **Anthropic Crash on Caught Errors**: An API error that the app caught through `.withResponse()` no longer becomes an unhandled rejection that crashes the process.
+- **Base64 Embedding Dimensions**: `llm.response.embedding_dimensions` is now also recorded for base64-encoded embeddings, the OpenAI SDK default.
+
 ## [1.12.2] - 2026-11-04
 
 ### Changed
