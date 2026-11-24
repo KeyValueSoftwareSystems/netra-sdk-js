@@ -31,7 +31,7 @@ import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 
 export const INVALID_SPAN_ID = "0000000000000000";
 
-const INSTRUMENTATION_PREFIXES = [
+export const INSTRUMENTATION_PREFIXES = [
   "opentelemetry.instrumentation.",
   "netra.instrumentation.",
   "@opentelemetry/instrumentation-",
