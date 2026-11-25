@@ -475,7 +475,7 @@ export class Netra {
     }
   }
 
-  /** Set the session for the rest of the current request; in background jobs use `Netra.withSession()`. */
+  /** Set the session for the rest of the current async scope (a value set inside a traced function or `withSession` callback ends when it returns); in background jobs use `Netra.withSession()`. */
   static setSessionId(sessionId: string): void {
     if (typeof sessionId !== "string") {
       NetraLogger.notice("error", `setSessionId: sessionId must be a string, got ${typeof sessionId}`);
@@ -492,7 +492,7 @@ export class Netra {
     }
   }
 
-  /** Set the user for the rest of the current request; in background jobs use `Netra.withSession()`. */
+  /** Set the user for the rest of the current async scope (a value set inside a traced function or `withSession` callback ends when it returns); in background jobs use `Netra.withSession()`. */
   static setUserId(userId: string): void {
     if (typeof userId !== "string") {
       NetraLogger.notice("error", `setUserId: userId must be a string, got ${typeof userId}`);
@@ -509,7 +509,7 @@ export class Netra {
     }
   }
 
-  /** Set the tenant for the rest of the current request; in background jobs use `Netra.withSession()`. */
+  /** Set the tenant for the rest of the current async scope (a value set inside a traced function or `withSession` callback ends when it returns); in background jobs use `Netra.withSession()`. */
   static setTenantId(tenantId: string): void {
     if (typeof tenantId !== "string") {
       NetraLogger.notice("error", `setTenantId: tenantId must be a string, got ${typeof tenantId}`);

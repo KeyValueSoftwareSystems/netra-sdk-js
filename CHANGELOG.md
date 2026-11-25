@@ -11,9 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Sharing a session across your services is now opt-in.** The user, session and tenant are no longer sent to other services, and values sent by a calling service are no longer used. If one request passes through several of your services and you want them all recorded under the same session, set `NETRA_PROPAGATE_BAGGAGE_HOSTS` on the calling service and `NETRA_TRUST_INBOUND_BAGGAGE=true` on the receiving service. See "Sharing sessions across your services" in the README.
 - **Call the identity setters after `Netra.init()`.** `setSessionId`, `setUserId` and `setTenantId` called before `Netra.init()` now apply only to the current span, and Netra prints a one-time warning.
+- **Set identity before entering traced functions.** `setSessionId`, `setUserId` and `setTenantId` apply to the rest of the current async scope. A value set inside a decorated method, a `Netra.startActiveSpan()` callback or a `Netra.withSession()` callback ends when that function returns, so spans started after it no longer carry it. Call the setters in middleware or before calling traced helpers, or wrap the work in `Netra.withSession()`.
 - **Use `Netra.withSession()` in background jobs.** In queue workers, cron jobs and scripts, wrap each job in `Netra.withSession()` so each job is recorded under its own user and session.
-- **`traceContent: false` now hides all content.** This includes values passed to `setInput`, `setOutput`, `setRootInput` and `setRootOutput`, and the arguments and return values of decorated functions. If you rely on those with content tracing off, turn content tracing on.
-- **Baggage named `session_id`, `user_id` or `tenant_id`** is now treated as Netra identity: it is sent only to hosts in `NETRA_PROPAGATE_BAGGAGE_HOSTS`. Other baggage is passed on unchanged.
+- **`traceContent: false` now hides all content.** This includes values passed to `setInput`, `setOutput`, `setRootInput` and `setRootOutput`, attributes passed when a span is started, and the arguments and return values of decorated functions. If you rely on those with content tracing off, turn content tracing on.
+- **Baggage named `session_id`, `user_id`, `tenant_id`, `custom_keys` or `custom.*`** is now treated as Netra identity: it is sent only to hosts in `NETRA_PROPAGATE_BAGGAGE_HOSTS`, and the values sent by a calling service are used only with `NETRA_TRUST_INBOUND_BAGGAGE=true`. `custom.<key>` entries listed in `custom_keys` are still recorded as `netra.custom.<key>`. Other baggage is passed on unchanged.
 
 ### Added
 
@@ -25,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Requests From Other Services Are Their Own Root**: When a request arrives from another traced service, its first span here is now the root of that request. `setRootInput`, `setRootOutput` and the LLM-call marker now work for these requests, and two requests arriving on the same trace each keep their own root.
-- **Content Tracing Off Covers Every Integration**: With `traceContent: false`, prompts, completions, tool arguments and results, and function inputs and outputs are kept out of traces for every integration, including LangGraph and OpenAI Agents. Tool definitions are reduced to each tool's type and name.
+- **Content Tracing Off Covers Every Integration**: With `traceContent: false`, prompts, completions, tool arguments and results, and function inputs and outputs are kept out of traces for every integration, including LangGraph, OpenAI Agents and Vercel AI SDK telemetry. Tool definitions are reduced to each tool's type and name.
 - **No Prompt Requests to Traceloop**: The SDK no longer fetches prompts from Traceloop's prompt registry. Use `Netra.prompts.getPrompt()` for prompts.
 - **Dependencies**: `p-limit` is no longer a dependency.
 

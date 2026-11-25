@@ -2,6 +2,7 @@ import {
   Baggage,
   Context,
   propagation,
+  SpanKind,
   TextMapGetter,
   TextMapPropagator,
   TextMapSetter,
@@ -11,6 +12,8 @@ import { W3CBaggagePropagator } from "@opentelemetry/core";
 import { NetraLogger } from "../netraLogger";
 import {
   contextWithSessionValues,
+  CUSTOM_BAGGAGE_PREFIX,
+  CUSTOM_KEYS_BAGGAGE_KEY,
   getSessionValues,
   SessionKey,
 } from "../processors/session-span-processor";
@@ -40,6 +43,14 @@ function isReservedKey(key: string): boolean {
 
 function isSessionKey(key: string): key is SessionKey {
   return (SESSION_BAGGAGE_KEYS as readonly string[]).includes(key);
+}
+
+function isCustomKey(key: string): boolean {
+  return key === CUSTOM_KEYS_BAGGAGE_KEY || key.startsWith(CUSTOM_BAGGAGE_PREFIX);
+}
+
+function isIdentityKey(key: string): boolean {
+  return isSessionKey(key) || isCustomKey(key);
 }
 
 function withoutEntries(ctx: Context, baggage: Baggage, keys: string[]): Context {
@@ -74,7 +85,9 @@ function hostnameOf(url: unknown): string | undefined {
 
 // Destination host from the client span the http/undici instrumentations start before injecting.
 function destinationHost(ctx: Context): string | undefined {
-  const attrs = (trace.getSpan(ctx) as any)?.attributes as Record<string, unknown> | undefined;
+  const span = trace.getSpan(ctx) as any;
+  if (span?.kind !== SpanKind.CLIENT && span?.kind !== SpanKind.PRODUCER) return undefined;
+  const attrs = span.attributes as Record<string, unknown> | undefined;
   if (!attrs) return undefined;
   const fromUrl = hostnameOf(attrs["url.full"]) ?? hostnameOf(attrs["http.url"]);
   if (fromUrl) return fromUrl;
@@ -99,7 +112,7 @@ function logInboundIdentityIgnored(keys: string[]): void {
   inboundIdentityNoticeLogged = true;
   NetraLogger.notice(
     "warn",
-    `A calling service sent a user, session or tenant (${[...keys].sort().join(", ")}), which was not used. To record requests under the values your own services send, set NETRA_TRUST_INBOUND_BAGGAGE=true on this service. This message is shown once.`,
+    `A calling service sent a user, session, tenant or custom attributes (${[...keys].sort().join(", ")}), which was not used. To record requests under the values your own services send, set NETRA_TRUST_INBOUND_BAGGAGE=true on this service. This message is shown once.`,
   );
 }
 
@@ -119,7 +132,7 @@ export class NetraBaggagePropagator implements TextMapPropagator {
         out = propagation.setBaggage(out, withIdentity);
       }
     } else {
-      out = withoutEntries(out, baggage, keysWhere(baggage, isSessionKey));
+      out = withoutEntries(out, baggage, keysWhere(baggage, isIdentityKey));
     }
 
     this.inner.inject(out, carrier, setter);
@@ -132,14 +145,15 @@ export class NetraBaggagePropagator implements TextMapPropagator {
       return stripReservedBaggage(extracted);
     }
 
-    const identityKeys = keysWhere(baggage, isSessionKey) as SessionKey[];
+    const identityKeys = keysWhere(baggage, isIdentityKey);
     let out = extracted;
 
     if (identityKeys.length > 0 && policy.trustInbound) {
+      const sessionKeys = identityKeys.filter(isSessionKey);
       const session: Partial<Record<SessionKey, string>> = {};
-      for (const key of identityKeys) session[key] = baggage.getEntry(key)?.value;
+      for (const key of sessionKeys) session[key] = baggage.getEntry(key)?.value;
       out = contextWithSessionValues(out, session);
-      out = withoutEntries(out, baggage, identityKeys);
+      out = withoutEntries(out, baggage, sessionKeys);
     } else if (identityKeys.length > 0) {
       logInboundIdentityIgnored(identityKeys);
       out = withoutEntries(out, baggage, identityKeys);

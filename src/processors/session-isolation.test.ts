@@ -16,6 +16,7 @@ import {
   defaultTextMapSetter,
   propagation,
   ROOT_CONTEXT,
+  SpanKind,
   trace,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
@@ -302,13 +303,26 @@ describe("session identity and baggage", () => {
     expect(spans("job-2")[0].attributes["netra.user_id"]).toBeUndefined();
   });
 
+  it("identity set inside a span scope ends when that scope returns", async () => {
+    await context.with(ROOT_CONTEXT, async () => {
+      await tracer.startActiveSpan("authenticate", async (span) => {
+        setSessionValue("user_id", "inner");
+        tracer.startSpan("inside").end();
+        span.end();
+      });
+      tracer.startSpan("after").end();
+    });
+    expect(spans("inside")[0].attributes["netra.user_id"]).toBe("inner");
+    expect(spans("after")[0].attributes["netra.user_id"]).toBeUndefined();
+  });
+
   describe("cross-service baggage policy", () => {
     const UPSTREAM_BAGGAGE =
       "session_id=s-up,user_id=u-up,tenant_id=t-up," +
       `netra.local_blocked_spans=${encodeURIComponent('["*"]')}`;
 
-    function injectTo(url: string): Record<string, string> {
-      const client = tracer.startSpan("GET", { attributes: { "url.full": url } });
+    function injectTo(url: string, kind: SpanKind = SpanKind.CLIENT): Record<string, string> {
+      const client = tracer.startSpan("GET", { kind, attributes: { "url.full": url } });
       const carrier: Record<string, string> = {};
       propagation.inject(trace.setSpan(context.active(), client), carrier, defaultTextMapSetter);
       client.end();
@@ -344,14 +358,46 @@ describe("session identity and baggage", () => {
       });
     });
 
-    it("leaves the app's own baggage, including custom.* keys, untouched", () => {
-      const inbound = extractInbound({ baggage: "custom_keys=plan,custom.plan=pro,app.flag=keep" });
-      expect(propagation.getBaggage(inbound)?.getEntry("custom.plan")?.value).toBe("pro");
-      context.with(inbound, () => {
-        const headers = injectTo("https://api.openai.com/v1/chat");
-        expect(headers.baggage).toContain("custom_keys=plan");
-        expect(headers.baggage).toContain("custom.plan=pro");
-        expect(headers.baggage).toContain("app.flag=keep");
+    it("ignores a caller's custom_keys and custom.* baggage unless trusted", () => {
+      const baggage = "custom_keys=plan,custom.plan=enterprise,app.flag=keep";
+      const untrusted = extractInbound({ baggage });
+      expect(propagation.getBaggage(untrusted)?.getEntry("custom.plan")).toBeUndefined();
+      context.with(untrusted, () => tracer.startSpan("untrusted-custom").end());
+      expect(spans("untrusted-custom")[0].attributes["netra.custom.plan"]).toBeUndefined();
+
+      configureBaggagePolicy({ trustInbound: true });
+      context.with(extractInbound({ baggage }), () => tracer.startSpan("trusted-custom").end());
+      expect(spans("trusted-custom")[0].attributes["netra.custom.plan"]).toBe("enterprise");
+    });
+
+    it("records the app's own custom.* baggage and sends it only to allowlisted hosts", () => {
+      configureBaggagePolicy({ propagateHosts: ["corp.net"] });
+      const own = propagation.createBaggage({
+        custom_keys: { value: "plan, region" },
+        "custom.plan": { value: "pro" },
+        "custom.region": { value: "eu" },
+        "app.flag": { value: "keep" },
+      });
+      context.with(propagation.setBaggage(ROOT_CONTEXT, own), () => {
+        tracer.startSpan("own-custom").end();
+        expect(injectTo("https://api.openai.com/v1/chat").baggage).toBe("app.flag=keep");
+        const internal = injectTo("https://orders.corp.net/api").baggage;
+        expect(internal).toContain("custom_keys=");
+        expect(internal).toContain("custom.plan=pro");
+      });
+      const [span] = spans("own-custom");
+      expect(span.attributes["netra.custom.plan"]).toBe("pro");
+      expect(span.attributes["netra.custom.region"]).toBe("eu");
+    });
+
+    it("sends identity only when the active span is an outbound client span", async () => {
+      configureBaggagePolicy({ propagateHosts: ["corp.net"] });
+      await context.with(ROOT_CONTEXT, async () => {
+        setSessionValue("user_id", "alice");
+        await Promise.resolve();
+        expect(injectTo("https://api.corp.net/inbound", SpanKind.SERVER).baggage).toBeUndefined();
+        expect(injectTo("https://api.corp.net/x", SpanKind.INTERNAL).baggage).toBeUndefined();
+        expect(injectTo("https://orders.corp.net/x", SpanKind.PRODUCER).baggage).toContain("user_id=alice");
       });
     });
 

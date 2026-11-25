@@ -1,6 +1,6 @@
-import { AttributeValue, Context, Span } from "@opentelemetry/api";
+import { AttributeValue, Attributes, Context, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { isTraceContentEnabled } from "../instrumentation/utils";
+import { isTraceContentEnabled, REDACTED, sanitizeToolsForTrace } from "../instrumentation/utils";
 import { NetraLogger } from "../netraLogger";
 
 const _PROMPT_RE = /^gen_ai\.prompts?\.(\d+)\.(role|content)$/;
@@ -27,9 +27,9 @@ const MAX_PARSE_LEN = 1_000_000;
 
 /**
  * Keys that carry prompts, completions, function I/O or other user content.
- * With traceContent disabled they are dropped here, at the outermost
- * setAttribute wrapper, so no instrumentation (including future ones) can
- * write them (JS-SEC-004).
+ * With traceContent disabled they are dropped by the outermost setAttribute
+ * wrapper, cleared at span start, and dropped again at export by
+ * gateContentAttributes for attributes written directly (JS-SEC-004).
  */
 const CONTENT_KEYS = new Set<string>([
   "input",
@@ -59,14 +59,61 @@ const CONTENT_KEYS = new Set<string>([
   "gen_ai.tool.call.result",
 ]);
 const _CONTENT_ARGUMENTS_RE = /^gen_ai\.(prompts?|completions?)\.\d+\..*arguments$/;
+// Vercel AI SDK telemetry (experimental_telemetry) content keys.
+const _AI_SDK_CONTENT_RE =
+  /^ai\.(prompt(\..+)?|response\.(text|object|toolCalls|reasoning\w*)|result\.(text|object|toolCalls)|toolCall\.(args|input|result|output)|values?|embeddings?)$/;
+
+const GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions";
+const CONTENT_PLACEHOLDERS: Readonly<Record<string, string>> = {
+  input: "",
+  output: "",
+  conversation: "[]",
+};
 
 export function isContentAttributeKey(key: string): boolean {
   return (
     CONTENT_KEYS.has(key) ||
     _PROMPT_RE.test(key) ||
     _COMPLETION_RE.test(key) ||
-    _CONTENT_ARGUMENTS_RE.test(key)
+    _CONTENT_ARGUMENTS_RE.test(key) ||
+    _AI_SDK_CONTENT_RE.test(key)
   );
+}
+
+function sanitizeToolDefinitionsJson(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? JSON.stringify(sanitizeToolsForTrace(parsed)) : REDACTED;
+  } catch {
+    return REDACTED;
+  }
+}
+
+// Export-time gate for attributes written without setAttribute; undefined means already safe.
+export function gateContentAttributes(
+  attrs: Attributes,
+  contentEnabled: boolean = isTraceContentEnabled(),
+): Attributes | undefined {
+  let out: Attributes | undefined;
+  for (const [key, value] of Object.entries(attrs)) {
+    if (!contentEnabled && isContentAttributeKey(key)) {
+      const placeholder = CONTENT_PLACEHOLDERS[key];
+      if (placeholder === undefined) {
+        out ??= { ...attrs };
+        delete out[key];
+      } else if (value !== placeholder) {
+        out ??= { ...attrs };
+        out[key] = placeholder;
+      }
+    } else if (key === GEN_AI_TOOL_DEFINITIONS && typeof value === "string") {
+      const sanitized = sanitizeToolDefinitionsJson(value);
+      if (sanitized !== value) {
+        out ??= { ...attrs };
+        out[key] = sanitized;
+      }
+    }
+  }
+  return out;
 }
 
 type SetAttributeFn = (key: string, value: AttributeValue) => Span;
@@ -124,6 +171,11 @@ export class SpanIOProcessor implements SpanProcessor {
   onStart(span: Span, _parentContext: Context): void {
     try {
       const attrs = (span as any).attributes ?? {};
+      if (!this._contentEnabled()) {
+        for (const key of Object.keys(attrs)) {
+          if (isContentAttributeKey(key)) delete attrs[key];
+        }
+      }
       if (!("input" in attrs)) {
         span.setAttribute("input", "");
       }

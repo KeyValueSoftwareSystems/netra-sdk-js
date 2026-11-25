@@ -1,6 +1,7 @@
 import { ExportResultCode } from "@opentelemetry/core";
 import { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
-import type { SpanContext } from "@opentelemetry/api";
+import type { Attributes, SpanContext } from "@opentelemetry/api";
+import { gateContentAttributes } from "../processors/span-io-processor";
 import {
   compilePatterns,
   matchesAnyPattern,
@@ -16,17 +17,18 @@ import {
 } from "./utils";
 
 /**
- * Wrapper that overrides parentSpanContext without mutating the original span.
- * Delegates all other ReadableSpan properties to the original.
+ * Wrapper that overrides parentSpanContext and/or attributes without mutating
+ * the original span. Delegates all other ReadableSpan properties to the original.
  *
  * NOTE: This class manually delegates every property of the ReadableSpan
  * interface. If the upstream interface adds new properties, they must be
  * forwarded here as well to avoid silent data loss during export.
  */
-class ReparentedSpan implements ReadableSpan {
+class SpanView implements ReadableSpan {
   constructor(
     private readonly delegate: ReadableSpan,
-    private readonly newParent: SpanContext | undefined,
+    private readonly newParent: SpanContext | undefined = delegate.parentSpanContext,
+    private readonly newAttributes: Attributes = delegate.attributes,
   ) {}
 
   get parentSpanContext(): SpanContext | undefined {
@@ -39,7 +41,7 @@ class ReparentedSpan implements ReadableSpan {
   get startTime() { return this.delegate.startTime; }
   get endTime() { return this.delegate.endTime; }
   get status() { return this.delegate.status; }
-  get attributes() { return this.delegate.attributes; }
+  get attributes() { return this.newAttributes; }
   get links() { return this.delegate.links; }
   get events() { return this.delegate.events; }
   get duration() { return this.delegate.duration; }
@@ -49,6 +51,13 @@ class ReparentedSpan implements ReadableSpan {
   get droppedAttributesCount() { return this.delegate.droppedAttributesCount; }
   get droppedEventsCount() { return this.delegate.droppedEventsCount; }
   get droppedLinksCount() { return this.delegate.droppedLinksCount; }
+}
+
+function gateContent(spans: ReadableSpan[]): ReadableSpan[] {
+  return spans.map((span) => {
+    const gated = gateContentAttributes(span.attributes);
+    return gated ? new SpanView(span, span.parentSpanContext, gated) : span;
+  });
 }
 
 /**
@@ -63,7 +72,8 @@ class ReparentedSpan implements ReadableSpan {
  *   root spans (resolved by `findRootSpansBlocked`).
  *
  * Children of a dropped span are reparented onto the dropped span's parent so
- * subtrees are never silently discarded.
+ * subtrees are never silently discarded. Surviving spans pass through
+ * `gateContentAttributes` so `traceContent: false` holds at export.
  */
 export class FilteringSpanExporter implements SpanExporter {
   private static readonly MAX_REMEMBERED_ENTRIES = 10_000;
@@ -147,7 +157,7 @@ export class FilteringSpanExporter implements SpanExporter {
       return;
     }
 
-    this.exporter.export(survivingSpans, resultCallback);
+    this.exporter.export(gateContent(survivingSpans), resultCallback);
   }
 
   shutdown(): Promise<void> {
@@ -319,7 +329,7 @@ export class FilteringSpanExporter implements SpanExporter {
    *
    * Walks the chain of dropped parents (following `blockedMap`) until a surviving
    * parent — or `undefined` (promote to root) — is reached, then wraps the span
-   * in a `ReparentedSpan` pointing there. A cycle guard (visited set) prevents
+   * in a `SpanView` pointing there. A cycle guard (visited set) prevents
    * infinite loops in malformed traces.
    */
   private reparentSpans(
@@ -342,7 +352,7 @@ export class FilteringSpanExporter implements SpanExporter {
       }
 
       if (changed) {
-        spans[i] = new ReparentedSpan(span, parent);
+        spans[i] = new SpanView(span, parent);
       }
     }
   }

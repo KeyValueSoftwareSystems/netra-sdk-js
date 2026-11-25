@@ -167,7 +167,7 @@ Track user sessions and add custom context to your traces.
 ```typescript
 import { Netra } from "netra-sdk";
 
-// Set identity for the rest of the current request
+// Set identity for the rest of the current async scope
 Netra.setUserId("user-123");
 Netra.setSessionId("session-abc");
 Netra.setTenantId("tenant-xyz");
@@ -191,7 +191,7 @@ Netra.setCustomEvent("user_feedback", {
 
 Call these after `Netra.init()`.
 
-**In a web server**, call the setters while handling a request. The values apply to the rest of that request only.
+**In a web server**, call the setters while handling a request, for example in middleware or at the start of the route handler. The values apply to the rest of the current async scope of that request. A value set inside a traced function (a decorated method or a `Netra.startActiveSpan()` callback) or inside a `Netra.withSession()` callback ends when that function returns, so set identity before calling traced helpers, or wrap the work in `Netra.withSession()`.
 
 **In background jobs, queue workers or scripts**, use `Netra.withSession()` for each job, so every job is recorded under its own user and session:
 

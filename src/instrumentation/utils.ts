@@ -479,30 +479,37 @@ function urlOrigin(value: string): string {
   }
 }
 
+// Children of these schema keys are named by argument or type names, not secrets.
+const SCHEMA_NAME_KEYS = new Set(["properties", "$defs", "definitions"]);
+
 function redactSecrets(
   value: unknown,
   depth = 0,
-  seen = new WeakSet<object>(),
-  inSchemaProperties = false,
+  path = new WeakSet<object>(),
+  keysAreSchemaNames = false,
 ): unknown {
   if (value === null || typeof value !== "object") return value;
-  if (depth > 20 || seen.has(value as object)) return REDACTED;
-  seen.add(value as object);
-  if (Array.isArray(value)) return value.map((v) => redactSecrets(v, depth + 1, seen));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (inSchemaProperties && v !== null && typeof v === "object") {
-      // Schema `properties` keys are argument names, not secrets.
-      out[k] = redactSecrets(v, depth + 1, seen);
-    } else if (isSecretToolKey(k) && v !== undefined && v !== null) {
-      out[k] = REDACTED;
-    } else if (isUrlToolKey(k) && typeof v === "string") {
-      out[k] = urlOrigin(v);
-    } else {
-      out[k] = redactSecrets(v, depth + 1, seen, k === "properties");
+  const obj = value as object;
+  if (depth > 20 || path.has(obj)) return REDACTED;
+  path.add(obj);
+  try {
+    if (Array.isArray(obj)) return obj.map((v) => redactSecrets(v, depth + 1, path));
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      if (keysAreSchemaNames && v !== null && typeof v === "object") {
+        out[k] = redactSecrets(v, depth + 1, path);
+      } else if (isSecretToolKey(k) && v !== undefined && v !== null) {
+        out[k] = REDACTED;
+      } else if (isUrlToolKey(k) && typeof v === "string") {
+        out[k] = urlOrigin(v);
+      } else {
+        out[k] = redactSecrets(v, depth + 1, path, SCHEMA_NAME_KEYS.has(k));
+      }
     }
+    return out;
+  } finally {
+    path.delete(obj);
   }
-  return out;
 }
 
 function toolSummary(tool: unknown): Record<string, unknown> {

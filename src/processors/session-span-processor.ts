@@ -1,4 +1,4 @@
-import { context, Context, createContextKey, Span } from "@opentelemetry/api";
+import { context, Context, createContextKey, propagation, Span } from "@opentelemetry/api";
 import { ReadableSpan, SpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config } from "../config";
 import { NetraLogger } from "../netraLogger";
@@ -64,6 +64,8 @@ function safeEnterWith(newContext: Context): boolean {
 }
 
 export type SessionKey = "session_id" | "user_id" | "tenant_id";
+export const CUSTOM_KEYS_BAGGAGE_KEY = "custom_keys";
+export const CUSTOM_BAGGAGE_PREFIX = "custom.";
 export type SessionValues = Readonly<Partial<Record<SessionKey, string>>>;
 
 // Not baggage: only NetraBaggagePropagator moves identity on or off the wire, per its policy.
@@ -127,7 +129,8 @@ export class SessionSpanProcessor implements SpanProcessor {
       span.setAttribute("library.version", Config.LIBRARY_VERSION);
       span.setAttribute("sdk.name", Config.SDK_NAME);
 
-      const session = getSessionValues(parentContext || context.active());
+      const ctx = parentContext || context.active();
+      const session = getSessionValues(ctx);
 
       if (session.session_id) {
         span.setAttribute(`${Config.LIBRARY_NAME}.session_id`, session.session_id);
@@ -137,6 +140,18 @@ export class SessionSpanProcessor implements SpanProcessor {
       }
       if (session.tenant_id) {
         span.setAttribute(`${Config.LIBRARY_NAME}.tenant_id`, session.tenant_id);
+      }
+
+      const baggage = propagation.getBaggage(ctx);
+      const customKeys = baggage?.getEntry(CUSTOM_KEYS_BAGGAGE_KEY)?.value;
+      if (customKeys) {
+        for (const rawKey of customKeys.split(",")) {
+          const key = rawKey.trim();
+          const value = key ? baggage?.getEntry(`${CUSTOM_BAGGAGE_PREFIX}${key}`)?.value : undefined;
+          if (value) {
+            span.setAttribute(`${Config.LIBRARY_NAME}.custom.${key}`, value);
+          }
+        }
       }
 
       // Add entity attributes from SessionManager (workflow, task, agent context)

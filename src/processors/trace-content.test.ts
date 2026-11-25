@@ -13,9 +13,10 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { workflow } from "../decorators";
+import { FilteringSpanExporter } from "../exporters/filteringSpanExporter";
 import { REDACTED, sanitizeToolsForTrace, setRequestAttributes } from "../instrumentation/utils";
 import { SessionManager } from "../session-manager";
-import { SpanIOProcessor } from "./span-io-processor";
+import { gateContentAttributes, SpanIOProcessor } from "./span-io-processor";
 
 const MCP_TOOLS = [
   {
@@ -103,6 +104,47 @@ describe("traceContent: false", () => {
     // Metadata is kept.
     expect(span.attributes["gen_ai.request.model"]).toBe("gpt-x");
     expect(span.attributes["gen_ai.completion.0.finish_reason"]).toBe("stop");
+  });
+
+  it("drops content passed as attributes when the span starts", () => {
+    tracer
+      .startSpan("x", { attributes: { input: "SECRET in", output: "SECRET out", "gen_ai.prompt.0.content": "SECRET" } })
+      .end();
+    const [span] = exporter.getFinishedSpans();
+    expect(allAttributes()).not.toContain("SECRET");
+    expect(span.attributes["input"]).toBe("");
+    expect(span.attributes["output"]).toBe("");
+  });
+
+  it("drops content written straight into span attributes before export", async () => {
+    const inner = new InMemorySpanExporter();
+    const filtering = new FilteringSpanExporter(inner, []);
+    const p = new BasicTracerProvider({
+      spanProcessors: [
+        new SpanIOProcessor(),
+        {
+          onStart: () => {},
+          onEnd: (span: any) => {
+            span.attributes["gen_ai.input.messages"] = '[{"content":"SECRET"}]';
+            span.attributes["traceloop.entity.input"] = "SECRET";
+            span.attributes["ai.prompt.messages"] = "SECRET";
+            span.attributes["ai.response.text"] = "SECRET";
+            span.attributes["ai.toolCall.args"] = "SECRET";
+            span.attributes["input"] = "SECRET";
+          },
+          forceFlush: async () => {},
+          shutdown: async () => {},
+        },
+        new SimpleSpanProcessor(filtering),
+      ],
+    });
+    p.getTracer("t").startSpan("ai.generateText", { attributes: { "ai.model.id": "m" } }).end();
+    await p.forceFlush();
+    const [span] = inner.getFinishedSpans();
+    expect(JSON.stringify(span.attributes)).not.toContain("SECRET");
+    expect(span.attributes["input"]).toBe("");
+    expect(span.attributes["ai.model.id"]).toBe("m");
+    await p.shutdown();
   });
 
   it("records content again when traceContent is on", () => {
@@ -237,6 +279,28 @@ describe("tool definitions (JS-SEC-005)", () => {
     expect(tool.function.parameters.properties.token).toEqual({ type: "string" });
   });
 
+  it("keeps a sub-schema that is reused in several places", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const city = { type: "string" };
+    const [tool] = sanitizeToolsForTrace([
+      {
+        type: "function",
+        function: { name: "route", parameters: { type: "object", properties: { from: city, to: city } } },
+      },
+    ]) as any[];
+    expect(tool.function.parameters.properties).toEqual({ from: city, to: city });
+  });
+
+  it("keeps $defs and definitions entries whose type names look like secrets", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const authToken = { type: "object", properties: { value: { type: "string" } } };
+    const [tool] = sanitizeToolsForTrace([
+      { type: "function", parameters: { $defs: { AuthToken: authToken }, definitions: { ApiKey: authToken } } },
+    ]) as any[];
+    expect(tool.parameters.$defs.AuthToken).toEqual(authToken);
+    expect(tool.parameters.definitions.ApiKey).toEqual(authToken);
+  });
+
   it("still redacts a credential value stored under a properties object", () => {
     vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
     const out = JSON.stringify(
@@ -244,5 +308,24 @@ describe("tool definitions (JS-SEC-005)", () => {
     );
     expect(out).not.toContain("SECRET");
     expect(out).toContain('"region":"eu"');
+  });
+});
+
+describe("tool definitions written at export", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("redacts credentials in gen_ai.tool.definitions when content tracing is on", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const gated = gateContentAttributes({ "gen_ai.tool.definitions": JSON.stringify(MCP_TOOLS) });
+    expect(String(gated?.["gen_ai.tool.definitions"])).not.toContain("TESTTOKEN");
+    expect(String(gated?.["gen_ai.tool.definitions"])).toContain("https://mcp.example");
+  });
+
+  it("leaves safe attributes untouched", () => {
+    vi.stubEnv("TRACELOOP_TRACE_CONTENT", "true");
+    const safe = JSON.stringify([{ type: "function", name: "lookup" }]);
+    expect(gateContentAttributes({ input: "x", "gen_ai.tool.definitions": safe })).toBeUndefined();
   });
 });
