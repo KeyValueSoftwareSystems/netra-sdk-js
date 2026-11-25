@@ -135,5 +135,27 @@ describe("wrapAsyncIterable garbage-collection finalizer", () => {
     for (let i = 0; i < 20 && events.length === 0; i++) await collect();
     expect(events).toEqual(["finalize ok"]);
   });
+
+  it("ends the span of a stream from a wrapped promise that the app drops", async () => {
+    const { events, cb } = recorder();
+    await (async () => {
+      await wrapPromise(Promise.resolve(chunks()), cb);
+    })();
+    for (let i = 0; i < 20 && events.length === 0; i++) await collect();
+    expect(events).toEqual(["finalize ok"]);
+  });
+
+  it("ends the span of a dropped stream when the SDK promise is preserved", async () => {
+    const { events, cb } = recorder();
+    await (async () => {
+      const stream = chunks();
+      const sdkPromise = Object.assign(Promise.resolve(stream), {
+        withResponse: async () => ({ data: stream, response: {} }),
+      });
+      await wrapPromise(sdkPromise, cb, { preserveOriginal: sdkPromise });
+    })();
+    for (let i = 0; i < 20 && events.length === 0; i++) await collect();
+    expect(events).toEqual(["finalize ok"]);
+  });
 });
 

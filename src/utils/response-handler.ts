@@ -300,6 +300,21 @@ export function wrapAsyncIterable<T>(
   return proxy;
 }
 
+// Built outside wrapPromise so the stream finalizer's closure cannot reach the wrapped stream.
+function onceFinalizer(callbacks: ResponseCallbacks) {
+  const state = { done: false };
+  const finalize = (status: "ok" | "error") => {
+    if (state.done) return;
+    state.done = true;
+    try {
+      callbacks.finalize(status);
+    } catch (e) {
+      NetraLogger.error("netra: finalize callback error", e);
+    }
+  };
+  return { state, finalize };
+}
+
 /**
  * Wrap a promise with lifecycle callbacks.
  * If the resolved value is async-iterable, wraps it with `wrapAsyncIterable`.
@@ -320,16 +335,7 @@ export function wrapPromise<T>(
   callbacks: ResponseCallbacks,
   options?: WrapOptions,
 ): any {
-  let finalized = false;
-  function safeFinalize(status: "ok" | "error") {
-    if (finalized) return;
-    finalized = true;
-    try {
-      callbacks.finalize(status);
-    } catch (e) {
-      NetraLogger.error("netra: finalize callback error", e);
-    }
-  }
+  const { state: finalizeState, finalize: safeFinalize } = onceFinalizer(callbacks);
   function safeOnSuccess(value: unknown) {
     try {
       callbacks.onSuccess?.(value);
@@ -355,7 +361,7 @@ export function wrapPromise<T>(
       if (isAsyncIterable(value)) {
         return wrapAsyncIterable(value, { ...callbacks, finalize: safeFinalize });
       }
-      if (!finalized) {
+      if (!finalizeState.done) {
         safeOnSuccess(value);
         safeFinalize("ok");
       }
@@ -379,14 +385,14 @@ export function wrapPromise<T>(
         .json()
         .then(
           (body: unknown) => {
-            if (finalized) return;
+            if (finalizeState.done) return;
             safeOnSuccess(body);
             safeFinalize("ok");
           },
           // A malformed or truncated body: the caller's own read of the same
           // bytes fails too, and _thenUnwrap never runs, so end the span here.
           (error: unknown) => {
-            if (finalized) return;
+            if (finalizeState.done) return;
             safeOnError(error);
             safeFinalize("error");
           },

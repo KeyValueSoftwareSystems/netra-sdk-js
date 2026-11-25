@@ -29,9 +29,10 @@ const SENSITIVE_PATTERNS: Record<string, RegExp> = {
       "|(?:sk-[A-Za-z0-9]{16,})", // sk-... tokens
     "g",
   ),
-  // Email addresses. Every repeat is bounded and the domain is matched label
-  // by label, so input like "a.a.a.…" cannot backtrack quadratically (JS-SEC-009).
-  email: /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}/g,
+  // Email addresses. A match starts only at the start of a local-part run and the
+  // domain is matched label by label, so neither "a.a.a.…" nor long base64 or hex
+  // runs backtrack quadratically (JS-SEC-009).
+  email: /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}/g,
   // Phone numbers (US format)
   phone: /(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}/g,
   // Credit cards (Visa, Mastercard, Amex, Discover)
@@ -50,35 +51,54 @@ const SENSITIVE_PATTERNS: Record<string, RegExp> = {
 // Generic pattern for long digit sequences (credit/debit cards)
 const LONG_DIGIT_PATTERN = /(?<!\d)\d{13,19}(?!\d)/g;
 
-// Attribute-name parts whose values are scrubbed. Matched against whole parts
-// of the name (split on non-alphanumerics), not as substrings: substring
-// matching on "key" and "span" also scrubbed keys such as `netra.span.type`
-// (JS-SEC-021).
-const SENSITIVE_KEY_PARTS = new Set([
-  "password",
-  "passwd",
-  "pwd",
+// Attribute names are split into parts on separators and camelCase, so `netra.span.type`
+// and `max_tokens` are kept while `dbPassword` and `openaiApiKey` are scrubbed (JS-SEC-021).
+const SENSITIVE_KEY_PARTS = new Set(["pwd", "auth", "authorization", "bearer", "cookie", "cookies"]);
+// A part containing one of these is sensitive (`passwordHash`, `jwtsecret`, `x-apikey`).
+const SENSITIVE_KEY_STEMS = /password|passwd|passphrase|secret|credential|apikey|privatekey|accesstoken|refreshtoken|authtoken/;
+// `key` and `token` are sensitive only after one of these (`signing_key`, not `cache.key`).
+const SECRET_QUALIFIERS = new Set([
+  "api",
+  "private",
   "secret",
+  "encryption",
+  "signing",
+  "access",
   "auth",
-  "authorization",
+  "refresh",
+  "session",
+  "id",
+  "client",
+  "license",
+  "subscription",
+  "master",
+  "csrf",
+  "jwt",
+  "oauth",
   "bearer",
-  "credential",
-  "credentials",
-  "cookie",
 ]);
-
-// Multi-part sensitive names, matched as whole parts with any separator.
-const SENSITIVE_KEY_PHRASES =
-  /(?:^|[^a-z0-9])(?:api[-_]?key|apikey|private[-_]?key|access[-_]?token|refresh[-_]?token|session[-_]?token|id[-_]?token|x[-_]api[-_]key|x[-_]auth[-_]token|set[-_]cookie|client[-_]?secret)(?:$|[^a-z0-9])/;
 
 const SCRUB_REPLACEMENT = "[SCRUBBED]";
 
 type SetAttributeFn = (key: string, value: AttributeValue) => Span;
 
+function keyParts(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
 export function isSensitiveKey(key: string): boolean {
-  const keyLower = key.toLowerCase();
-  if (SENSITIVE_KEY_PHRASES.test(keyLower)) return true;
-  return keyLower.split(/[^a-z0-9]+/).some((part) => SENSITIVE_KEY_PARTS.has(part));
+  const parts = keyParts(key);
+  return parts.some(
+    (part, i) =>
+      SENSITIVE_KEY_PARTS.has(part) ||
+      SENSITIVE_KEY_STEMS.test(part) ||
+      ((part === "key" || part === "token") && i > 0 && SECRET_QUALIFIERS.has(parts[i - 1])),
+  );
 }
 
 function scrubStringValue(value: string): string {

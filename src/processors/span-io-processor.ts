@@ -35,7 +35,9 @@ const maxParseLen = (): number => Config.SPAN_ATTRIBUTE_MAX_SIZE * 2;
 function capField(value: AttributeValue): string {
   const str = String(value);
   const max = Config.SPAN_ATTRIBUTE_MAX_SIZE;
-  return str.length > max ? str.slice(0, max) : str;
+  if (str.length <= max) return str;
+  // A plain slice() would keep the whole original string alive; copy the kept part instead.
+  return Buffer.from(str.slice(0, max), "utf16le").toString("utf16le");
 }
 
 /**
@@ -222,6 +224,8 @@ export class SpanIOProcessor implements SpanProcessor {
     const originalEnd = span.end.bind(span);
     (span as any).end = (endTime?: Parameters<Span["end"]>[0]) => {
       if (inputDirty || outputDirty) flush();
+      prompts = undefined;
+      completions = undefined;
       return originalEnd(endTime);
     };
 

@@ -129,13 +129,33 @@ describe("scrubbing (SEC-009, SEC-021)", () => {
     expect(all).not.toMatch(/4111111111111111|hunter2|alice@example\.com|SECRETVALUE|bob@example\.com|sk-ABCDEFGHIJ/);
   });
 
-  it("SEC-021: matches sensitive key names by whole parts", () => {
-    for (const key of ["password", "db.password", "x-api-key", "api_key", "http.request.header.authorization", "access_token", "set-cookie"]) {
-      expect(isSensitiveKey(key)).toBe(true);
+  it.each([
+    "password", "db.password", "x-api-key", "api_key", "http.request.header.authorization", "access_token", "set-cookie",
+    "dbPassword", "userPassword", "passwordHash", "authToken", "user.authToken", "openaiApiKey", "stripeSecretKey",
+    "awsSecretAccessKey", "jwtSecret", "encryption_key", "signing_key", "client_secret", "X-Auth-Token", "apikey",
+  ])("SEC-021: scrubs the value of %s", (key) => {
+    expect(isSensitiveKey(key)).toBe(true);
+  });
+
+  it.each([
+    "netra.span.type", "gen_ai.request.max_tokens", "gen_ai.usage.input_tokens", "monkey", "keyword", "author",
+    "cache.key", "messaging.kafka.message.key", "next_page_token", "tokenizer",
+  ])("SEC-021: keeps the value of %s", (key) => {
+    expect(isSensitiveKey(key)).toBe(false);
+  });
+
+  it("SEC-009: long base64 and hex values are scrubbed quickly", () => {
+    const span = tracer.startSpan("blob");
+    const hex = "0123456789abcdef".repeat(2_000);
+    const base64 = "data:image/png;base64," + "QUJDRA+/".repeat(4_000);
+    const t0 = performance.now();
+    for (let i = 0; i < 20; i++) {
+      span.setAttribute("hex", hex);
+      span.setAttribute("b64", base64);
     }
-    for (const key of ["netra.span.type", "gen_ai.request.max_tokens", "monkey", "keyword", "author"]) {
-      expect(isSensitiveKey(key)).toBe(false);
-    }
+    const elapsed = performance.now() - t0;
+    span.end();
+    expect(elapsed).toBeLessThan(150);
   });
 });
 

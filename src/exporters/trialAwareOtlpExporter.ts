@@ -210,10 +210,11 @@ export class TrialAwareOTLPExporter implements SpanExporter {
       });
     }
 
-    // The deadline starts now, so time spent queued counts against it.
+    // The deadline and abort epoch are fixed now, so time spent queued counts and an abort reaches queued batches.
     const deadline = Date.now() + this._timeoutMillis;
+    const epoch = this._abortEpoch;
     const task = this._acquireSlot()
-      .then(() => this._send(data, spans.length, deadline))
+      .then(() => this._send(data, spans.length, deadline, epoch))
       .finally(() => this._releaseSlot())
       .then(resultCallback, (err) =>
         resultCallback({ code: ExportResultCode.FAILED, error: err instanceof Error ? err : new Error(String(err)) }),
@@ -240,10 +241,14 @@ export class TrialAwareOTLPExporter implements SpanExporter {
    * Send one batch with retries, all within `_timeoutMillis` (JS-PERF-003,
    * JS-PERF-006). Always settles.
    */
-  private async _send(data: Uint8Array, spanCount: number, deadline: number): Promise<ExportResult> {
+  private async _send(
+    data: Uint8Array,
+    spanCount: number,
+    deadline: number,
+    epoch: number,
+  ): Promise<ExportResult> {
     let last: AttemptResult = { body: "" };
     let attempt = 0;
-    const epoch = this._abortEpoch;
     const stopped = () => this._isShutdown || this._abortEpoch !== epoch;
 
     while (attempt < MAX_ATTEMPTS && !stopped()) {
@@ -377,7 +382,7 @@ export class TrialAwareOTLPExporter implements SpanExporter {
     for (const wake of [...this._sleepers]) wake();
     for (const req of [...this._activeRequests]) req.destroy();
     this._activeRequests.clear();
-    // Queued batches start, see the new epoch and fail at once.
+    // Queued batches were accepted under the old epoch, so they fail without sending.
     const queued = this._queue.splice(0);
     for (const start of queued) start();
   }

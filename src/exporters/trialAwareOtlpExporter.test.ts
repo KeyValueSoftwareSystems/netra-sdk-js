@@ -215,6 +215,21 @@ describe("TrialAwareOTLPExporter", () => {
     await server.close();
   });
 
+  it("PERF-003: abortPending() fails queued batches without sending them", async () => {
+    const server = await startServer(() => { /* never answers */ });
+    const exporter = new TrialAwareOTLPExporter({ url: server.url, timeoutMillis: 30_000, maxConcurrentExports: 1 });
+    const inFlight = exportOnce(exporter);
+    const queued = [exportOnce(exporter), exportOnce(exporter)];
+    await new Promise((r) => setTimeout(r, 50));
+    expect(server.requests()).toBe(1);
+    exporter.abortPending();
+    const results = await Promise.all([inFlight, ...queued]);
+    expect(results.map((r) => r.code)).toEqual([ExportResultCode.FAILED, ExportResultCode.FAILED, ExportResultCode.FAILED]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(server.requests()).toBe(1);
+    await server.close();
+  });
+
   it("does not keep a reference to the caller's headers object", () => {
     const headers: Record<string, string> = { "x-api-key": "k" };
     const exporter = new TrialAwareOTLPExporter({ url: "http://127.0.0.1:1/v1/traces", headers });
